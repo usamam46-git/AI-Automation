@@ -1,3 +1,4 @@
+import datetime
 """
 db/base.py — Shared SQLAlchemy declarative base and column mixins.
 
@@ -8,7 +9,7 @@ a consistent primary-key / timestamp / tenant-id contract across every table.
 import uuid
 
 from sqlalchemy import Boolean, ForeignKey, text
-from sqlalchemy.dialects.postgresql import TIMESTAMPTZ, UUID
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -53,13 +54,13 @@ class TimestampMixin:
       Postgres trigger for updates that bypass the ORM, e.g. bulk SQL).
     """
 
-    created_at: Mapped[str] = mapped_column(
-        TIMESTAMPTZ,
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
         nullable=False,
         server_default=func.now(),
     )
-    updated_at: Mapped[str] = mapped_column(
-        TIMESTAMPTZ,
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),

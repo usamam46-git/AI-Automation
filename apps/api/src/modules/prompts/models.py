@@ -1,3 +1,4 @@
+import datetime
 """
 modules/prompts/models.py — Prompt registry and versioning.
 
@@ -20,7 +21,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import ForeignKey, Integer, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin

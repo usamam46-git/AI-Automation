@@ -71,7 +71,8 @@ class AuditLog(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=True,
         comment="PK of the affected entity.",
     )
-    metadata: Mapped[Optional[dict]] = mapped_column(
+    event_metadata: Mapped[Optional[dict]] = mapped_column(
+        "metadata",
         JSONB,
         nullable=True,
         comment="Action-specific context (before/after values, comments, etc.).",

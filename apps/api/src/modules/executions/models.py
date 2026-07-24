@@ -1,3 +1,4 @@
+import datetime
 """
 modules/executions/models.py — Workflow run execution tracking.
 
@@ -21,7 +22,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import ForeignKey, Integer, Numeric, Text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
@@ -70,8 +71,8 @@ class WorkflowRun(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=True,
         comment="The node currently executing or last executed.",
     )
-    started_at: Mapped[Optional[str]] = mapped_column(TIMESTAMPTZ, nullable=True)
-    completed_at: Mapped[Optional[str]] = mapped_column(TIMESTAMPTZ, nullable=True)
+    started_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     total_cost_usd: Mapped[Optional[float]] = mapped_column(
         Numeric(10, 4),
         nullable=True,

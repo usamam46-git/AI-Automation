@@ -1,3 +1,4 @@
+import datetime
 """
 modules/workflows/models.py — Workflow engine models.
 
@@ -21,7 +22,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import Float, ForeignKey, Integer, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
@@ -125,8 +126,8 @@ class WorkflowVersion(UUIDMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    published_at: Mapped[Optional[str]] = mapped_column(
-        TIMESTAMPTZ,
+    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        TIMESTAMP(timezone=True),
         nullable=True,
         comment="Null while this version is still a draft.",
     )

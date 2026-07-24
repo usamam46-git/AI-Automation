@@ -1,3 +1,4 @@
+import datetime
 """
 modules/organizations/models.py — Organization (tenant root) and APIKey.
 
@@ -11,7 +12,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TimestampMixin, UUIDMixin
@@ -105,9 +106,9 @@ class APIKey(UUIDMixin, TimestampMixin, Base):
         nullable=True,
         comment="Array of permission scope strings.",
     )
-    last_used_at: Mapped[Optional[str]] = mapped_column(TIMESTAMPTZ, nullable=True)
-    expires_at: Mapped[Optional[str]] = mapped_column(TIMESTAMPTZ, nullable=True)
-    revoked_at: Mapped[Optional[str]] = mapped_column(TIMESTAMPTZ, nullable=True)
+    last_used_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     # Relationships
     organization: Mapped["Organization"] = relationship(

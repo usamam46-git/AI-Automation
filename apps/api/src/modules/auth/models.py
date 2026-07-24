@@ -1,3 +1,4 @@
+import datetime
 """
 modules/auth/models.py — Identity models: User, Role, OrgMembership.
 
@@ -8,7 +9,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TimestampMixin, UUIDMixin
