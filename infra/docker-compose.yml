@@ -1,0 +1,183 @@
+# infra/docker-compose.yml
+# Development docker-compose for the AI Automation Platform.
+#
+# Start everything: docker compose up -d
+# Run migrations:   docker compose exec api alembic upgrade head
+# Tail logs:        docker compose logs -f api worker
+#
+# NOTE: The postgres service uses pgvector/pgvector:pg16 — this image ships
+# with the pgvector binary pre-installed.  However, the extension must still
+# be activated in the aap_db database.  This is handled by the first line of
+# the initial Alembic migration:
+#   op.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+# Do NOT rely on init-scripts/ for this — Alembic owns all schema changes.
+
+version: "3.9"
+
+services:
+
+  # ─── PostgreSQL with pgvector ─────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aap_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aap_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aap_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-aap_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aap_user} -d ${POSTGRES_DB:-aap_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: aap_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── MinIO (S3-compatible object storage) ─────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: aap_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"     # S3 API
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"   # Web console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ─── FastAPI backend ───────────────────────────────────────────────────────
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    container_name: aap_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aap_user}:${POSTGRES_PASSWORD:-aap_pass}@postgres:5432/${POSTGRES_DB:-aap_db}
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      APP_ENV: development
+      DEBUG: "true"
+      DB_ECHO: "false"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Mount source for hot-reload in development
+      - ../apps/api/src:/app/src
+      - ../apps/api/alembic:/app/alembic
+      - ../apps/api/alembic.ini:/app/alembic.ini
+
+  # ─── Celery worker — workflow execution queue ─────────────────────────────
+  worker_workflow:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    container_name: aap_worker_workflow
+    restart: unless-stopped
+    command: celery -A src.workers.celery_app worker -Q workflow_execution -c 4 --prefetch-multiplier 1 -l info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aap_user}:${POSTGRES_PASSWORD:-aap_pass}@postgres:5432/${POSTGRES_DB:-aap_db}
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+
+  # ─── Celery worker — document processing queue ────────────────────────────
+  worker_documents:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    container_name: aap_worker_documents
+    restart: unless-stopped
+    command: celery -A src.workers.celery_app worker -Q document_processing -c 8 --prefetch-multiplier 2 -l info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aap_user}:${POSTGRES_PASSWORD:-aap_pass}@postgres:5432/${POSTGRES_DB:-aap_db}
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+
+  # ─── Celery worker — notifications queue ─────────────────────────────────
+  worker_notifications:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    container_name: aap_worker_notifications
+    restart: unless-stopped
+    command: celery -A src.workers.celery_app worker -Q notifications -c 4 -l info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aap_user}:${POSTGRES_PASSWORD:-aap_pass}@postgres:5432/${POSTGRES_DB:-aap_db}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+
+  # ─── Celery Beat scheduler ─────────────────────────────────────────────────
+  beat:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    container_name: aap_beat
+    restart: unless-stopped
+    command: celery -A src.workers.celery_app beat -l info
+    depends_on:
+      - redis
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
