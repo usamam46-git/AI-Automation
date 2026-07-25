@@ -1,6 +1,6 @@
 import hashlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jose import jwt
@@ -27,12 +27,7 @@ def create_access_token(user_id: str, org_id: str, expires_delta: timedelta | No
     Creates a JWT access token embedding user_id and org_id.
     Includes a unique jti for blocklist capabilities.
     """
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(
-            minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
-        )
+    expire = datetime.now(UTC) + expires_delta if expires_delta else datetime.now(UTC) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode: dict[str, Any] = {
         "sub": user_id,
@@ -40,7 +35,7 @@ def create_access_token(user_id: str, org_id: str, expires_delta: timedelta | No
         "org_id": org_id,
         "exp": expire,
         "jti": str(uuid.uuid4()),
-        "iat": datetime.now(timezone.utc),
+        "iat": datetime.now(UTC),
     }
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM

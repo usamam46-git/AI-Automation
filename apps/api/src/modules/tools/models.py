@@ -51,12 +51,12 @@ class Tool(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="http_request | python_function | erp_connector | mcp",
     )
-    input_schema: Mapped[Optional[dict]] = mapped_column(
+    input_schema: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="JSON Schema exposed to the LLM as its function-calling spec.",
     )
-    config: Mapped[Optional[dict]] = mapped_column(
+    config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Type-specific config (endpoint URL, auth refs, etc.).",
@@ -88,14 +88,14 @@ class ToolExecution(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    node_execution_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    node_execution_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("node_executions.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    input: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    output: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    input: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(
         Text,
         nullable=False,

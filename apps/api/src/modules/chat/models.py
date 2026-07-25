@@ -14,7 +14,6 @@ Design notes:
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -34,7 +33,7 @@ class Chat(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    title: Mapped[Optional[str]] = mapped_column(
+    title: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Optional display name for this chat session.",
@@ -72,7 +71,7 @@ class Message(UUIDMixin, TimestampMixin, Base):
         comment="user | assistant | system | tool",
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    tool_calls: Mapped[Optional[dict]] = mapped_column(
+    tool_calls: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Raw tool-call JSON from the model (assistant messages only).",

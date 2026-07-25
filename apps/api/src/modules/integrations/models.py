@@ -9,7 +9,6 @@ credentials in the full implementation will be AES-256-GCM encrypted at the
 application layer before being stored (see Vol. 2 §13).
 """
 
-from typing import Optional
 
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -32,7 +31,7 @@ class Integration(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="Stub: human-readable integration name, e.g. 'NetSuite Production'.",
     )
-    config: Mapped[Optional[dict]] = mapped_column(
+    config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Catch-all for integration config until the section is fleshed out.",

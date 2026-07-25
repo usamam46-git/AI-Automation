@@ -1,9 +1,9 @@
 import asyncio
 
-import src.db.models  # noqa: F401 — register full ORM graph before queries
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import src.db.models  # noqa: F401 — register full ORM graph before queries
 from src.core.permissions import (
     AGENT_READ,
     AGENT_WRITE,
@@ -77,7 +77,7 @@ async def seed_system_roles(db: AsyncSession) -> None:
 
     for role_data in roles_data:
         # Check if role exists
-        stmt = select(Role).where(Role.name == role_data["name"], Role.is_system == True)
+        stmt = select(Role).where(Role.name == role_data["name"], Role.is_system is True)
         result = await db.execute(stmt)
         existing = result.scalar_one_or_none()
 

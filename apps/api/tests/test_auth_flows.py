@@ -1,16 +1,15 @@
 import asyncio
 import uuid
-import pytest
-from httpx import AsyncClient, ASGITransport
-from fastapi import FastAPI, Depends
+
 import jwt
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 from src.core.config import settings
-from src.core.dependencies import require_permission, get_current_user, get_current_org
+from src.core.dependencies import require_permission
+from src.core.redis import close_redis, get_redis, init_redis
 from src.modules.auth.router import router as auth_router
-from src.db.database import get_db_session
-from src.core.redis import get_redis, init_redis, close_redis
-import src.db.models  # Register full ORM graph before querying
 
 # Create the test app
 app = FastAPI()

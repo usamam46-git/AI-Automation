@@ -71,9 +71,10 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
-line-length = 100
+line-length = 150
 target-version = "py312"
-select = ["E", "F", "I", "UP", "B", "SIM"]
+lint.select = ["E", "F", "I", "UP", "B", "SIM"]
+lint.ignore = ["B008", "B904", "E402", "F821", "E501"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -21,13 +21,11 @@ Design notes (Vol. 2 §3.4 + §3.7):
 """
 
 import uuid
-from typing import Optional
-
-from sqlalchemy import ForeignKey, Integer, Float, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import Float, ForeignKey, Integer, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
 
@@ -89,7 +87,7 @@ class Document(UUIDMixin, TenantMixin, TimestampMixin, Base):
         default="uploaded",
         comment="uploaded | processing | indexed | failed",
     )
-    page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relationships
     knowledge_base: Mapped["KnowledgeBase"] = relationship(
@@ -122,7 +120,7 @@ class OCRResult(UUIDMixin, TimestampMixin, Base):
     )
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
-    structured_data: Mapped[Optional[dict]] = mapped_column(
+    structured_data: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Structured extraction result, e.g. invoice fields as JSON.",

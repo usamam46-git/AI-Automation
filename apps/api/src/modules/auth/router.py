@@ -1,13 +1,12 @@
-import uuid
-from typing import Annotated, Optional
+from typing import Annotated
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dependencies import get_current_user, oauth2_scheme
-from src.core.redis import get_redis
 from src.core.rate_limit import RateLimiter
+from src.core.redis import get_redis
 from src.db.database import get_db_session
 from src.modules.auth.models import User
 from src.modules.auth.schemas import (
@@ -93,7 +92,7 @@ async def switch_org(
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_tokens(
     response: Response,
-    refresh_token: Annotated[Optional[str], Cookie()] = None,
+    refresh_token: Annotated[str | None, Cookie()] = None,
     service: AuthService = Depends(get_auth_service),
 ):
     """Rotate the refresh token and issue a new access token."""
@@ -114,7 +113,7 @@ async def refresh_tokens(
 async def logout(
     response: Response,
     access_token: str = Depends(oauth2_scheme),
-    refresh_token: Annotated[Optional[str], Cookie()] = None,
+    refresh_token: Annotated[str | None, Cookie()] = None,
     service: AuthService = Depends(get_auth_service),
 ):
     """Revoke access token and clear refresh token cookie."""

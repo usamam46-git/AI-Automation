@@ -1,4 +1,5 @@
 import datetime
+
 """
 modules/notifications/models.py — In-app, email, and channel notifications.
 
@@ -11,7 +12,6 @@ related resource references, and any channel-specific formatting hints.
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
@@ -33,7 +33,7 @@ class Notification(UUIDMixin, TenantMixin, TimestampMixin, Base):
 
     __tablename__ = "notifications"
 
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
@@ -50,7 +50,7 @@ class Notification(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="Notification body, deep-link, resource refs, channel formatting hints.",
     )
-    read_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+    read_at: Mapped[datetime.datetime | None] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=True,
         comment="Set when the user marks the notification as read.",

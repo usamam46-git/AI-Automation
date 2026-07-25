@@ -1,4 +1,5 @@
 import datetime
+
 """
 db/base.py — Shared SQLAlchemy declarative base and column mixins.
 
@@ -8,11 +9,10 @@ a consistent primary-key / timestamp / tenant-id contract across every table.
 
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, text
+from sqlalchemy import ForeignKey, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
-
 
 # ---------------------------------------------------------------------------
 # Declarative base

@@ -17,13 +17,13 @@ torn down cleanly on shutdown.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
-import src.db.models  # noqa: F401 — register full ORM graph at startup
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import src.db.models  # noqa: F401 — register full ORM graph at startup
 from src.core.config import settings
 from src.core.redis import close_redis, init_redis
 

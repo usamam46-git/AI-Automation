@@ -1,4 +1,5 @@
 import datetime
+
 """
 modules/executions/models.py — Workflow run execution tracking.
 
@@ -19,7 +20,6 @@ Design notes:
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import ForeignKey, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
@@ -56,30 +56,30 @@ class WorkflowRun(UUIDMixin, TenantMixin, TimestampMixin, Base):
         default="pending",
         comment="pending | running | waiting_approval | completed | failed | cancelled",
     )
-    trigger_payload: Mapped[Optional[dict]] = mapped_column(
+    trigger_payload: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="The raw input that triggered this run (webhook body, email data, etc.).",
     )
-    checkpoint_state: Mapped[Optional[dict]] = mapped_column(
+    checkpoint_state: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Latest LangGraph checkpoint — full resumable state of the graph.",
     )
-    current_node_key: Mapped[Optional[str]] = mapped_column(
+    current_node_key: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="The node currently executing or last executed.",
     )
-    started_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
-    completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
-    total_cost_usd: Mapped[Optional[float]] = mapped_column(
+    started_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    total_cost_usd: Mapped[float | None] = mapped_column(
         Numeric(10, 4),
         nullable=True,
         default=0.0,
         comment="Running total of all node_executions.cost_usd for this run.",
     )
-    error: Mapped[Optional[dict]] = mapped_column(
+    error: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Structured error detail if the run failed.",
@@ -131,19 +131,19 @@ class NodeExecution(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         comment="succeeded | failed | skipped",
     )
-    input: Mapped[Optional[dict]] = mapped_column(
+    input: Mapped[dict | None] = mapped_column(
         JSONB, nullable=True, comment="Input state snapshot passed to this node."
     )
-    output: Mapped[Optional[dict]] = mapped_column(
+    output: Mapped[dict | None] = mapped_column(
         JSONB, nullable=True, comment="Output state snapshot produced by this node."
     )
-    tokens_prompt: Mapped[Optional[int]] = mapped_column(
+    tokens_prompt: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="Prompt token count (LLM nodes only)."
     )
-    tokens_completion: Mapped[Optional[int]] = mapped_column(
+    tokens_completion: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="Completion token count (LLM nodes only)."
     )
-    cost_usd: Mapped[Optional[float]] = mapped_column(
+    cost_usd: Mapped[float | None] = mapped_column(
         Numeric(10, 4),
         nullable=True,
         comment="Computed cost for this node execution (LLM nodes only).",

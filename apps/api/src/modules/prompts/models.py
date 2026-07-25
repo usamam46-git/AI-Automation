@@ -1,4 +1,3 @@
-import datetime
 """
 modules/prompts/models.py — Prompt registry and versioning.
 
@@ -18,10 +17,9 @@ Design notes:
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import ForeignKey, Integer, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
@@ -39,7 +37,7 @@ class Prompt(UUIDMixin, TenantMixin, TimestampMixin, Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     workspace: Mapped["Workspace"] = relationship(  # type: ignore[name-defined]
@@ -74,7 +72,7 @@ class PromptVersion(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         comment="Jinja2-style template with {{variable}} placeholders.",
     )
-    variables_schema: Mapped[Optional[dict]] = mapped_column(
+    variables_schema: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="JSON Schema for expected template variables — validated before rendering.",

@@ -10,8 +10,6 @@ Tables:
   billing_usage_records — append-only usage event ledger
 """
 
-import uuid
-from typing import Optional
 
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -35,7 +33,7 @@ class BillingAccount(UUIDMixin, TenantMixin, TimestampMixin, Base):
         default="",
         comment="Stub field — will be replaced with proper billing fields.",
     )
-    config: Mapped[Optional[dict]] = mapped_column(
+    config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Catch-all for billing config until the billing section is fleshed out.",
@@ -56,7 +54,7 @@ class BillingUsageRecord(UUIDMixin, TenantMixin, TimestampMixin, Base):
         default="",
         comment="Stub: event type identifier (e.g. 'llm_token_spend').",
     )
-    payload: Mapped[Optional[dict]] = mapped_column(
+    payload: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Catch-all for usage event details.",

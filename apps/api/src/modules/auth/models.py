@@ -1,4 +1,3 @@
-import datetime
 """
 modules/auth/models.py — Identity models: User, Role, OrgMembership.
 
@@ -6,10 +5,9 @@ Vol. 2 §3.1 — Identity & Tenancy
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TimestampMixin, UUIDMixin
@@ -32,13 +30,13 @@ class User(UUIDMixin, TimestampMixin, Base):
         unique=True,
         comment="Case-insensitive unique — stored as citext in Postgres.",
     )
-    hashed_password: Mapped[Optional[str]] = mapped_column(
+    hashed_password: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Argon2id hash.  Null for SSO-only accounts.",
     )
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
-    avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_superadmin: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -67,7 +65,7 @@ class Role(UUIDMixin, TimestampMixin, Base):
 
     __tablename__ = "roles"
 
-    organization_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=True,

@@ -18,7 +18,6 @@ partitioning are handled in the hand-written index migration.
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
@@ -51,7 +50,7 @@ class AuditLog(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="user | agent | system",
     )
-    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         nullable=True,
         comment="FK to users.id or agent_sessions.id depending on actor_type.",
@@ -66,18 +65,18 @@ class AuditLog(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="Table / entity type the action was performed on.",
     )
-    resource_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         nullable=True,
         comment="PK of the affected entity.",
     )
-    event_metadata: Mapped[Optional[dict]] = mapped_column(
+    event_metadata: Mapped[dict | None] = mapped_column(
         "metadata",
         JSONB,
         nullable=True,
         comment="Action-specific context (before/after values, comments, etc.).",
     )
-    ip_address: Mapped[Optional[str]] = mapped_column(
+    ip_address: Mapped[str | None] = mapped_column(
         INET,
         nullable=True,
         comment="Client IP at the time of the action (null for system actions).",

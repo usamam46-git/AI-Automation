@@ -6,7 +6,6 @@ timezone, notification preferences, branding overrides beyond what fits in
 organizations.settings).  Full fields TBD.
 """
 
-from typing import Optional
 
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -29,7 +28,7 @@ class Setting(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="Setting identifier, e.g. 'default_timezone'.",
     )
-    payload: Mapped[Optional[dict]] = mapped_column(
+    payload: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Setting value as a structured JSONB object.",

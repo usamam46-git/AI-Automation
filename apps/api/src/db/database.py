@@ -12,19 +12,17 @@ Key design decisions (Vol. 2 §2 & §3.8):
   session variable is NOT set and RLS falls back gracefully.
 """
 
-from collections.abc import AsyncGenerator
-from typing import Optional
 import uuid
+from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy import text
 
 from src.core.config import settings  # pydantic-settings configuration object
-
 
 # ---------------------------------------------------------------------------
 # Engine
@@ -55,7 +53,7 @@ AsyncSessionLocal = async_sessionmaker(
 # ---------------------------------------------------------------------------
 
 async def get_db_session(
-    org_id: Optional[uuid.UUID] = None,
+    org_id: uuid.UUID | None = None,
 ) -> AsyncGenerator[AsyncSession, None]:
     """
     FastAPI dependency that yields an async SQLAlchemy session.

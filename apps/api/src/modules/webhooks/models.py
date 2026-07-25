@@ -6,7 +6,6 @@ events out to external URLs.  Full fields (event filter, signing secret,
 delivery log, retry config) will be added when we reach this section.
 """
 
-from typing import Optional
 
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -29,7 +28,7 @@ class Webhook(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="Stub: human-readable webhook name.",
     )
-    config: Mapped[Optional[dict]] = mapped_column(
+    config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Catch-all for webhook config (URL, secret, event filter) until fleshed out.",

@@ -1,5 +1,4 @@
 import time
-from typing import Callable
 
 import redis.asyncio as aioredis
 from fastapi import Depends, HTTPException, Request, status

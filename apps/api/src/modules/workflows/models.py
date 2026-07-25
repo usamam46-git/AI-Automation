@@ -1,4 +1,5 @@
 import datetime
+
 """
 modules/workflows/models.py — Workflow engine models.
 
@@ -19,7 +20,6 @@ Design notes:
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import Float, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
@@ -49,14 +49,14 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="draft",
         comment="draft | published | archived",
     )
-    current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("workflow_versions.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
@@ -68,7 +68,7 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
         default="manual",
         comment="manual | schedule | webhook | email | event",
     )
-    trigger_config: Mapped[Optional[dict]] = mapped_column(
+    trigger_config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Type-specific trigger configuration (cron, webhook secret, etc.).",
@@ -118,12 +118,12 @@ class WorkflowVersion(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         comment="Full serialized node/edge graph — source of truth for LangGraph compilation.",
     )
-    published_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+    published_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+    published_at: Mapped[datetime.datetime | None] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=True,
         comment="Null while this version is still a draft.",
@@ -175,17 +175,17 @@ class WorkflowNode(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         comment="agent | tool | condition | human_approval | subgraph | start | end",
     )
-    config: Mapped[Optional[dict]] = mapped_column(
+    config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Node-specific configuration (prompt_id, tool_id, condition expression, etc.).",
     )
-    position_x: Mapped[Optional[float]] = mapped_column(
+    position_x: Mapped[float | None] = mapped_column(
         Float,
         nullable=True,
         comment="React Flow canvas X coordinate.",
     )
-    position_y: Mapped[Optional[float]] = mapped_column(
+    position_y: Mapped[float | None] = mapped_column(
         Float,
         nullable=True,
         comment="React Flow canvas Y coordinate.",
@@ -216,7 +216,7 @@ class WorkflowEdge(UUIDMixin, TimestampMixin, Base):
     )
     source_node_key: Mapped[str] = mapped_column(Text, nullable=False)
     target_node_key: Mapped[str] = mapped_column(Text, nullable=False)
-    condition: Mapped[Optional[dict]] = mapped_column(
+    condition: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment='Conditional routing predicate, e.g. {"when": "confidence < 0.8"}.',

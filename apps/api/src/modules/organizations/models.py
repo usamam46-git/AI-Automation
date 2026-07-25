@@ -1,4 +1,5 @@
 import datetime
+
 """
 modules/organizations/models.py — Organization (tenant root) and APIKey.
 
@@ -9,7 +10,6 @@ NOTE: Organization does NOT use TenantMixin — it IS the tenant root.
 """
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
@@ -46,7 +46,7 @@ class Organization(UUIDMixin, TimestampMixin, Base):
         default="free",
         comment="free | pro | enterprise — drives billing limits.",
     )
-    settings: Mapped[Optional[dict]] = mapped_column(
+    settings: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Org-level feature flags, branding config, etc.",
@@ -101,14 +101,14 @@ class APIKey(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         comment="SHA-256 hash of the raw key.  Unique index added in index migration.",
     )
-    scopes: Mapped[Optional[dict]] = mapped_column(
+    scopes: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Array of permission scope strings.",
     )
-    last_used_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
-    expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
-    revoked_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     # Relationships
     organization: Mapped["Organization"] = relationship(

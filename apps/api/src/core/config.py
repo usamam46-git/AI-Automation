@@ -7,11 +7,10 @@ declared here so there are no scattered `os.getenv()` calls throughout the
 codebase.
 """
 
-from pydantic import Field, PostgresDsn, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
 from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env relative to this config file:
 # config.py lives at apps/api/src/core/config.py

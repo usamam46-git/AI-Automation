@@ -20,13 +20,11 @@ Design notes:
 """
 
 import uuid
-from typing import Optional
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Float, ForeignKey, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from pgvector.sqlalchemy import Vector
 
 from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
 
@@ -49,8 +47,8 @@ class Agent(UUIDMixin, TenantMixin, TimestampMixin, Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("agent_versions.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
@@ -90,7 +88,7 @@ class AgentVersion(UUIDMixin, TimestampMixin, Base):
         index=True,
     )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    system_prompt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    system_prompt_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("prompts.id", ondelete="SET NULL"),
         nullable=True,
@@ -106,7 +104,7 @@ class AgentVersion(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         default=0.0,
     )
-    tool_ids: Mapped[Optional[dict]] = mapped_column(
+    tool_ids: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="JSON array of Tool UUIDs bound to this agent version.",
@@ -140,7 +138,7 @@ class AgentSession(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    workflow_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("workflow_runs.id", ondelete="SET NULL"),
         nullable=True,
@@ -189,7 +187,7 @@ class AgentMemory(UUIDMixin, TimestampMixin, Base):
         comment="short_term | summary | long_term_fact",
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Optional[list]] = mapped_column(
+    embedding: Mapped[list | None] = mapped_column(
         Vector(1536),
         nullable=True,
         comment="pgvector embedding for semantic memory retrieval (text-embedding-3-large).",

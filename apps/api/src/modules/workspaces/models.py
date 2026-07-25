@@ -9,11 +9,8 @@ A Workspace is a logical grouping WITHIN an Organization (e.g., "Finance",
 belong to a Workspace, not directly to an Organization.
 """
 
-import uuid
-from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
@@ -37,7 +34,7 @@ class Workspace(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         comment="Human-readable name, e.g. 'Finance', 'HR Operations'.",
     )
-    icon: Mapped[Optional[str]] = mapped_column(
+    icon: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Emoji or icon identifier displayed in the UI.",

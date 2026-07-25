@@ -1,5 +1,4 @@
 import uuid
-from typing import Optional
 
 import redis.asyncio as aioredis
 from fastapi import HTTPException, status
@@ -9,7 +8,6 @@ from sqlalchemy.orm import selectinload
 
 from src.core.cache import (
     blocklist_token,
-    cache_permissions,
     invalidate_permissions_cache,
 )
 from src.core.config import settings
@@ -47,7 +45,7 @@ class AuthService:
 
         # Get system Owner role
         owner_role = await self.db.execute(
-            select(Role).where(Role.is_system == True, Role.name == "Owner")
+            select(Role).where(Role.is_system is True, Role.name == "Owner")
         )
         owner_role_obj = owner_role.scalar_one_or_none()
         if not owner_role_obj:
@@ -193,7 +191,7 @@ class AuthService:
         # Issue new token pair
         return await self._generate_token_response(user_id, org_id)
 
-    async def logout(self, access_token: str, refresh_token: Optional[str] = None) -> None:
+    async def logout(self, access_token: str, refresh_token: str | None = None) -> None:
         """
         Revokes the access token (adds to blocklist) and deletes the refresh token.
         """
