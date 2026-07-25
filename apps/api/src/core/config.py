@@ -11,9 +11,18 @@ from pydantic import Field, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+from pathlib import Path
+
+# Resolve .env relative to this config file:
+# config.py lives at apps/api/src/core/config.py
+# .env lives at the repo root, four directories up
+_ROOT = Path(__file__).resolve().parents[4]  # repo root
+_ENV_FILE = _ROOT / ".env"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -25,7 +34,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI Automation Platform"
     APP_ENV: str = Field(default="development")   # development | staging | production
     DEBUG: bool = Field(default=False)
-    SECRET_KEY: str = Field(...)                   # used for JWT signing — must be set
+    SECRET_KEY: str = Field(...)                   # General secret
+    JWT_SECRET_KEY: str = Field(...)               # used for JWT signing — must be set
 
     # ------------------------------------------------------------------
     # Database

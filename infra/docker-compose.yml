@@ -4,13 +4,6 @@
 # Start everything: docker compose up -d
 # Run migrations:   docker compose exec api alembic upgrade head
 # Tail logs:        docker compose logs -f api worker
-#
-# NOTE: The postgres service uses pgvector/pgvector:pg16 — this image ships
-# with the pgvector binary pre-installed.  However, the extension must still
-# be activated in the aap_db database.  This is handled by the first line of
-# the initial Alembic migration:
-#   op.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-# Do NOT rely on init-scripts/ for this — Alembic owns all schema changes.
 
 version: "3.9"
 

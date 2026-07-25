@@ -97,6 +97,13 @@ app.add_middleware(
 # Health check (infrastructure smoke test)
 # ---------------------------------------------------------------------------
 
+from src.modules.auth.router import router as auth_router
+
+# ---------------------------------------------------------------------------
+# Routers
+# ---------------------------------------------------------------------------
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+
 @app.get("/health", tags=["Health"], summary="Health check")
 async def health_check() -> dict:
     """
