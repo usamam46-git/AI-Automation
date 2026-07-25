@@ -82,7 +82,7 @@ async def get_db_session(
             # This means even if a connection is reused from the pool, the
             # variable never leaks into a subsequent request's transaction.
             await session.execute(
-                text("SET LOCAL app.current_org_id = :org_id"),
+                text("SELECT set_config('app.current_org_id', :org_id, true)"),
                 {"org_id": str(org_id)},
             )
         try:

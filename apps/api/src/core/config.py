@@ -15,9 +15,9 @@ from pathlib import Path
 
 # Resolve .env relative to this config file:
 # config.py lives at apps/api/src/core/config.py
-# .env lives at the repo root, four directories up
-_ROOT = Path(__file__).resolve().parents[4]  # repo root
-_ENV_FILE = _ROOT / ".env"
+# .env lives at the api root, two directories up
+_API_ROOT = Path(__file__).resolve().parents[2]  # api root
+_ENV_FILE = _API_ROOT / ".env"
 
 
 class Settings(BaseSettings):

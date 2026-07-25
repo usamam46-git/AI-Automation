@@ -1,5 +1,6 @@
 import asyncio
 
+import src.db.models  # noqa: F401 — register full ORM graph before queries
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

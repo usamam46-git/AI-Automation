@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.core.cache import get_cached_permissions, is_token_blocklisted
+from src.core.permissions import permission_granted
 from src.core.redis import get_redis
 from src.core.security import decode_access_token
 from src.db.database import get_db_session
@@ -37,7 +38,7 @@ async def get_current_user(
     """
     try:
         payload = decode_access_token(token)
-        user_id: str | None = payload.get("sub")
+        user_id: str | None = payload.get("user_id") or payload.get("sub")
         jti: str | None = payload.get("jti")
         if user_id is None or jti is None:
             raise credentials_exception
@@ -126,8 +127,7 @@ def require_permission(required_permission: str) -> Any:
             from src.core.cache import cache_permissions
             await cache_permissions(redis, org_id_str, user_id_str, permissions)
             
-        # 3. Check if required permission is in the list or if the user has wildcard "*"
-        if "*" not in permissions and required_permission not in permissions:
+        if not permission_granted(permissions, required_permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing required permission: {required_permission}"

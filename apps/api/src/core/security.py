@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -35,6 +36,7 @@ def create_access_token(user_id: str, org_id: str, expires_delta: timedelta | No
 
     to_encode: dict[str, Any] = {
         "sub": user_id,
+        "user_id": user_id,
         "org_id": org_id,
         "exp": expire,
         "jti": str(uuid.uuid4()),
@@ -63,3 +65,8 @@ def create_refresh_token() -> str:
     """
     import secrets
     return secrets.token_urlsafe(32)
+
+
+def hash_refresh_token(token: str) -> str:
+    """Returns SHA-256 hex digest of a refresh token for safe Redis storage."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

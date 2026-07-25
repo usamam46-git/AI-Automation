@@ -18,6 +18,7 @@ from src.core.security import (
     create_refresh_token,
     decode_access_token,
     get_password_hash,
+    hash_refresh_token,
     verify_password,
 )
 from src.modules.auth.models import OrgMembership, Role, User
@@ -167,11 +168,7 @@ class AuthService:
         """
         Validates refresh token and issues a new pair (Refresh Token Rotation).
         """
-        # Fetch token metadata from Redis
-        token_hash = get_password_hash(refresh_token) # Or simple SHA256 if we chose that, but we're storing opaque token directly for simplicity in this example
-        # Actually, best practice for refresh tokens is to just store the secure random string as the key or hash it.
-        # For simplicity, we'll use the refresh_token itself as part of the key: `refresh_token:{token}` -> `user_id:org_id`
-        key = f"refresh_token:{refresh_token}"
+        key = self._refresh_token_key(refresh_token)
         val = await self.redis.get(key)
         
         if not val:
@@ -201,7 +198,7 @@ class AuthService:
         Revokes the access token (adds to blocklist) and deletes the refresh token.
         """
         if refresh_token:
-            await self.redis.delete(f"refresh_token:{refresh_token}")
+            await self.redis.delete(self._refresh_token_key(refresh_token))
             
         try:
             payload = decode_access_token(access_token)
@@ -221,10 +218,9 @@ class AuthService:
         """Helper to generate and store token pair."""
         access_token = create_access_token(str(user_id), str(org_id))
         refresh_token = create_refresh_token()
-        
-        # Store refresh token in Redis with TTL
+
         ttl_seconds = settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
-        key = f"refresh_token:{refresh_token}"
+        key = self._refresh_token_key(refresh_token)
         val = f"{user_id}:{org_id}"
         await self.redis.set(key, val, ex=ttl_seconds)
         
@@ -237,6 +233,10 @@ class AuthService:
             "token_type": "bearer",
             "refresh_token": refresh_token
         } # type: ignore
+
+    @staticmethod
+    def _refresh_token_key(refresh_token: str) -> str:
+        return f"refresh_token:{hash_refresh_token(refresh_token)}"
         
     async def update_user_role(self, user_id: uuid.UUID, org_id: uuid.UUID, new_role_id: uuid.UUID) -> None:
         """

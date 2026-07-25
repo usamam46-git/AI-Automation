@@ -83,9 +83,6 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
         back_populates="workflow",
         foreign_keys="WorkflowVersion.workflow_id",
     )
-    runs: Mapped[list["WorkflowRun"]] = relationship(  # type: ignore[name-defined]
-        "WorkflowRun", back_populates="workflow_version", viewonly=True
-    )
 
 
 class WorkflowVersion(UUIDMixin, TimestampMixin, Base):

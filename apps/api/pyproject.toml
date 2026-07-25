@@ -24,6 +24,7 @@ pgvector = "^0.3.2"
 # Validation / serialization
 pydantic = "^2.7.0"
 pydantic-settings = "^2.2.1"
+email-validator = "^2.1.0"
 
 # Auth
 python-jose = { version = "^3.3.0", extras = ["cryptography"] }

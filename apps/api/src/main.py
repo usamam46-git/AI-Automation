@@ -20,6 +20,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import src.db.models  # noqa: F401 — register full ORM graph at startup
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -49,6 +50,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Starting AI Automation Platform API [env=%s]", settings.APP_ENV)
 
     await init_redis()
+
+    from src.db.database import AsyncSessionLocal
+    from src.db.seed_roles import seed_system_roles
+
+    async with AsyncSessionLocal() as session:
+        await seed_system_roles(session)
+    logger.info("System roles seeded (idempotent).")
 
     logger.info("All startup resources initialized.")
 
