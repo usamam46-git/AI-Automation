@@ -20,7 +20,7 @@ At its core, AAP combines **Autonomous AI Agents** with a **Visual Workflow Engi
 
 ## 🚀 What We've Built So Far
 
-We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8 of the architecture specification). 
+We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8) and the **Authentication & RBAC Layer** (Volume 2 §10 - §11) of the architecture specification.
 
 ### Highlights:
 1. **Docker Infrastructure:** Configured `docker-compose.yml` with `pgvector/pgvector:pg16` for PostgreSQL, alongside Redis and MinIO (S3 compatible object storage).
@@ -33,6 +33,16 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
    - Initial schema generation incorporating `pgvector` and `citext`.
    - Advanced manual indexes (HNSW for semantic search, GIN for full-text search, and composite B-trees).
    - Manually authored **Row Level Security (RLS)** migration enforcing tenant isolation policies across the entire schema via `app.current_org_id` context.
+4. **FastAPI & Core Security Foundations:**
+   - Established the FastAPI application structure and environment configuration using Pydantic Settings.
+   - Implemented highly secure Authentication routes (`/register`, `/login`, `/switch-org`, `/refresh`, `/logout`).
+   - Hardened JWT patterns: The opaque `refresh_token` is handled securely via an `httpOnly`, `Secure`, and `SameSite=Strict` cookie, whilst the `access_token` is sent back in the JSON body.
+   - Used Argon2 for advanced password hashing.
+5. **Redis Integration & Security Controls:**
+   - Implemented an asynchronous connection pool leveraging `redis-py` (`aioredis`).
+   - Implemented **Refresh Token Rotation** and a **JWT Blocklist** (by checking the `jti` claim).
+   - Designed a highly-performant **Role-Based Access Control (RBAC)** permission dependency (`require_permission`) that pulls directly from a Redis cache to avoid hitting the database on every authenticated request.
+   - Secured the public Auth routes with a Redis-backed Sliding Window **Rate Limiter** (`RateLimiter` dependency).
 
 ---
 
