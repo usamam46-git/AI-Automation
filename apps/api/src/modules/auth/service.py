@@ -44,7 +44,7 @@ class AuthService:
             )
 
         # Get system Owner role (use first() in case dev DB has harmless duplicates)
-        owner_role = await self.db.execute(select(Role).where(Role.is_system == True, Role.name == "Owner")) # noqa: E712
+        owner_role = await self.db.execute(select(Role).where(Role.is_system == True, Role.name == "Owner"))  # noqa: E712
         owner_role_obj = owner_role.scalars().first()
         if not owner_role_obj:
             raise HTTPException(
