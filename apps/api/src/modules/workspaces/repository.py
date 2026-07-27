@@ -1,7 +1,7 @@
 import uuid
-from typing import Optional, Sequence
-
+from collections.abc import Sequence
 from datetime import datetime
+
 from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,21 +18,21 @@ class WorkspaceRepository:
         await self.db.flush()
         return workspace
 
-    async def get_by_id(self, organization_id: uuid.UUID, workspace_id: uuid.UUID) -> Optional[Workspace]:
+    async def get_by_id(self, organization_id: uuid.UUID, workspace_id: uuid.UUID) -> Workspace | None:
         stmt = select(Workspace).where(
             Workspace.id == workspace_id,
             Workspace.organization_id == organization_id,
-            Workspace.is_active == True,
+            Workspace.is_active == True,  # noqa: E712
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_by_org(self, organization_id: uuid.UUID, cursor: Optional[str] = None, limit: int = 50) -> Sequence[Workspace]:
+    async def list_by_org(self, organization_id: uuid.UUID, cursor: str | None = None, limit: int = 50) -> Sequence[Workspace]:
         stmt = (
             select(Workspace)
             .where(
                 Workspace.organization_id == organization_id,
-                Workspace.is_active == True,
+                Workspace.is_active == True,  # noqa: E712
             )
             .order_by(desc(Workspace.created_at))
             .limit(limit)
@@ -54,7 +54,7 @@ class WorkspaceRepository:
             .where(
                 Workspace.id == workspace_id,
                 Workspace.organization_id == organization_id,
-                Workspace.is_active == True,
+                Workspace.is_active == True,  # noqa: E712
             )
             .values(**data)
             .returning(Workspace)
@@ -80,7 +80,7 @@ class WorkspaceRepository:
 
         stmt = select(func.count(Workspace.id)).where(
             Workspace.organization_id == organization_id,
-            Workspace.is_active == True,
+            Workspace.is_active == True,  # noqa: E712
         )
         result = await self.db.execute(stmt)
         return result.scalar_one()

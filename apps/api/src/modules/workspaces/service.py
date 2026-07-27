@@ -1,13 +1,13 @@
 import uuid
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.events import WorkspaceCreatedEvent, WorkspaceDeletedEvent, WorkspaceUpdatedEvent, event_bus
+from src.modules.workspaces.models import Workspace
 from src.modules.workspaces.repository import WorkspaceRepository
 from src.modules.workspaces.schemas import WorkspaceCreate, WorkspaceUpdate
-from src.modules.workspaces.models import Workspace
 
 
 class WorkspaceService:
@@ -34,7 +34,7 @@ class WorkspaceService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
         return workspace
 
-    async def list_workspaces(self, organization_id: uuid.UUID, cursor: Optional[str] = None, limit: int = 50) -> Sequence[Workspace]:
+    async def list_workspaces(self, organization_id: uuid.UUID, cursor: str | None = None, limit: int = 50) -> Sequence[Workspace]:
         return await self.repository.list_by_org(organization_id, cursor, limit)
 
     async def update_workspace(self, organization_id: uuid.UUID, workspace_id: uuid.UUID, data: WorkspaceUpdate) -> Workspace:

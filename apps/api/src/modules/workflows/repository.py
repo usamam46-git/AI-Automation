@@ -6,8 +6,8 @@ OUT OF SCOPE: workflow_versions, workflow_nodes, workflow_edges.
 """
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Optional, Sequence
 
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,7 @@ class WorkflowRepository:
         await self.db.flush()
         return workflow
 
-    async def get_by_id(self, organization_id: uuid.UUID, workflow_id: uuid.UUID) -> Optional[Workflow]:
+    async def get_by_id(self, organization_id: uuid.UUID, workflow_id: uuid.UUID) -> Workflow | None:
         stmt = select(Workflow).where(
             Workflow.id == workflow_id,
             Workflow.organization_id == organization_id,
@@ -37,9 +37,9 @@ class WorkflowRepository:
     async def list_by_org(
         self,
         organization_id: uuid.UUID,
-        workspace_id: Optional[uuid.UUID] = None,
-        status: Optional[str] = None,
-        cursor: Optional[str] = None,
+        workspace_id: uuid.UUID | None = None,
+        status: str | None = None,
+        cursor: str | None = None,
         limit: int = 50,
     ) -> Sequence[Workflow]:
         stmt = select(Workflow).where(Workflow.organization_id == organization_id).order_by(desc(Workflow.created_at)).limit(limit)
@@ -47,7 +47,7 @@ class WorkflowRepository:
         if workspace_id is not None:
             stmt = stmt.where(Workflow.workspace_id == workspace_id)
 
-        if status is not None:
+        if status is not None:  # noqa: SIM108
             stmt = stmt.where(Workflow.status == status)
         else:
             # By default, exclude archived workflows from list

@@ -10,13 +10,13 @@ Critical business rules:
 """
 
 import uuid
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.events import WorkflowCreatedEvent, WorkflowUpdatedEvent, WorkflowArchivedEvent, event_bus
+from src.core.events import WorkflowArchivedEvent, WorkflowCreatedEvent, WorkflowUpdatedEvent, event_bus
 from src.modules.workflows.models import Workflow
 from src.modules.workflows.repository import WorkflowRepository
 from src.modules.workflows.schemas import WorkflowCreate, WorkflowUpdate
@@ -37,7 +37,7 @@ class WorkflowService:
         stmt = select(Workspace).where(
             Workspace.id == workspace_id,
             Workspace.organization_id == organization_id,
-            Workspace.is_active == True,
+            Workspace.is_active == True,  # noqa: E712
         )
         result = await self.db.execute(stmt)
         if result.scalar_one_or_none() is None:
@@ -71,9 +71,9 @@ class WorkflowService:
     async def list_workflows(
         self,
         organization_id: uuid.UUID,
-        workspace_id: Optional[uuid.UUID] = None,
-        status_filter: Optional[str] = None,
-        cursor: Optional[str] = None,
+        workspace_id: uuid.UUID | None = None,
+        status_filter: str | None = None,
+        cursor: str | None = None,
         limit: int = 50,
     ) -> Sequence[Workflow]:
         return await self.repository.list_by_org(

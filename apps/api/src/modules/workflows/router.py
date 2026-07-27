@@ -6,7 +6,7 @@ organization_id comes ONLY from get_current_org (JWT context), never request bod
 """
 
 import uuid
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,9 +43,9 @@ async def create_workflow(
     dependencies=[require_permission("workflow:read")],
 )
 async def list_workflows(
-    workspace_id: Optional[uuid.UUID] = Query(None, description="Filter by workspace"),
-    status: Optional[str] = Query(None, description="Filter by status (draft|published|archived)"),
-    cursor: Optional[str] = Query(None, description="Cursor for pagination (ISO datetime string)"),
+    workspace_id: uuid.UUID | None = Query(None, description="Filter by workspace"),
+    status: str | None = Query(None, description="Filter by status (draft|published|archived)"),
+    cursor: str | None = Query(None, description="Cursor for pagination (ISO datetime string)"),
     limit: int = Query(50, ge=1, le=100),
     organization_id: uuid.UUID = Depends(get_current_org),
     service: WorkflowService = Depends(get_workflow_service),

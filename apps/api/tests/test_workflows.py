@@ -12,13 +12,9 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException, status
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
-import src.db.models  # Register all ORM mappers
-from src.modules.workspaces.models import Workspace
 from src.modules.workflows.schemas import WorkflowCreate
 from src.modules.workflows.service import WorkflowService
-
 
 # ---------------------------------------------------------------------------
 # Helpers

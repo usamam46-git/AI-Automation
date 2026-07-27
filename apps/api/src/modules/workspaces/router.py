@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,7 @@ async def create_workspace(
     dependencies=[require_permission("workspace:read")],
 )
 async def list_workspaces(
-    cursor: Optional[str] = Query(None, description="Cursor for pagination (ISO datetime string)"),
+    cursor: str | None = Query(None, description="Cursor for pagination (ISO datetime string)"),
     limit: int = Query(50, ge=1, le=100),
     organization_id: uuid.UUID = Depends(get_current_org),
     service: WorkspaceService = Depends(get_workspace_service),

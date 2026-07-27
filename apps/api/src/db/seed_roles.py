@@ -86,7 +86,7 @@ async def seed_system_roles(db: AsyncSession) -> None:
 
     for role_data in roles_data:
         # Check if role exists (use first() to be safe if duplicates ever crept in during dev)
-        stmt = select(Role).where(Role.name == role_data["name"], Role.is_system == True)
+        stmt = select(Role).where(Role.name == role_data["name"], Role.is_system == True)  # noqa: E712
         result = await db.execute(stmt)
         existing = result.scalars().first()
 

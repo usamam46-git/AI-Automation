@@ -1,5 +1,6 @@
 import asyncio
-from typing import Any, Callable, Coroutine, Type, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -8,9 +9,9 @@ class EventBus:
     """Minimal async pub/sub event bus."""
 
     def __init__(self) -> None:
-        self._subscribers: dict[Type[Any], list[Callable[[Any], Coroutine[Any, Any, None]]]] = {}
+        self._subscribers: dict[type[Any], list[Callable[[Any], Coroutine[Any, Any, None]]]] = {}
 
-    def subscribe(self, event_type: Type[T]) -> Callable[[Callable[[T], Coroutine[Any, Any, None]]], Callable[[T], Coroutine[Any, Any, None]]]:
+    def subscribe(self, event_type: type[T]) -> Callable[[Callable[[T], Coroutine[Any, Any, None]]], Callable[[T], Coroutine[Any, Any, None]]]:
         def decorator(func: Callable[[T], Coroutine[Any, Any, None]]) -> Callable[[T], Coroutine[Any, Any, None]]:
             if event_type not in self._subscribers:
                 self._subscribers[event_type] = []

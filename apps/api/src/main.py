@@ -104,8 +104,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 from src.modules.auth.router import router as auth_router
-from src.modules.workspaces.router import router as workspaces_router
 from src.modules.workflows.router import router as workflows_router
+from src.modules.workspaces.router import router as workspaces_router
 
 # ---------------------------------------------------------------------------
 # Routers

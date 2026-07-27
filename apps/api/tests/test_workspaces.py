@@ -1,16 +1,15 @@
 import uuid
-from datetime import datetime, timedelta, UTC
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException, status
 from httpx import AsyncClient
 
-import src.db.models  # Ensure all mappers are loaded
+from src.modules.workflows.models import Workflow
 from src.modules.workspaces.models import Workspace
 from src.modules.workspaces.schemas import WorkspaceCreate
 from src.modules.workspaces.service import WorkspaceService
-from src.modules.workflows.models import Workflow
 
 
 @pytest.mark.asyncio
@@ -193,7 +192,6 @@ async def test_workspace_cursor_pagination(client: AsyncClient, setup_two_orgs):
     assert page1_ids.isdisjoint(page2_ids), "Pages must not overlap"
 
     # Verify all page2 items are older than the cursor
-    from datetime import datetime, timezone
 
     cursor_dt = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
     for w in page2:

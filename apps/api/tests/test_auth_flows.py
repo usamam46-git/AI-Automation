@@ -2,16 +2,12 @@ import uuid
 
 import jwt
 import pytest
-from fastapi import FastAPI
 from httpx import AsyncClient
 
 from src.core.config import settings
 from src.core.dependencies import require_permission
 from src.core.redis import get_redis
-from src.modules.auth.router import router as auth_router
 from src.main import app as main_app
-
-import src.db.models  # Ensure all ORM mappers are registered
 
 # ---------------------------------------------------------------------------
 # Minimal test-only app for auth routes + permission-gated dummy endpoints.
