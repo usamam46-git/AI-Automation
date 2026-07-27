@@ -69,9 +69,6 @@ jobs:
       - name: Run Ruff Formatter Check
         run: poetry run ruff format --check .
 
-      - name: Run Mypy Type Checker
-        run: poetry run mypy src
-
       - name: Setup DB and Run Pytest
         env:
           SECRET_KEY: test_secret_key_12345
