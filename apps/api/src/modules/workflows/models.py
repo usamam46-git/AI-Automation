@@ -98,9 +98,7 @@ class WorkflowVersion(UUIDMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "workflow_versions"
-    __table_args__ = (
-        UniqueConstraint("workflow_id", "version_number", name="uq_workflow_version"),
-    )
+    __table_args__ = (UniqueConstraint("workflow_id", "version_number", name="uq_workflow_version"),)
 
     workflow_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -135,12 +133,8 @@ class WorkflowVersion(UUIDMixin, TimestampMixin, Base):
         back_populates="versions",
         foreign_keys=[workflow_id],
     )
-    nodes: Mapped[list["WorkflowNode"]] = relationship(
-        "WorkflowNode", back_populates="workflow_version"
-    )
-    edges: Mapped[list["WorkflowEdge"]] = relationship(
-        "WorkflowEdge", back_populates="workflow_version"
-    )
+    nodes: Mapped[list["WorkflowNode"]] = relationship("WorkflowNode", back_populates="workflow_version")
+    edges: Mapped[list["WorkflowEdge"]] = relationship("WorkflowEdge", back_populates="workflow_version")
     runs: Mapped[list["WorkflowRun"]] = relationship(  # type: ignore[name-defined]
         "WorkflowRun", back_populates="workflow_version"
     )
@@ -192,9 +186,7 @@ class WorkflowNode(UUIDMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    workflow_version: Mapped["WorkflowVersion"] = relationship(
-        "WorkflowVersion", back_populates="nodes"
-    )
+    workflow_version: Mapped["WorkflowVersion"] = relationship("WorkflowVersion", back_populates="nodes")
 
 
 class WorkflowEdge(UUIDMixin, TimestampMixin, Base):
@@ -223,6 +215,4 @@ class WorkflowEdge(UUIDMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    workflow_version: Mapped["WorkflowVersion"] = relationship(
-        "WorkflowVersion", back_populates="edges"
-    )
+    workflow_version: Mapped["WorkflowVersion"] = relationship("WorkflowVersion", back_populates="edges")

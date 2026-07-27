@@ -53,10 +53,10 @@ async def get_current_user(
     stmt = select(User).where(User.id == user_uuid)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
-    
+
     if user is None:
         raise credentials_exception
-        
+
     return user
 
 
@@ -78,7 +78,7 @@ async def get_current_org(
         org_id = uuid.UUID(org_id_str)
     except JWTError:
         raise credentials_exception
-        
+
     request.state.org_id = org_id
     return org_id
 
@@ -89,6 +89,7 @@ def require_permission(required_permission: str) -> Any:
     Checks if the current user has the required permission in the current org.
     Checks the Redis permission cache first, falls back to DB if cache miss.
     """
+
     async def permission_checker(
         user: Annotated[User, Depends(get_current_user)],
         org_id: Annotated[uuid.UUID, Depends(get_current_org)],
@@ -97,39 +98,30 @@ def require_permission(required_permission: str) -> Any:
     ) -> None:
         user_id_str = str(user.id)
         org_id_str = str(org_id)
-        
+
         # 1. Try to get permissions from Redis cache
         permissions = await get_cached_permissions(redis, org_id_str, user_id_str)
-        
+
         if permissions is None:
             # 2. Cache miss: fetch from DB
             stmt = (
                 select(Role.permissions)
                 .join(OrgMembership, OrgMembership.role_id == Role.id)
-                .where(
-                    OrgMembership.user_id == user.id,
-                    OrgMembership.organization_id == org_id,
-                    OrgMembership.status == "active"
-                )
+                .where(OrgMembership.user_id == user.id, OrgMembership.organization_id == org_id, OrgMembership.status == "active")
             )
             result = await db.execute(stmt)
             permissions_list = result.scalar_one_or_none()
-            
+
             if permissions_list is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not enough permissions or membership is inactive"
-                )
-            
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions or membership is inactive")
+
             permissions = permissions_list
             # Add to cache for next time (caller should use cache_permissions but we don't have circular dependency here, we can just call it)
             from src.core.cache import cache_permissions
+
             await cache_permissions(redis, org_id_str, user_id_str, permissions)
-            
+
         if not permission_granted(permissions, required_permission):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Missing required permission: {required_permission}"
-            )
-            
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Missing required permission: {required_permission}")
+
     return Depends(permission_checker)

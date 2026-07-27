@@ -1,1 +1,1 @@
-﻿# notifications module
+# notifications module

@@ -66,9 +66,7 @@ class Tool(UUIDMixin, TenantMixin, TimestampMixin, Base):
     workspace: Mapped["Workspace"] = relationship(  # type: ignore[name-defined]
         "Workspace", back_populates="tools"
     )
-    executions: Mapped[list["ToolExecution"]] = relationship(
-        "ToolExecution", back_populates="tool"
-    )
+    executions: Mapped[list["ToolExecution"]] = relationship("ToolExecution", back_populates="tool")
 
 
 class ToolExecution(UUIDMixin, TimestampMixin, Base):

@@ -29,11 +29,11 @@ from src.core.config import settings  # pydantic-settings configuration object
 # ---------------------------------------------------------------------------
 
 engine = create_async_engine(
-    settings.DATABASE_URL,           # e.g. postgresql+asyncpg://user:pass@db:5432/aap_db
-    pool_pre_ping=True,              # check connection health before use
-    pool_size=10,                    # number of persistent connections per worker
-    max_overflow=20,                 # extra connections allowed under burst load
-    echo=settings.DB_ECHO,          # set True in dev to log all SQL
+    settings.DATABASE_URL,  # e.g. postgresql+asyncpg://user:pass@db:5432/aap_db
+    pool_pre_ping=True,  # check connection health before use
+    pool_size=10,  # number of persistent connections per worker
+    max_overflow=20,  # extra connections allowed under burst load
+    echo=settings.DB_ECHO,  # set True in dev to log all SQL
 )
 
 # ---------------------------------------------------------------------------
@@ -42,15 +42,19 @@ engine = create_async_engine(
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
-    expire_on_commit=False,          # avoid lazy-load errors after commit in async context
+    expire_on_commit=False,  # avoid lazy-load errors after commit in async context
     autocommit=False,
     autoflush=False,
 )
+
+# Alias used by tests and other internal callers
+async_session_maker = AsyncSessionLocal
 
 
 # ---------------------------------------------------------------------------
 # FastAPI dependency
 # ---------------------------------------------------------------------------
+
 
 async def get_db_session(
     org_id: uuid.UUID | None = None,

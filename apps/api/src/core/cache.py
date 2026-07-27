@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 # Key builders — single source of truth for every Redis key pattern
 # ---------------------------------------------------------------------------
 
+
 class CacheKey:
     """Namespace-prefixed key builders.  Always use these, never hard-code keys."""
 
@@ -75,6 +76,7 @@ class CacheKey:
 # ---------------------------------------------------------------------------
 # Generic get / set / delete helpers
 # ---------------------------------------------------------------------------
+
 
 async def cache_get(r: aioredis.Redis, key: str) -> Any | None:
     """
@@ -141,6 +143,7 @@ async def cache_exists(r: aioredis.Redis, key: str) -> bool:
 # A revoked JWT's `jti` (JWT ID claim) is written here on logout/revoke.
 # The middleware checks this on every authenticated request.
 # TTL is set to the token's remaining lifetime so Redis self-cleans.
+
 
 async def blocklist_token(r: aioredis.Redis, jti: str, ttl_seconds: int) -> None:
     """
@@ -215,7 +218,9 @@ async def invalidate_permissions_cache(
     deleted = await cache_delete(r, CacheKey.permissions(org_id, user_id))
     logger.debug(
         "Permission cache invalidated: org=%s user=%s (deleted=%d)",
-        org_id, user_id, deleted,
+        org_id,
+        user_id,
+        deleted,
     )
 
 
@@ -224,6 +229,7 @@ async def invalidate_permissions_cache(
 # ---------------------------------------------------------------------------
 # The compiled LangGraph graph spec is cached by workflow_version_id.
 # No TTL — explicitly invalidated when a new version is published.
+
 
 async def get_cached_workflow_version(
     r: aioredis.Redis,
@@ -264,7 +270,8 @@ async def invalidate_workflow_version_cache(
     deleted = await cache_delete(r, CacheKey.workflow_version(version_id))
     logger.debug(
         "Workflow version cache invalidated: version_id=%s (deleted=%d)",
-        version_id, deleted,
+        version_id,
+        deleted,
     )
 
 
@@ -274,6 +281,7 @@ async def invalidate_workflow_version_cache(
 # Uses a simple Redis counter + TTL approach.  For production-grade sliding
 # windows, this will be upgraded to a Lua script (atomic increment + expire)
 # when the rate-limiting middleware is implemented in §11.
+
 
 async def increment_rate_counter(
     r: aioredis.Redis,

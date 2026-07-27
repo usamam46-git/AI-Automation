@@ -9,7 +9,6 @@ A Workspace is a logical grouping WITHIN an Organization (e.g., "Finance",
 belong to a Workspace, not directly to an Organization.
 """
 
-
 from sqlalchemy import Boolean, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,6 +43,12 @@ class Workspace(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=False,
         default=False,
         comment="True for the organization's auto-created default workspace.",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        comment="False when soft-deleted.",
     )
 
     # Relationships (back-references populated by child modules)

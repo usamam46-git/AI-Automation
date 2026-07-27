@@ -51,9 +51,7 @@ async def register(
     """Register a new user, create an organization and default workspace."""
     result = await service.register(request)
     set_refresh_token_cookie(response, result["refresh_token"])
-    return TokenResponse(
-        access_token=result["access_token"], token_type=result["token_type"]
-    )
+    return TokenResponse(access_token=result["access_token"], token_type=result["token_type"])
 
 
 @router.post(
@@ -69,9 +67,7 @@ async def login(
     """Authenticate a user and return access/refresh tokens."""
     result = await service.login(request)
     set_refresh_token_cookie(response, result["refresh_token"])
-    return TokenResponse(
-        access_token=result["access_token"], token_type=result["token_type"]
-    )
+    return TokenResponse(access_token=result["access_token"], token_type=result["token_type"])
 
 
 @router.post("/switch-org/{org_id}", response_model=TokenResponse)
@@ -84,9 +80,7 @@ async def switch_org(
     """Switch organization context. Issues a new token pair scoped to the new org."""
     result = await service.switch_org(user.id, org_id)
     set_refresh_token_cookie(response, result["refresh_token"])
-    return TokenResponse(
-        access_token=result["access_token"], token_type=result["token_type"]
-    )
+    return TokenResponse(access_token=result["access_token"], token_type=result["token_type"])
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -101,12 +95,10 @@ async def refresh_tokens(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token missing",
         )
-        
+
     result = await service.refresh_tokens(refresh_token)
     set_refresh_token_cookie(response, result["refresh_token"])
-    return TokenResponse(
-        access_token=result["access_token"], token_type=result["token_type"]
-    )
+    return TokenResponse(access_token=result["access_token"], token_type=result["token_type"])
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

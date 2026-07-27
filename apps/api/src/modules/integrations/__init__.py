@@ -1,1 +1,1 @@
-﻿# integrations module
+# integrations module

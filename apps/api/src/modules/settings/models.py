@@ -6,7 +6,6 @@ timezone, notification preferences, branding overrides beyond what fits in
 organizations.settings).  Full fields TBD.
 """
 
-
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column

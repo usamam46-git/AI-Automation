@@ -43,11 +43,9 @@ class AuthService:
                 detail="Email already registered",
             )
 
-        # Get system Owner role
-        owner_role = await self.db.execute(
-            select(Role).where(Role.is_system is True, Role.name == "Owner")
-        )
-        owner_role_obj = owner_role.scalar_one_or_none()
+        # Get system Owner role (use first() in case dev DB has harmless duplicates)
+        owner_role = await self.db.execute(select(Role).where(Role.is_system == True, Role.name == "Owner"))
+        owner_role_obj = owner_role.scalars().first()
         if not owner_role_obj:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -71,15 +69,11 @@ class AuthService:
         await self.db.flush()
 
         # 3. Create Default Workspace
-        workspace = Workspace(
-            organization_id=org.id, name="Default Workspace", is_default=True
-        )
+        workspace = Workspace(organization_id=org.id, name="Default Workspace", is_default=True)
         self.db.add(workspace)
 
         # 4. Create OrgMembership
-        membership = OrgMembership(
-            organization_id=org.id, user_id=user.id, role_id=owner_role_obj.id, status="active"
-        )
+        membership = OrgMembership(organization_id=org.id, user_id=user.id, role_id=owner_role_obj.id, status="active")
         self.db.add(membership)
         await self.db.commit()
 
@@ -91,9 +85,7 @@ class AuthService:
         Verifies credentials and returns a token pair.
         """
         # Fetch user with active memberships
-        stmt = select(User).options(
-            selectinload(User.memberships.and_(OrgMembership.status == "active"))
-        ).where(User.email == req.email)
+        stmt = select(User).options(selectinload(User.memberships.and_(OrgMembership.status == "active"))).where(User.email == req.email)
         result = await self.db.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -122,7 +114,7 @@ class AuthService:
                 requested_org_uuid = uuid.UUID(req.organization_id)
             except ValueError:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org ID format")
-                
+
             for m in user.memberships:
                 if m.organization_id == requested_org_uuid:
                     target_org_id = requested_org_uuid
@@ -148,18 +140,16 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid org ID format")
 
         stmt = select(OrgMembership).where(
-            OrgMembership.user_id == user_id,
-            OrgMembership.organization_id == target_org_id,
-            OrgMembership.status == "active"
+            OrgMembership.user_id == user_id, OrgMembership.organization_id == target_org_id, OrgMembership.status == "active"
         )
         membership = (await self.db.execute(stmt)).scalar_one_or_none()
-        
+
         if not membership:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not a member of the requested organization",
             )
-            
+
         return await self._generate_token_response(user_id, target_org_id)
 
     async def refresh_tokens(self, refresh_token: str) -> TokenResponse:
@@ -168,13 +158,13 @@ class AuthService:
         """
         key = self._refresh_token_key(refresh_token)
         val = await self.redis.get(key)
-        
+
         if not val:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired refresh token",
             )
-            
+
         # Parse user_id and org_id
         try:
             user_id_str, org_id_str = val.split(":")
@@ -187,7 +177,7 @@ class AuthService:
 
         # Rotate: delete old token
         await self.redis.delete(key)
-        
+
         # Issue new token pair
         return await self._generate_token_response(user_id, org_id)
 
@@ -197,13 +187,14 @@ class AuthService:
         """
         if refresh_token:
             await self.redis.delete(self._refresh_token_key(refresh_token))
-            
+
         try:
             payload = decode_access_token(access_token)
             jti = payload.get("jti")
             exp = payload.get("exp")
             if jti and exp:
                 import time
+
                 now = int(time.time())
                 ttl = exp - now
                 if ttl > 0:
@@ -221,21 +212,17 @@ class AuthService:
         key = self._refresh_token_key(refresh_token)
         val = f"{user_id}:{org_id}"
         await self.redis.set(key, val, ex=ttl_seconds)
-        
-        # We temporarily put refresh_token in access_token field or a custom dict 
+
+        # We temporarily put refresh_token in access_token field or a custom dict
         # to pass it to the router, which will extract it and put it in a cookie.
-        # But TokenResponse schema doesn't have refresh_token. 
+        # But TokenResponse schema doesn't have refresh_token.
         # Let's return a dict and let the router construct the response.
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "refresh_token": refresh_token
-        } # type: ignore
+        return {"access_token": access_token, "token_type": "bearer", "refresh_token": refresh_token}  # type: ignore
 
     @staticmethod
     def _refresh_token_key(refresh_token: str) -> str:
         return f"refresh_token:{hash_refresh_token(refresh_token)}"
-        
+
     async def update_user_role(self, user_id: uuid.UUID, org_id: uuid.UUID, new_role_id: uuid.UUID) -> None:
         """
         TODO: Hook this into the Members module when built.

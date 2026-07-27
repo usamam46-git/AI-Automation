@@ -89,13 +89,10 @@ class WorkflowRun(UUIDMixin, TenantMixin, TimestampMixin, Base):
     workflow_version: Mapped["WorkflowVersion"] = relationship(  # type: ignore[name-defined]
         "WorkflowVersion", back_populates="runs"
     )
-    node_executions: Mapped[list["NodeExecution"]] = relationship(
-        "NodeExecution", back_populates="workflow_run"
-    )
+    node_executions: Mapped[list["NodeExecution"]] = relationship("NodeExecution", back_populates="workflow_run")
     audit_logs: Mapped[list["AuditLog"]] = relationship(  # type: ignore[name-defined]
         "AuditLog",
-        primaryjoin="and_(AuditLog.resource_type=='workflow_run', "
-                    "foreign(AuditLog.resource_id)==WorkflowRun.id)",
+        primaryjoin="and_(AuditLog.resource_type=='workflow_run', " "foreign(AuditLog.resource_id)==WorkflowRun.id)",
         viewonly=True,
     )
 
@@ -131,26 +128,16 @@ class NodeExecution(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         comment="succeeded | failed | skipped",
     )
-    input: Mapped[dict | None] = mapped_column(
-        JSONB, nullable=True, comment="Input state snapshot passed to this node."
-    )
-    output: Mapped[dict | None] = mapped_column(
-        JSONB, nullable=True, comment="Output state snapshot produced by this node."
-    )
-    tokens_prompt: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="Prompt token count (LLM nodes only)."
-    )
-    tokens_completion: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="Completion token count (LLM nodes only)."
-    )
+    input: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="Input state snapshot passed to this node.")
+    output: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="Output state snapshot produced by this node.")
+    tokens_prompt: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="Prompt token count (LLM nodes only).")
+    tokens_completion: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="Completion token count (LLM nodes only).")
     cost_usd: Mapped[float | None] = mapped_column(
         Numeric(10, 4),
         nullable=True,
         comment="Computed cost for this node execution (LLM nodes only).",
     )
-    latency_ms: Mapped[int] = mapped_column(
-        Integer, nullable=False, comment="Wall-clock execution time in milliseconds."
-    )
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, comment="Wall-clock execution time in milliseconds.")
     attempt: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
@@ -159,9 +146,7 @@ class NodeExecution(UUIDMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    workflow_run: Mapped["WorkflowRun"] = relationship(
-        "WorkflowRun", back_populates="node_executions"
-    )
+    workflow_run: Mapped["WorkflowRun"] = relationship("WorkflowRun", back_populates="node_executions")
     tool_executions: Mapped[list["ToolExecution"]] = relationship(  # type: ignore[name-defined]
         "ToolExecution", back_populates="node_execution"
     )

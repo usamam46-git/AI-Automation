@@ -43,9 +43,7 @@ class Chat(UUIDMixin, TenantMixin, TimestampMixin, Base):
     workspace: Mapped["Workspace"] = relationship(  # type: ignore[name-defined]
         "Workspace", back_populates="chats"
     )
-    messages: Mapped[list["Message"]] = relationship(
-        "Message", back_populates="chat", order_by="Message.created_at"
-    )
+    messages: Mapped[list["Message"]] = relationship("Message", back_populates="chat", order_by="Message.created_at")
 
 
 class Message(UUIDMixin, TimestampMixin, Base):

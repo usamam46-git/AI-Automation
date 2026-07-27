@@ -7,6 +7,10 @@ These are used to seed the database and to check permissions in API routes.
 WORKFLOW_READ = "workflow:read"
 WORKFLOW_WRITE = "workflow:write"
 
+# Workspace permissions
+WORKSPACE_READ = "workspace:read"
+WORKSPACE_WRITE = "workspace:write"
+
 # Agent permissions
 AGENT_READ = "agent:read"
 AGENT_WRITE = "agent:write"

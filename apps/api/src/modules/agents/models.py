@@ -63,9 +63,7 @@ class Agent(UUIDMixin, TenantMixin, TimestampMixin, Base):
         back_populates="agent",
         foreign_keys="AgentVersion.agent_id",
     )
-    sessions: Mapped[list["AgentSession"]] = relationship(
-        "AgentSession", back_populates="agent"
-    )
+    sessions: Mapped[list["AgentSession"]] = relationship("AgentSession", back_populates="agent")
 
 
 class AgentVersion(UUIDMixin, TimestampMixin, Base):
@@ -117,9 +115,7 @@ class AgentVersion(UUIDMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    agent: Mapped["Agent"] = relationship(
-        "Agent", back_populates="versions", foreign_keys=[agent_id]
-    )
+    agent: Mapped["Agent"] = relationship("Agent", back_populates="versions", foreign_keys=[agent_id])
 
 
 class AgentSession(UUIDMixin, TimestampMixin, Base):
@@ -154,9 +150,7 @@ class AgentSession(UUIDMixin, TimestampMixin, Base):
 
     # Relationships
     agent: Mapped["Agent"] = relationship("Agent", back_populates="sessions")
-    memory: Mapped[list["AgentMemory"]] = relationship(
-        "AgentMemory", back_populates="agent_session"
-    )
+    memory: Mapped[list["AgentMemory"]] = relationship("AgentMemory", back_populates="agent_session")
 
 
 class AgentMemory(UUIDMixin, TimestampMixin, Base):
@@ -194,6 +188,4 @@ class AgentMemory(UUIDMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    agent_session: Mapped["AgentSession"] = relationship(
-        "AgentSession", back_populates="memory"
-    )
+    agent_session: Mapped["AgentSession"] = relationship("AgentSession", back_populates="memory")

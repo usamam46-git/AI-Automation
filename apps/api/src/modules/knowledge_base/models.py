@@ -53,9 +53,7 @@ class KnowledgeBase(UUIDMixin, TenantMixin, TimestampMixin, Base):
     workspace: Mapped["Workspace"] = relationship(  # type: ignore[name-defined]
         "Workspace", back_populates="knowledge_bases"
     )
-    documents: Mapped[list["Document"]] = relationship(
-        "Document", back_populates="knowledge_base"
-    )
+    documents: Mapped[list["Document"]] = relationship("Document", back_populates="knowledge_base")
 
 
 class Document(UUIDMixin, TenantMixin, TimestampMixin, Base):
@@ -90,15 +88,9 @@ class Document(UUIDMixin, TenantMixin, TimestampMixin, Base):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relationships
-    knowledge_base: Mapped["KnowledgeBase"] = relationship(
-        "KnowledgeBase", back_populates="documents"
-    )
-    ocr_results: Mapped[list["OCRResult"]] = relationship(
-        "OCRResult", back_populates="document"
-    )
-    chunks: Mapped[list["DocumentChunk"]] = relationship(
-        "DocumentChunk", back_populates="document"
-    )
+    knowledge_base: Mapped["KnowledgeBase"] = relationship("KnowledgeBase", back_populates="documents")
+    ocr_results: Mapped[list["OCRResult"]] = relationship("OCRResult", back_populates="document")
+    chunks: Mapped[list["DocumentChunk"]] = relationship("DocumentChunk", back_populates="document")
 
 
 class OCRResult(UUIDMixin, TimestampMixin, Base):

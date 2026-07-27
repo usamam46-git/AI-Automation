@@ -1,1 +1,1 @@
-﻿# settings module
+# settings module

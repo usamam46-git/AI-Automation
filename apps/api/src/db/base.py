@@ -19,14 +19,17 @@ from sqlalchemy.sql import func
 # Every ORM model in the project inherits from this class.
 # ---------------------------------------------------------------------------
 
+
 class Base(DeclarativeBase):
     """Project-wide SQLAlchemy declarative base."""
+
     pass
 
 
 # ---------------------------------------------------------------------------
 # Mixins
 # ---------------------------------------------------------------------------
+
 
 class UUIDMixin:
     """

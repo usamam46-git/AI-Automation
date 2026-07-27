@@ -9,7 +9,6 @@ credentials in the full implementation will be AES-256-GCM encrypted at the
 application layer before being stored (see Vol. 2 §13).
 """
 
-
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column

@@ -62,9 +62,7 @@ class Organization(UUIDMixin, TimestampMixin, Base):
     workspaces: Mapped[list["Workspace"]] = relationship(  # type: ignore[name-defined]
         "Workspace", back_populates="organization"
     )
-    api_keys: Mapped[list["APIKey"]] = relationship(
-        "APIKey", back_populates="organization"
-    )
+    api_keys: Mapped[list["APIKey"]] = relationship("APIKey", back_populates="organization")
     memberships: Mapped[list["OrgMembership"]] = relationship(  # type: ignore[name-defined]
         "OrgMembership", back_populates="organization"
     )
@@ -111,6 +109,4 @@ class APIKey(UUIDMixin, TimestampMixin, Base):
     revoked_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     # Relationships
-    organization: Mapped["Organization"] = relationship(
-        "Organization", back_populates="api_keys"
-    )
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="api_keys")

@@ -10,7 +10,6 @@ Tables:
   billing_usage_records — append-only usage event ledger
 """
 
-
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column

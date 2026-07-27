@@ -138,7 +138,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            compare_type=True,       # detect column type changes
+            compare_type=True,  # detect column type changes
             compare_server_default=True,  # detect server_default changes
         )
 

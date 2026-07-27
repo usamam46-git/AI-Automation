@@ -29,8 +29,7 @@ _SYSTEM_ROLES: list[tuple[str, str]] = [
     ),
     (
         "Editor",
-        '["workflow:read", "workflow:write", "agent:read", "agent:write", '
-        '"prompt:read", "prompt:write", "tool:read", "tool:write"]',
+        '["workflow:read", "workflow:write", "agent:read", "agent:write", ' '"prompt:read", "prompt:write", "tool:read", "tool:write"]',
     ),
     ("Approver", '["execution:read", "execution:approve"]'),
     ("Viewer", '["*:read"]'),

@@ -6,7 +6,6 @@ events out to external URLs.  Full fields (event filter, signing secret,
 delivery log, retry config) will be added when we reach this section.
 """
 
-
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column

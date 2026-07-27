@@ -68,6 +68,7 @@ redis_client: aioredis.Redis
 # FastAPI lifespan helpers
 # ---------------------------------------------------------------------------
 
+
 async def init_redis() -> None:
     """
     Called once at application startup (from main.py lifespan context).
@@ -105,6 +106,7 @@ async def close_redis() -> None:
 # FastAPI dependency
 # ---------------------------------------------------------------------------
 
+
 async def get_redis() -> aioredis.Redis:
     """
     FastAPI dependency that yields the shared Redis client.
@@ -120,6 +122,7 @@ async def get_redis() -> aioredis.Redis:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _redacted_url() -> str:
     """Return the Redis URL with the password masked for safe logging."""

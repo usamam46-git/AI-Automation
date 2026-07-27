@@ -43,9 +43,7 @@ class Prompt(UUIDMixin, TenantMixin, TimestampMixin, Base):
     workspace: Mapped["Workspace"] = relationship(  # type: ignore[name-defined]
         "Workspace", back_populates="prompts"
     )
-    versions: Mapped[list["PromptVersion"]] = relationship(
-        "PromptVersion", back_populates="prompt"
-    )
+    versions: Mapped[list["PromptVersion"]] = relationship("PromptVersion", back_populates="prompt")
 
 
 class PromptVersion(UUIDMixin, TimestampMixin, Base):
@@ -56,9 +54,7 @@ class PromptVersion(UUIDMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "prompt_versions"
-    __table_args__ = (
-        UniqueConstraint("prompt_id", "version_number", name="uq_prompt_version"),
-    )
+    __table_args__ = (UniqueConstraint("prompt_id", "version_number", name="uq_prompt_version"),)
 
     prompt_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

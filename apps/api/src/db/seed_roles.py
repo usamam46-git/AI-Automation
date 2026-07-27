@@ -15,6 +15,8 @@ from src.core.permissions import (
     TOOL_WRITE,
     WORKFLOW_READ,
     WORKFLOW_WRITE,
+    WORKSPACE_READ,
+    WORKSPACE_WRITE,
 )
 from src.db.database import AsyncSessionLocal
 from src.modules.auth.models import Role
@@ -34,35 +36,42 @@ async def seed_system_roles(db: AsyncSession) -> None:
         {
             "name": "Admin",
             "permissions": [
-                # Wildcards or explicit lists. 
-                # According to spec: All except billing:* and org:delete
-                # We'll explicitly grant everything but those for strictness,
-                # or rely on application logic to deny if billing/org is present.
-                # For simplicity, let's list the known ones from permissions.py:
-                WORKFLOW_READ, WORKFLOW_WRITE,
-                AGENT_READ, AGENT_WRITE,
-                PROMPT_READ, PROMPT_WRITE,
-                TOOL_READ, TOOL_WRITE,
-                EXECUTION_READ, EXECUTION_APPROVE,
-                "member:invite", "member:remove"
+                WORKFLOW_READ,
+                WORKFLOW_WRITE,
+                WORKSPACE_READ,
+                WORKSPACE_WRITE,
+                AGENT_READ,
+                AGENT_WRITE,
+                PROMPT_READ,
+                PROMPT_WRITE,
+                TOOL_READ,
+                TOOL_WRITE,
+                EXECUTION_READ,
+                EXECUTION_APPROVE,
+                "member:invite",
+                "member:remove",
             ],
             "is_system": True,
         },
         {
             "name": "Editor",
             "permissions": [
-                WORKFLOW_READ, WORKFLOW_WRITE,
-                AGENT_READ, AGENT_WRITE,
-                PROMPT_READ, PROMPT_WRITE,
-                TOOL_READ, TOOL_WRITE,
+                WORKFLOW_READ,
+                WORKFLOW_WRITE,
+                WORKSPACE_READ,
+                WORKSPACE_WRITE,
+                AGENT_READ,
+                AGENT_WRITE,
+                PROMPT_READ,
+                PROMPT_WRITE,
+                TOOL_READ,
+                TOOL_WRITE,
             ],
             "is_system": True,
         },
         {
             "name": "Approver",
-            "permissions": [
-                EXECUTION_READ, EXECUTION_APPROVE
-            ],
+            "permissions": [EXECUTION_READ, EXECUTION_APPROVE],
             "is_system": True,
         },
         {
@@ -72,14 +81,14 @@ async def seed_system_roles(db: AsyncSession) -> None:
                 "*:read",
             ],
             "is_system": True,
-        }
+        },
     ]
 
     for role_data in roles_data:
-        # Check if role exists
-        stmt = select(Role).where(Role.name == role_data["name"], Role.is_system is True)
+        # Check if role exists (use first() to be safe if duplicates ever crept in during dev)
+        stmt = select(Role).where(Role.name == role_data["name"], Role.is_system == True)
         result = await db.execute(stmt)
-        existing = result.scalar_one_or_none()
+        existing = result.scalars().first()
 
         if not existing:
             new_role = Role(

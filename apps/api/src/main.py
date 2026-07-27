@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Lifespan — startup & shutdown
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
@@ -77,10 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title=settings.APP_NAME,
     version="0.1.0",
-    description=(
-        "AI Automation Platform — visual, LangGraph-backed workflow automation "
-        "for finance, HR, and operations teams."
-    ),
+    description=("AI Automation Platform — visual, LangGraph-backed workflow automation " "for finance, HR, and operations teams."),
     docs_url="/api/docs" if settings.DEBUG else None,
     redoc_url="/api/redoc" if settings.DEBUG else None,
     openapi_url="/api/openapi.json" if settings.DEBUG else None,
@@ -106,11 +104,16 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 from src.modules.auth.router import router as auth_router
+from src.modules.workspaces.router import router as workspaces_router
+from src.modules.workflows.router import router as workflows_router
 
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(workspaces_router, prefix="/api/v1/workspaces", tags=["workspaces"])
+app.include_router(workflows_router, prefix="/api/v1/workflows", tags=["workflows"])
+
 
 @app.get("/health", tags=["Health"], summary="Health check")
 async def health_check() -> dict:

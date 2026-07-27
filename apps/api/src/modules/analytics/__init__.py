@@ -1,1 +1,1 @@
-﻿# analytics module
+# analytics module

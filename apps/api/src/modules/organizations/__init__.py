@@ -1,1 +1,1 @@
-﻿# organizations module
+# organizations module

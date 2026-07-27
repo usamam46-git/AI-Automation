@@ -1,1 +1,1 @@
-﻿# auth module
+# auth module

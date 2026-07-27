@@ -31,10 +31,10 @@ class Settings(BaseSettings):
     # App
     # ------------------------------------------------------------------
     APP_NAME: str = "AI Automation Platform"
-    APP_ENV: str = Field(default="development")   # development | staging | production
+    APP_ENV: str = Field(default="development")  # development | staging | production
     DEBUG: bool = Field(default=False)
-    SECRET_KEY: str = Field(...)                   # General secret
-    JWT_SECRET_KEY: str = Field(...)               # used for JWT signing — must be set
+    SECRET_KEY: str = Field(...)  # General secret
+    JWT_SECRET_KEY: str = Field(...)  # used for JWT signing — must be set
 
     # ------------------------------------------------------------------
     # Database

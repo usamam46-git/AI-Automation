@@ -5,13 +5,14 @@ Revises: 2b3c4d5e6f7a
 Create Date: 2026-07-24 06:27:00.000000
 
 """
+
 from collections.abc import Sequence
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '3c4d5e6f7a8b'
-down_revision: str | None = '2b3c4d5e6f7a'
+revision: str = "3c4d5e6f7a8b"
+down_revision: str | None = "2b3c4d5e6f7a"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -34,7 +35,7 @@ TABLES_WITH_ORG_ID = [
     "billing_usage_records",
     "integrations",
     "webhooks",
-    "settings"
+    "settings",
 ]
 
 
@@ -44,7 +45,7 @@ def upgrade() -> None:
         # Enable RLS
         op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
         # Create standard isolation policy
-        # Force the policy to allow bypass for superusers/bypassrls roles, but 
+        # Force the policy to allow bypass for superusers/bypassrls roles, but
         # normally restrict to the current_setting.
         # We use NULLIF and current_setting with missing_ok=true in case it's not set.
         op.execute(f"""
@@ -67,7 +68,7 @@ def upgrade() -> None:
     """)
 
     # NOTE: The 'organizations' table itself is the tenant root and does NOT have RLS enabled.
-    # Users, agent_versions, agent_sessions, messages, etc. are accessed through 
+    # Users, agent_versions, agent_sessions, messages, etc. are accessed through
     # their parent entities in the application layer, OR we can add explicit JOIN policies
     # if direct access is required, but Vol.2 §3.8 specifically targets tables with organization_id.
 

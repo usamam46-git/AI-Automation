@@ -46,9 +46,7 @@ class User(UUIDMixin, TimestampMixin, Base):
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Relationships
-    memberships: Mapped[list["OrgMembership"]] = relationship(
-        "OrgMembership", back_populates="user"
-    )
+    memberships: Mapped[list["OrgMembership"]] = relationship("OrgMembership", back_populates="user")
 
 
 class Role(UUIDMixin, TimestampMixin, Base):
@@ -87,9 +85,7 @@ class Role(UUIDMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    memberships: Mapped[list["OrgMembership"]] = relationship(
-        "OrgMembership", back_populates="role"
-    )
+    memberships: Mapped[list["OrgMembership"]] = relationship("OrgMembership", back_populates="role")
 
 
 class OrgMembership(UUIDMixin, TimestampMixin, Base):
@@ -102,9 +98,7 @@ class OrgMembership(UUIDMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "org_memberships"
-    __table_args__ = (
-        UniqueConstraint("organization_id", "user_id", name="uq_org_membership"),
-    )
+    __table_args__ = (UniqueConstraint("organization_id", "user_id", name="uq_org_membership"),)
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

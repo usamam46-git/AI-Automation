@@ -37,20 +37,16 @@ def create_access_token(user_id: str, org_id: str, expires_delta: timedelta | No
         "jti": str(uuid.uuid4()),
         "iat": datetime.now(UTC),
     }
-    encoded_jwt = jwt.encode(
-        to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
-    )
+    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return encoded_jwt
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
     """
-    Decodes the access token. 
+    Decodes the access token.
     Raises jose.JWTError if signature invalid or expired.
     """
-    return jwt.decode(
-        token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
-    )
+    return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
 
 
 def create_refresh_token() -> str:
@@ -59,6 +55,7 @@ def create_refresh_token() -> str:
     This will be hashed before storing in Redis.
     """
     import secrets
+
     return secrets.token_urlsafe(32)
 
 
