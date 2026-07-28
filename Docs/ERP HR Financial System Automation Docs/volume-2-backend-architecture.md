@@ -760,6 +760,7 @@ Migrations run as a pre-deploy step (`alembic upgrade head`) in the GitHub Actio
 Full USD/PKR cost modeling at 100/1,000/10,000/100,000-user scale is in **Volume 7 §9 (Cost Analysis)**.
 
 poetry run uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
+docker run -d --name redisinsight -p 5540:5540 redis/redisinsight:latest
 
 ---
 
