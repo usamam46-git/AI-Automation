@@ -1,7 +1,7 @@
 # AI Automation Platform (AAP)
 
 **Status**: Active Development  
-**Current Phase**: Phase 1 Completed (Database Schema & Migrations Layer)
+**Current Phase**: Phase 2 — Workflow Engine Data Layer (Shell + Versioned Graphs)
 
 ## The End Goal
 
@@ -20,7 +20,7 @@ At its core, AAP combines **Autonomous AI Agents** with a **Visual Workflow Engi
 
 ## What We've Built So Far
 
-We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8) and the **Authentication & RBAC Layer** (Volume 2 §10 - §11) of the architecture specification.
+We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8), the **Authentication & RBAC Layer** (Volume 2 §10 - §11), and the **Workflow Engine data layer** (Volume 2 §3.2) — workflow shell CRUD plus versioned graph storage.
 
 ### Highlights:
 1. **Docker Infrastructure:** Configured `docker-compose.yml` with `pgvector/pgvector:pg16` for PostgreSQL, alongside Redis and MinIO (S3 compatible object storage).
@@ -43,6 +43,18 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
    - Implemented **Refresh Token Rotation** and a **JWT Blocklist** (by checking the `jti` claim).
    - Designed a highly-performant **Role-Based Access Control (RBAC)** permission dependency (`require_permission`) that pulls directly from a Redis cache to avoid hitting the database on every authenticated request.
    - Secured the public Auth routes with a Redis-backed Sliding Window **Rate Limiter** (`RateLimiter` dependency).
+6. **Workflow Shell CRUD (`/api/v1/workflows`):**
+   - Create, list, get, update, and soft-delete (archive) workflows scoped to organization and workspace.
+   - Workspace ownership verified explicitly at the service layer (clean 404, not RLS-dependent).
+   - Event bus hooks: `workflow.created`, `workflow.updated`, `workflow.archived`.
+7. **Workflow Version Graph Storage (`/api/v1/workflows/{id}/versions`):**
+   - Save/update draft graphs as a single atomic request (nodes + edges together, not per-node CRUD).
+   - Structural validation at save and publish time: unique `node_key`, edge referential integrity, start/end nodes required, orphan detection, cycle detection.
+   - Draft lifecycle: re-saving a draft replaces its nodes/edges in-place; publishing creates immutability; a new save after publish creates the next version number.
+   - Publish sets `Workflow.current_version_id` — the only code path that updates that field.
+   - Event bus hooks: `workflow_version.saved`, `workflow_version.published`.
+   - **Known gap:** `agent_id` / `tool_id` / `prompt_id` references in node `config` are stored as opaque UUIDs without FK validation (those modules don't exist yet).
+   - **Not yet built:** LangGraph compiler (§6.1), execution runs, Celery workers, visual builder UI.
 
 ---
 
@@ -77,7 +89,13 @@ cd apps/api
 alembic upgrade head
 ```
 
-### 4. Explore the Database
+### 4. Run Tests
+```bash
+cd apps/api
+poetry run pytest
+```
+
+### 5. Explore the Database
 Connect to the database using your favorite client (DBeaver, pgAdmin, VS Code SQLTools) with the following credentials:
 - **Host:** `localhost`
 - **Port:** `5432`
@@ -87,4 +105,4 @@ Connect to the database using your favorite client (DBeaver, pgAdmin, VS Code SQ
 
 ---
 
-*This repository is actively being built. The next phases will introduce the FastAPI routing layer, repository pattern, and Celery worker pipelines.*
+*This repository is actively being built. Next phases: graph compiler (LangGraph), workflow execution infrastructure, and the visual builder frontend.*

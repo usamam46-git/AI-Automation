@@ -73,3 +73,17 @@ class WorkflowArchivedEvent:
     def __init__(self, workflow_id: str, organization_id: str):
         self.workflow_id = workflow_id
         self.organization_id = organization_id
+
+
+class WorkflowVersionSavedEvent:
+    def __init__(self, workflow_id: str, version_id: str, organization_id: str):
+        self.workflow_id = workflow_id
+        self.version_id = version_id
+        self.organization_id = organization_id
+
+
+class WorkflowVersionPublishedEvent:
+    def __init__(self, workflow_id: str, version_id: str, organization_id: str):
+        self.workflow_id = workflow_id
+        self.version_id = version_id
+        self.organization_id = organization_id

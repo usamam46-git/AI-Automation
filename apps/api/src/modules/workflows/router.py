@@ -1,5 +1,5 @@
 """
-modules/workflows/router.py — HTTP routes for the Workflow shell.
+modules/workflows/router.py — HTTP routes for the Workflow shell and versioned graphs.
 
 Strict layering: router calls service only — no direct DB/repository/ORM imports.
 organization_id comes ONLY from get_current_org (JWT context), never request body.
@@ -11,9 +11,17 @@ from collections.abc import Sequence
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dependencies import get_current_org, require_permission
+from src.core.dependencies import get_current_org, get_current_user, require_permission
 from src.db.database import get_db_session
-from src.modules.workflows.schemas import WorkflowCreate, WorkflowResponse, WorkflowUpdate
+from src.modules.auth.models import User
+from src.modules.workflows.schemas import (
+    WorkflowCreate,
+    WorkflowResponse,
+    WorkflowUpdate,
+    WorkflowVersionCreate,
+    WorkflowVersionResponse,
+    WorkflowVersionSummary,
+)
 from src.modules.workflows.service import WorkflowService
 
 router = APIRouter(tags=["workflows"])
@@ -97,3 +105,62 @@ async def delete_workflow(
     service: WorkflowService = Depends(get_workflow_service),
 ) -> None:
     await service.delete_workflow(organization_id, workflow_id)
+
+
+@router.post(
+    "/{workflow_id}/versions",
+    response_model=WorkflowVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission("workflow:write")],
+)
+async def save_workflow_version(
+    workflow_id: uuid.UUID,
+    data: WorkflowVersionCreate,
+    organization_id: uuid.UUID = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    service: WorkflowService = Depends(get_workflow_service),
+) -> WorkflowVersionResponse:
+    return await service.save_draft(organization_id, workflow_id, data, user.id)
+
+
+@router.get(
+    "/{workflow_id}/versions",
+    response_model=Sequence[WorkflowVersionSummary],
+    dependencies=[require_permission("workflow:read")],
+)
+async def list_workflow_versions(
+    workflow_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_current_org),
+    service: WorkflowService = Depends(get_workflow_service),
+) -> Sequence[WorkflowVersionSummary]:
+    return await service.list_versions(organization_id, workflow_id)
+
+
+@router.get(
+    "/{workflow_id}/versions/{version_id}",
+    response_model=WorkflowVersionResponse,
+    dependencies=[require_permission("workflow:read")],
+)
+async def get_workflow_version(
+    workflow_id: uuid.UUID,
+    version_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_current_org),
+    service: WorkflowService = Depends(get_workflow_service),
+) -> WorkflowVersionResponse:
+    return await service.get_version(organization_id, workflow_id, version_id)
+
+
+@router.post(
+    "/{workflow_id}/versions/{version_id}/publish",
+    response_model=WorkflowVersionResponse,
+    dependencies=[require_permission("workflow:write")],
+)
+async def publish_workflow_version(
+    workflow_id: uuid.UUID,
+    version_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    service: WorkflowService = Depends(get_workflow_service),
+) -> WorkflowVersionResponse:
+    # OPEN QUESTION: dedicated workflow:publish permission vs workflow:write
+    return await service.publish_version(organization_id, workflow_id, version_id, user.id)
