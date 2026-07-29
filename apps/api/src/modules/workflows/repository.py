@@ -306,11 +306,7 @@ class WorkflowRepository:
             version_result = await self.db.execute(version_stmt)
             version = version_result.scalar_one()
 
-            await self.db.execute(
-                update(Workflow)
-                .where(Workflow.id == workflow_id)
-                .values(current_version_id=version_id)
-            )
+            await self.db.execute(update(Workflow).where(Workflow.id == workflow_id).values(current_version_id=version_id))
             await self.db.flush()
 
         await self.db.refresh(version, attribute_names=["nodes", "edges"])

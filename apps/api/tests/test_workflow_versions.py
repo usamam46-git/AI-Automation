@@ -289,12 +289,8 @@ async def test_version_cross_tenant_isolation(client: AsyncClient):
     version_id = saved.json()["id"]
 
     assert (await client.get(f"/api/v1/workflows/{wf_a['id']}/versions", headers=headers_b)).status_code == 404
-    assert (
-        await client.get(f"/api/v1/workflows/{wf_a['id']}/versions/{version_id}", headers=headers_b)
-    ).status_code == 404
-    assert (
-        await client.post(f"/api/v1/workflows/{wf_a['id']}/versions/{version_id}/publish", headers=headers_b)
-    ).status_code == 404
+    assert (await client.get(f"/api/v1/workflows/{wf_a['id']}/versions/{version_id}", headers=headers_b)).status_code == 404
+    assert (await client.post(f"/api/v1/workflows/{wf_a['id']}/versions/{version_id}/publish", headers=headers_b)).status_code == 404
 
 
 @pytest.mark.asyncio

@@ -114,9 +114,13 @@ def validate_graph_structure(nodes: list[NodeInput], edges: list[EdgeInput]) -> 
     orphan_keys: list[str] = []
     for node in nodes:
         node_type = _node_type_str(node.node_type)
-        if node_type != NodeType.start.value and incoming[node.node_key] == 0:
-            orphan_keys.append(node.node_key)
-        elif node_type != NodeType.end.value and outgoing[node.node_key] == 0 and node.node_key not in orphan_keys:
+        if (
+            node_type != NodeType.start.value
+            and incoming[node.node_key] == 0
+            or node_type != NodeType.end.value
+            and outgoing[node.node_key] == 0
+            and node.node_key not in orphan_keys
+        ):
             orphan_keys.append(node.node_key)
     if orphan_keys:
         raise GraphValidationError(f"Orphan nodes detected (missing required edges): {sorted(orphan_keys)}")
