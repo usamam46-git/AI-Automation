@@ -131,6 +131,29 @@ Tokens live in `packages/ui-tokens` and are consumed by both Tailwind config (`t
 
 `shadcn/ui` primitives (Button, Dialog, DropdownMenu, Tabs, Toast, etc.) are copied into `components/ui/` (per shadcn's copy-in-repo model) and re-themed via the token CSS variables rather than left at library defaults — this is what gives the product a distinctive identity instead of "looking like every other shadcn app."
 
+### 3.1 Implemented visual identity (iOS/macOS-inspired) — addendum
+
+The token categories above were realized, during the initial Next.js/shadcn build, as a specific **iOS/macOS-inspired visual language**: calm, compact, and premium-feeling rather than a typical dense SaaS-admin dashboard. These are the concrete values in use and should be treated as the locked reference for any new page or component:
+
+| Token category | Concrete implemented values |
+|---|---|
+| **Corners** | `rounded-xl` (12px) default for cards/panels/modals; `rounded-lg` (8px) for buttons/inputs/badges; `rounded-full`/`rounded-2xl` for avatars and app-icon-style squares. Nothing sharp-cornered anywhere in the product. |
+| **Shadows** | Soft, low-opacity, multi-layer shadows only (`shadow-black/5` to `shadow-black/10` range in light mode) — never a hard single drop-shadow. Resting cards: `shadow-sm`; elevated surfaces (open dropdowns, modals, popovers): `shadow-lg`. Hover on interactive cards lifts subtly (`shadow-sm` → `shadow-md` + 1-2px translate-y, ~150-200ms ease-out). |
+| **Spacing (applied)** | The 4px base scale above is applied compactly — density closer to macOS System Settings or Linear than a marketing page's generous whitespace. |
+| **Typography (applied)** | System font stack (`font-sans`, no custom web font). Page titles `text-xl font-semibold`; section headers `text-sm font-medium text-muted-foreground`; body `text-sm`. No oversized marketing-style headings inside the dashboard. |
+| **Motion (applied)** | Subtle, physical-feeling only — fades and gentle scale/slide, 150-250ms ease-out, no springy overshoot. Modals fade + scale from 95%→100% (desktop-native feel), not slide-from-edge. |
+| **Color — light mode** | Clean white/near-white background (`0 0% 100%`–`0 0% 98%`) — standard shadcn light defaults. |
+| **Color — dark mode (important, non-default)** | TRUE BLACK, not shadcn's default blue-tinted slate. `--background`: `0 0% 4%`–`0 0% 7%` (near `#0a0a0a`). Elevated/card surfaces: `0 0% 9%`–`0 0% 11%`, neutral gray (never blue-tinted). Borders: low-opacity white (`white/10`–`white/15`), not mid-gray. This is a deliberate correction to shadcn's out-of-the-box dark theme and must be preserved anywhere shadcn primitives are reused (including the marketing site, §3.2). |
+| **Status colors (applied)** | Desaturated, calm badge variants for the `--color-status-*` tokens above (workflow status, run status) — never bright/saturated, even in light mode. |
+
+The dark-mode override values live in `globals.css` under `.dark` and take precedence over shadcn's generated defaults. Toggle via `next-themes`, respecting system preference by default, with a manual override in the topbar.
+
+### 3.2 Consistency requirement for the marketing site
+
+The marketing site (`app/(marketing)/`, §1.1) is a separate route group from the dashboard, but it must reuse the **same tokens and dark-mode correction** from §3.1 — same corner radii, same shadow treatment, same true-black dark mode, same shadcn-primitive re-theming. It should not be designed as a visually separate "brochure site" with its own palette or component library.
+
+**If someone else (e.g., a collaborator without context on this blueprint) is building the marketing/landing page:** point them to §3.1 first, plus `packages/ui-tokens` and the `.dark` CSS variable overrides in `globals.css`, rather than letting them start from shadcn's untouched defaults or a generic template. The two most common mistakes to flag explicitly: (1) using shadcn's default dark theme instead of the true-black override above, and (2) using sharp corners or heavy/hard shadows that don't match the dashboard's soft, rounded, iOS-style language.
+
 ---
 
 ## 4. The Workflow Builder (React Flow)
