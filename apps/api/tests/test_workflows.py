@@ -218,13 +218,13 @@ async def test_workflow_update(client: AsyncClient):
 
     resp = await client.patch(
         f"/api/v1/workflows/{wf['id']}",
-        json={"name": "Updated Name", "status": "published"},
+        json={"name": "Updated Name", "description": "New description"},
         headers=headers,
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["name"] == "Updated Name"
-    assert body["status"] == "published"
+    assert body["description"] == "New description"
 
 
 @pytest.mark.asyncio

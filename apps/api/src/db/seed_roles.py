@@ -13,6 +13,7 @@ from src.core.permissions import (
     PROMPT_WRITE,
     TOOL_READ,
     TOOL_WRITE,
+    WORKFLOW_PUBLISH,
     WORKFLOW_READ,
     WORKFLOW_WRITE,
     WORKSPACE_READ,
@@ -38,6 +39,7 @@ async def seed_system_roles(db: AsyncSession) -> None:
             "permissions": [
                 WORKFLOW_READ,
                 WORKFLOW_WRITE,
+                WORKFLOW_PUBLISH,
                 WORKSPACE_READ,
                 WORKSPACE_WRITE,
                 AGENT_READ,

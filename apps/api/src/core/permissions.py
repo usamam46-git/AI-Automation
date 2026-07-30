@@ -6,6 +6,7 @@ These are used to seed the database and to check permissions in API routes.
 # Workflow permissions
 WORKFLOW_READ = "workflow:read"
 WORKFLOW_WRITE = "workflow:write"
+WORKFLOW_PUBLISH = "workflow:publish"
 
 # Workspace permissions
 WORKSPACE_READ = "workspace:read"

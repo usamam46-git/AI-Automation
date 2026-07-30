@@ -153,7 +153,7 @@ async def get_workflow_version(
 @router.post(
     "/{workflow_id}/versions/{version_id}/publish",
     response_model=WorkflowVersionResponse,
-    dependencies=[require_permission("workflow:write")],
+    dependencies=[require_permission("workflow:publish")],
 )
 async def publish_workflow_version(
     workflow_id: uuid.UUID,
@@ -162,5 +162,4 @@ async def publish_workflow_version(
     user: User = Depends(get_current_user),
     service: WorkflowService = Depends(get_workflow_service),
 ) -> WorkflowVersionResponse:
-    # OPEN QUESTION: dedicated workflow:publish permission vs workflow:write
     return await service.publish_version(organization_id, workflow_id, version_id, user.id)

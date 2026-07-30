@@ -37,7 +37,7 @@ redis = { version = "^5.0.4", extras = ["hiredis"] }
 
 # AI / LLM
 langchain = "^0.2.0"
-langgraph = "^0.1.0"
+langgraph = ">=0.2.57"
 langsmith = "^0.1.0"
 openai = "^1.30.0"
 

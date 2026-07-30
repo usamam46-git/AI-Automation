@@ -1,7 +1,7 @@
 # AI Automation Platform (AAP)
 
 **Status**: Active Development  
-**Current Phase**: Phase 2 — Workflow Engine Data Layer (Shell + Versioned Graphs)
+**Current Phase**: Phase 2 — Workflow Engine (Graph Storage + LangGraph Compiler)
 
 ## The End Goal
 
@@ -20,7 +20,7 @@ At its core, AAP combines **Autonomous AI Agents** with a **Visual Workflow Engi
 
 ## What We've Built So Far
 
-We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8), the **Authentication & RBAC Layer** (Volume 2 §10 - §11), and the **Workflow Engine data layer** (Volume 2 §3.2) — workflow shell CRUD plus versioned graph storage.
+We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8), the **Authentication & RBAC Layer** (Volume 2 §10 - §11), the **Workflow Engine data layer** (Volume 2 §3.2), and the **Graph Compiler** (Volume 2 §6.1).
 
 ### Highlights:
 1. **Docker Infrastructure:** Configured `docker-compose.yml` with `pgvector/pgvector:pg16` for PostgreSQL, alongside Redis and MinIO (S3 compatible object storage).
@@ -51,10 +51,19 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
    - Save/update draft graphs as a single atomic request (nodes + edges together, not per-node CRUD).
    - Structural validation at save and publish time: unique `node_key`, edge referential integrity, start/end nodes required, orphan detection, cycle detection.
    - Draft lifecycle: re-saving a draft replaces its nodes/edges in-place; publishing creates immutability; a new save after publish creates the next version number.
-   - Publish sets `Workflow.current_version_id` — the only code path that updates that field.
+   - Publish sets `Workflow.current_version_id` and `Workflow.status = "published"` (PATCH cannot set status to published directly).
+   - Dedicated `workflow:publish` permission (Owner/Admin only); `workflow:write` covers draft saves.
    - Event bus hooks: `workflow_version.saved`, `workflow_version.published`.
    - **Known gap:** `agent_id` / `tool_id` / `prompt_id` references in node `config` are stored as opaque UUIDs without FK validation (those modules don't exist yet).
-   - **Not yet built:** LangGraph compiler (§6.1), execution runs, Celery workers, visual builder UI.
+8. **Graph Compiler (`apps/api/src/graphs/`):**
+   - Translates published `WorkflowVersion` rows into LangGraph `CompiledStateGraph` objects.
+   - Structured condition DSL on edges (`field` / `operator` / `value`) — safe dotted-path evaluation, no `eval()`.
+   - `condition`-type nodes compile into `add_conditional_edges` routing (not executable graph nodes).
+   - Real handlers: `start`, `end`, `human_approval` (uses LangGraph `interrupt()` — resume wiring is next phase).
+   - Stub handlers: `agent`, `tool`, `subgraph` raise `NodeNotImplementedError` if invoked.
+   - Process-local compiled graph cache with Redis invalidation markers; invalidated on draft replace via `save_draft`.
+   - Synchronous in-process test runner with LangGraph `MemorySaver` (not production PostgresSaver).
+   - **Not yet built:** Celery execution, `workflow_runs` writes, PostgresSaver checkpointing, resume API.
 
 ---
 
@@ -105,4 +114,4 @@ Connect to the database using your favorite client (DBeaver, pgAdmin, VS Code SQ
 
 ---
 
-*This repository is actively being built. Next phases: graph compiler (LangGraph), workflow execution infrastructure, and the visual builder frontend.*
+*This repository is actively being built. Next phases: LangGraph runtime + Celery + PostgresSaver checkpointing, and the visual builder frontend.*

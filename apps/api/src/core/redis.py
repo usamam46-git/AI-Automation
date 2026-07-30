@@ -59,9 +59,8 @@ def _build_pool() -> ConnectionPool:
     )
 
 
-# The shared client — thin wrapper around the pool, safe to import anywhere.
-# It is *not* connected until the first command is issued.
-redis_client: aioredis.Redis
+# The shared client — initialized in init_redis(). None before startup.
+redis_client: aioredis.Redis | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -110,12 +109,9 @@ async def close_redis() -> None:
 async def get_redis() -> aioredis.Redis:
     """
     FastAPI dependency that yields the shared Redis client.
-
-    Example:
-        @router.get("/example")
-        async def example(r: aioredis.Redis = Depends(get_redis)):
-            value = await r.get("some-key")
     """
+    if redis_client is None:
+        raise RuntimeError("Redis is not initialized — call init_redis() first.")
     return redis_client
 
 
