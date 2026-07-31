@@ -55,6 +55,7 @@ prometheus-client = "^0.20.0"
 python-dotenv = "^1.0.1"
 structlog = "^24.1.0"        # structured JSON logging
 psycopg2-binary = "^2.9.12"
+cachetools = "^7.1.6"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

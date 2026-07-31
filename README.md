@@ -61,7 +61,7 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
    - `condition`-type nodes compile into `add_conditional_edges` routing (not executable graph nodes).
    - Real handlers: `start`, `end`, `human_approval` (uses LangGraph `interrupt()` — resume wiring is next phase).
    - Stub handlers: `agent`, `tool`, `subgraph` raise `NodeNotImplementedError` if invoked.
-   - Process-local compiled graph cache with Redis invalidation markers; invalidated on draft replace via `save_draft`.
+   - Bounded process-local compiled graph LRU cache with Redis invalidation markers; invalidated on draft replace via `save_draft`. `COMPILED_GRAPH_CACHE_MAXSIZE` controls the per-process max size and defaults to `1000`.
    - Synchronous in-process test runner with LangGraph `MemorySaver` (not production PostgresSaver).
    - **Not yet built:** Celery execution, `workflow_runs` writes, PostgresSaver checkpointing, resume API.
 

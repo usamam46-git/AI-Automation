@@ -13,14 +13,19 @@ from __future__ import annotations
 import logging
 
 import redis.asyncio as aioredis
+from cachetools import LRUCache
 from langgraph.graph.state import CompiledStateGraph
+
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 COMPILER_CACHE_VERSION = "1"
 
-# Process-local store — each API worker holds compiled graphs in memory.
-_LOCAL_COMPILED_GRAPHS: dict[str, CompiledStateGraph] = {}
+# Process-local store — each API/Celery worker process holds compiled graphs in memory.
+_LOCAL_COMPILED_GRAPHS: LRUCache[str, CompiledStateGraph] = LRUCache(
+    maxsize=settings.COMPILED_GRAPH_CACHE_MAXSIZE,
+)
 
 
 def _cache_key(workflow_version_id: str) -> str:

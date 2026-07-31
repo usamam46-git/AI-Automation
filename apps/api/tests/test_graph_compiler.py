@@ -11,7 +11,8 @@ from httpx import AsyncClient
 from test_workflow_versions import create_workflow, create_workspace, graph_payload, register_and_get_token, valid_graph
 
 from src.core import redis as redis_module
-from src.graphs.cache import invalidate_cached_graph
+from src.graphs import cache as graph_cache
+from src.graphs.cache import cache_graph, get_cached_graph, invalidate_cached_graph
 from src.graphs.compiler import (
     DraftVersionCompileError,
     _compile_state_graph,
@@ -211,6 +212,55 @@ async def test_compile_graph_cache_hit():
     await invalidate_cached_graph(r, version_id)
 
 
+@pytest.mark.asyncio
+async def test_compile_graph_local_cache_evicts_lru_without_clearing_redis_marker(monkeypatch):
+    monkeypatch.setattr(graph_cache, "_LOCAL_COMPILED_GRAPHS", graph_cache.LRUCache(maxsize=3))
+
+    r = redis_module.redis_client
+    assert r is not None
+
+    versions = [_branch_graph() for _ in range(4)]
+    try:
+        for version in versions:
+            assert await compile_graph(version, r) is not None
+
+        oldest_id = str(versions[0].id)
+        retained_ids = {str(version.id) for version in versions[1:]}
+
+        assert oldest_id not in graph_cache._LOCAL_COMPILED_GRAPHS
+        assert set(graph_cache._LOCAL_COMPILED_GRAPHS.keys()) == retained_ids
+        assert await r.get(graph_cache._cache_key(oldest_id)) == "1"
+    finally:
+        for version in versions:
+            await invalidate_cached_graph(r, str(version.id))
+
+
+@pytest.mark.asyncio
+async def test_compile_graph_local_cache_eviction_recompiles_on_redis_marker_hit(monkeypatch):
+    monkeypatch.setattr(graph_cache, "_LOCAL_COMPILED_GRAPHS", graph_cache.LRUCache(maxsize=3))
+
+    r = redis_module.redis_client
+    assert r is not None
+
+    versions = [_branch_graph() for _ in range(4)]
+    evicted_id = str(versions[0].id)
+    try:
+        for version in versions:
+            assert await compile_graph(version, r) is not None
+
+        assert evicted_id not in graph_cache._LOCAL_COMPILED_GRAPHS
+        assert await r.get(graph_cache._cache_key(evicted_id)) == "1"
+
+        with patch("src.graphs.compiler._compile_state_graph", wraps=_compile_state_graph) as compile_spy:
+            assert await compile_graph(versions[0], r) is not None
+            assert compile_spy.call_count == 1
+
+        assert await r.get(graph_cache._cache_key(evicted_id)) == "1"
+    finally:
+        for version in versions:
+            await invalidate_cached_graph(r, str(version.id))
+
+
 def test_realistic_graph_with_agent_compiles():
     version = _realistic_compile_graph()
     compiled, stats = _compile_state_graph(version)
@@ -237,58 +287,61 @@ def test_interrupt_pauses_at_human_approval():
 # ---------------------------------------------------------------------------
 
 
-# @pytest.mark.asyncio
-# async def test_save_draft_invalidates_compiled_graph_cache(client: AsyncClient):
-#     """Replacing an in-place draft clears any compiled-graph cache for that version id."""
-#     data = await register_and_get_token(client, "GC-cache")
-#     token = data["access_token"]
-#     headers = {"Authorization": f"Bearer {token}"}
+@pytest.mark.asyncio
+async def test_save_draft_invalidates_compiled_graph_cache(client: AsyncClient, monkeypatch):
+    """Replacing an in-place draft clears any compiled-graph cache for that version id."""
+    data = await register_and_get_token(client, "GC-cache")
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
 
-#     ws = await create_workspace(client, token)
-#     wf = await create_workflow(client, token, ws["id"])
-#     nodes, edges = valid_graph()
+    ws = await create_workspace(client, token)
+    wf = await create_workflow(client, token, ws["id"])
+    nodes, edges = valid_graph()
 
-#     saved = await client.post(
-#         f"/api/v1/workflows/{wf['id']}/versions",
-#         json=graph_payload(nodes, edges),
-#         headers=headers,
-#     )
-#     assert saved.status_code == 201
-#     draft_id = saved.json()["id"]
+    saved = await client.post(
+        f"/api/v1/workflows/{wf['id']}/versions",
+        json=graph_payload(nodes, edges),
+        headers=headers,
+    )
+    assert saved.status_code == 201
+    draft_id = saved.json()["id"]
 
-#     # Seed a compiled-graph cache entry for this draft version id
-#     cached_version = _branch_graph()
-#     cached_version.id = uuid.UUID(draft_id)
-#     compiled, _ = _compile_state_graph(cached_version)
-#     r = redis_module.redis_client
-#     assert r is not None
-#     await cache_graph(r, draft_id, compiled)
-#     assert await get_cached_graph(r, draft_id) is not None
+    # Seed a compiled-graph cache entry for this draft version id
+    cached_version = _branch_graph()
+    cached_version.id = uuid.UUID(draft_id)
+    compiled, _ = _compile_state_graph(cached_version)
+    from src.modules.workflows import service as workflow_service
 
-#     # Re-save draft with a different graph — same version row, cache must be invalidated
-#     nodes_v2, edges_v2 = valid_graph()
-#     from src.modules.workflows.schemas import EdgeInput, NodeInput, NodeType
+    r = redis_module.redis_client
+    assert r is not None
+    monkeypatch.setattr(workflow_service, "redis_client", r)
+    await cache_graph(r, draft_id, compiled)
+    assert await get_cached_graph(r, draft_id) is not None
 
-#     nodes_v2 = [
-#         NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
-#         NodeInput(node_key="tool_step", node_type=NodeType.tool, config={"tool_id": str(uuid.uuid4())}, position_x=100, position_y=0),
-#         NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=200, position_y=0),
-#     ]
-#     edges_v2 = [
-#         EdgeInput(source_node_key="start", target_node_key="tool_step"),
-#         EdgeInput(source_node_key="tool_step", target_node_key="end"),
-#     ]
+    # Re-save draft with a different graph — same version row, cache must be invalidated
+    nodes_v2, edges_v2 = valid_graph()
+    from src.modules.workflows.schemas import EdgeInput, NodeInput, NodeType
 
-#     replaced = await client.post(
-#         f"/api/v1/workflows/{wf['id']}/versions",
-#         json=graph_payload(nodes_v2, edges_v2),
-#         headers=headers,
-#     )
-#     assert replaced.status_code == 201
-#     assert replaced.json()["id"] == draft_id
-#     assert await get_cached_graph(r, draft_id) is None
+    nodes_v2 = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        NodeInput(node_key="tool_step", node_type=NodeType.tool, config={"tool_id": str(uuid.uuid4())}, position_x=100, position_y=0),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=200, position_y=0),
+    ]
+    edges_v2 = [
+        EdgeInput(source_node_key="start", target_node_key="tool_step"),
+        EdgeInput(source_node_key="tool_step", target_node_key="end"),
+    ]
 
-#     await invalidate_cached_graph(r, draft_id)
+    replaced = await client.post(
+        f"/api/v1/workflows/{wf['id']}/versions",
+        json=graph_payload(nodes_v2, edges_v2),
+        headers=headers,
+    )
+    assert replaced.status_code == 201
+    assert replaced.json()["id"] == draft_id
+    assert await get_cached_graph(r, draft_id) is None
+
+    await invalidate_cached_graph(r, draft_id)
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # Redis
     # ------------------------------------------------------------------
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
+    COMPILED_GRAPH_CACHE_MAXSIZE: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum process-local compiled LangGraph objects retained per worker.",
+    )
 
     # ------------------------------------------------------------------
     # JWT
