@@ -105,11 +105,7 @@ async def _register_and_publish(client: AsyncClient, tag: str) -> dict[str, Any]
 
 async def _load_run_with_executions(run_id: uuid.UUID) -> WorkflowRun:
     async with async_session_maker() as session:
-        stmt = (
-            select(WorkflowRun)
-            .where(WorkflowRun.id == run_id)
-            .options(selectinload(WorkflowRun.node_executions))
-        )
+        stmt = select(WorkflowRun).where(WorkflowRun.id == run_id).options(selectinload(WorkflowRun.node_executions))
         result = await session.execute(stmt)
         return result.scalar_one()
 
@@ -182,13 +178,13 @@ async def test_happy_path_full_run(client: AsyncClient):
     # Update status to running (as service.resume_run does for approved)
     async with async_session_maker() as session:
         from sqlalchemy import update as sa_update
-        await session.execute(
-            sa_update(WorkflowRun).where(WorkflowRun.id == run_id).values(status="running", interrupt_payload=None)
-        )
+
+        await session.execute(sa_update(WorkflowRun).where(WorkflowRun.id == run_id).values(status="running", interrupt_payload=None))
         await session.commit()
 
     # Resume stream (replaces Celery resume_workflow task)
     from langgraph.types import Command
+
     await _stream_graph(run_id, version, Command(resume={"decision": "approved"}), attempt=1)
 
     run = await _load_run_with_executions(run_id)
@@ -333,14 +329,14 @@ async def test_worker_restart_restores_from_checkpoint(client: AsyncClient):
     # Simulate worker restart: set status to running (as service does on approval)
     async with async_session_maker() as session:
         from sqlalchemy import update as sa_update
-        await session.execute(
-            sa_update(WorkflowRun).where(WorkflowRun.id == run_id).values(status="running", interrupt_payload=None)
-        )
+
+        await session.execute(sa_update(WorkflowRun).where(WorkflowRun.id == run_id).values(status="running", interrupt_payload=None))
         await session.commit()
 
     # SECOND worker instance (fresh — does not share any in-memory compiled graph
     # or saver state with the first instance). Uses a new PostgresSaver.
     from langgraph.types import Command
+
     version2 = await _load_version(version_id)  # fresh load from DB
     await _stream_graph(run_id, version2, Command(resume={"decision": "approved"}), attempt=1)
 

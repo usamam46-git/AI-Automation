@@ -225,7 +225,7 @@ async def _stream_graph(
     name="src.workers.graph_tasks.execute_workflow",
     max_retries=3,
     queue="workflow_execution",
-    soft_time_limit=600,   # 10 min — kills task cleanly before hard limit
+    soft_time_limit=600,  # 10 min — kills task cleanly before hard limit
     time_limit=660,
 )
 def execute_workflow(self: Task, workflow_run_id: str) -> None:

@@ -15,9 +15,10 @@ Changes:
   No DDL change is needed for status — only the model comment is updated.
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
+
+from alembic import op
 
 revision = "20260802_execution_engine"
 down_revision = "20260730_workflow_publish_perm"
@@ -32,10 +33,7 @@ def upgrade() -> None:
             "interrupt_payload",
             JSONB,
             nullable=True,
-            comment=(
-                "Interrupt details from human_approval node — readable by the approval UI "
-                "without parsing LangGraph checkpoint internals."
-            ),
+            comment=("Interrupt details from human_approval node — readable by the approval UI " "without parsing LangGraph checkpoint internals."),
         ),
     )
 

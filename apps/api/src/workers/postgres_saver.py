@@ -183,11 +183,7 @@ class PostgresSaver(BaseCheckpointSaver):
         }
 
         async with self._session_factory() as session:
-            await session.execute(
-                update(WorkflowRun)
-                .where(WorkflowRun.id == run_id)
-                .values(checkpoint_state=stored)
-            )
+            await session.execute(update(WorkflowRun).where(WorkflowRun.id == run_id).values(checkpoint_state=stored))
             await session.commit()
 
         return _build_config(thread_id, checkpoint_ns, new_checkpoint_id)
