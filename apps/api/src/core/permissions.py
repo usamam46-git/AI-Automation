@@ -27,6 +27,7 @@ TOOL_WRITE = "tool:write"
 # Execution permissions
 EXECUTION_READ = "execution:read"
 EXECUTION_APPROVE = "execution:approve"
+WORKFLOW_EXECUTE = "workflow:execute"
 
 # Billing & Org permissions
 BILLING_READ = "billing:read"

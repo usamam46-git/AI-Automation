@@ -85,7 +85,11 @@ def _bind_node_handler(node: WorkflowNode) -> Callable[..., dict[str, Any]]:
     if node_type == "end":
         return end_handler
     if node_type == "human_approval":
-        return human_approval_handler
+
+        def _human_approval(state: dict[str, Any]) -> dict[str, Any]:
+            return human_approval_handler(state, node_key=node_key)
+
+        return _human_approval
     if node_type == "agent":
 
         def _agent(state: dict[str, Any]) -> dict[str, Any]:

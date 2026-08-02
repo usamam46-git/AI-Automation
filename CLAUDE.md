@@ -66,25 +66,20 @@ Code session to know where things stand without re-deriving it. Last
 verified via a full read-only orientation pass — see note below.)
 
 - Done: DB schema + RLS, Auth/RBAC, Workspaces + Workflow-shell CRUD,
-  Workflow Versions/Nodes/Edges CRUD (versions save/replace/publish as one
-  bundled unit — nodes/edges have no separate per-item REST endpoints),
-  Graph Compiler + Redis-backed compiled-graph cache (bounded LRU).
-- `organizations` and `executions` modules exist as DB models only — no
-  service/repository/router for either yet. `executions` (WorkflowRun,
-  NodeExecution) is a direct dependency of the next phase.
-- Celery is declared in `pyproject.toml` but has zero worker code —
-  no `src/workers/`, no task definitions, no app config yet.
-- **Important nuance for the next phase**: the compiled-graph Redis cache
-  (`src/graphs/cache.py`) is bypassed entirely whenever a `checkpointer` is
-  passed to `compile_graph()`. It currently only benefits read-heavy,
-  non-execution paths — real workflow runs will compile fresh every time
-  unless this is deliberately redesigned. Don't assume the cache helps
-  execution performance until this is addressed.
-- Next: Celery task queues + LangGraph execution engine +
-  `PostgresSaver` checkpointer (Volume 2 §5, §6.3–6.5). See
-  `apps/api/CLAUDE.md` "Known temporary gaps" for handler-level issues to
-  fix during this phase (fixed human_approval output key, no
-  node_executions writes yet).
+  Workflow Versions/Nodes/Edges CRUD, Graph Compiler + Redis-backed LRU cache,
+  Celery task queues + LangGraph execution engine + PostgresSaver checkpointer
+  (Vol. 2 §5, §6.3–6.5). Full execution lifecycle: trigger → run → human_approval
+  interrupt → approve/reject → completed/rejected. All 69 tests pass.
+- Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
+  `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
+  Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
+- PostgresSaver design note: `aput_writes` uses an atomic single-statement JSONB
+  append (no read-modify-write) to avoid a race with LangGraph's AsyncBackgroundExecutor
+  which submits `aput` and `aput_writes` as concurrent asyncio tasks.
+- `organizations` module has DB models only (no service/router). `executions` module
+  is now fully implemented.
+- Next: Builder canvas (React Flow) in frontend + Executions UI, OR further backend
+  features (webhook triggers, audit logs, billing stubs).
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list). Builder canvas (React Flow) and Executions
   UI intentionally deferred until the execution layer exists.

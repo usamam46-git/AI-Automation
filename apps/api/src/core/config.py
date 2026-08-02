@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # ------------------------------------------------------------------
+    # Celery
+    # ------------------------------------------------------------------
+    CELERY_BROKER_URL: str = Field(
+        default="redis://localhost:6379/1",
+        description="Celery broker URL (separate Redis DB from the app cache).",
+    )
+    CELERY_WORKER_CONCURRENCY: int = Field(
+        default=4,
+        description="Worker process concurrency for the workflow_execution queue (Vol. 2 §5.1).",
+    )
+
+    # ------------------------------------------------------------------
     # MinIO / S3-compatible object storage
     # ------------------------------------------------------------------
     MINIO_ENDPOINT: str = Field(default="localhost:9000")

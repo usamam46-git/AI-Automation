@@ -104,6 +104,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 from src.modules.auth.router import router as auth_router
+from src.modules.executions.router import router as executions_router
 from src.modules.workflows.router import router as workflows_router
 from src.modules.workspaces.router import router as workspaces_router
 
@@ -113,6 +114,9 @@ from src.modules.workspaces.router import router as workspaces_router
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(workspaces_router, prefix="/api/v1/workspaces", tags=["workspaces"])
 app.include_router(workflows_router, prefix="/api/v1/workflows", tags=["workflows"])
+# Executions router mounts at /api/v1 (no prefix) because its endpoints span
+# two path prefixes: /api/v1/workflows/{id}/run and /api/v1/executions/{id}
+app.include_router(executions_router, prefix="/api/v1", tags=["executions"])
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

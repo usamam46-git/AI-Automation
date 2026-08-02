@@ -30,6 +30,12 @@ holds the LangGraph compiler (`compiler.py`), per-node-type handlers
 (`cache.py`). Graph *execution artifacts* are distinct from workflow
 *metadata*.
 
+`src/workers/` holds Celery app config (`celery_app.py`), the LangGraph
+execution tasks (`graph_tasks.py`), and the PostgreSQL checkpoint saver
+(`postgres_saver.py`). The `executions` module (`src/modules/executions/`)
+owns `WorkflowRun` and `NodeExecution` models, schemas, repository, service,
+and router.
+
 ## Testing conventions
 
 - Tests live in flat `apps/api/tests/test_<domain>.py` files, not nested
@@ -61,20 +67,14 @@ holds the LangGraph compiler (`compiler.py`), per-node-type handlers
 - `agent`/`tool`/`subgraph` node handlers are stubs that raise
   `NodeNotImplementedError` if actually invoked.
 
-## Known gaps to fix (not deliberate — found during verification, real
-   bugs to address during the Celery/execution phase)
+## Deliberate design decisions (not bugs)
 
-- `human_approval_handler` (`src/graphs/node_handlers.py`) writes its
-  decision to a FIXED key, `node_outputs["human_approval"]`, instead of
-  keying by the node's actual `node_key`. This silently collides the
-  moment a graph has two or more `human_approval` nodes — the second
-  overwrites the first. Fix this before building real execution on top of
-  it.
-- `node_executions` table exists in the schema but nothing writes to it
-  yet. LangGraph's checkpointer does not populate this automatically —
-  the execution engine needs an explicit hook (post-superstep write or
-  callback) to populate it for the audit trail.
 - `compile_graph()` bypasses the Redis compiled-graph cache entirely when
-  a `checkpointer` argument is passed (see root CLAUDE.md's build-status
-  note) — this needs a deliberate design decision, not an assumption, once
-  execution work starts.
+  a `checkpointer` argument is passed. Execution paths always compile fresh
+  with a `PostgresSaver` checkpointer — this is intentional. The cache only
+  benefits read-only paths (e.g. graph validation). Do not assume the cache
+  helps execution performance.
+- `aput_writes` in `PostgresSaver` uses a single atomic SQL UPDATE with
+  PostgreSQL's JSONB `||` append operator (no read-modify-write). This is
+  required to avoid a race with LangGraph's `AsyncBackgroundExecutor`, which
+  submits `aput` and `aput_writes` as independent concurrent asyncio tasks.

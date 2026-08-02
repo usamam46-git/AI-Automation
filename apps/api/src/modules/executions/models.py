@@ -71,6 +71,11 @@ class WorkflowRun(UUIDMixin, TenantMixin, TimestampMixin, Base):
         nullable=True,
         comment="The node currently executing or last executed.",
     )
+    interrupt_payload: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Interrupt details from human_approval node — readable by the approval UI without parsing checkpoint internals.",
+    )
     started_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     total_cost_usd: Mapped[float | None] = mapped_column(

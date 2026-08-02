@@ -24,12 +24,13 @@ def end_handler(_state: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def human_approval_handler(state: dict[str, Any]) -> dict[str, Any]:
+def human_approval_handler(state: dict[str, Any], *, node_key: str) -> dict[str, Any]:
     """
     Calls LangGraph interrupt() to pause execution.
 
-    Resume via Command(resume=...) is wired in the execution engine (next phase).
-    This handler is compile-time correct for in-process test runs only.
+    node_key must be passed by the compiler closure so that graphs with multiple
+    human_approval nodes key their decisions independently in node_outputs.
+    Resume via Command(resume=...) is handled by the execution engine.
     """
     payload = {
         "type": "approval_request",
@@ -37,7 +38,7 @@ def human_approval_handler(state: dict[str, Any]) -> dict[str, Any]:
     }
     decision = interrupt(payload)
     node_outputs = dict(state.get("node_outputs", {}))
-    node_outputs["human_approval"] = decision
+    node_outputs[node_key] = decision
     return {"node_outputs": node_outputs}
 
 
