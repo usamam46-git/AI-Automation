@@ -351,12 +351,67 @@ async def test_worker_restart_restores_from_checkpoint(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_trigger_run_permission_required(client: AsyncClient):
-    """POST /run requires workflow:execute — verify 403 without it."""
-    # Register a user with Viewer role (which only has *:read permissions)
-    # This is a simplified check — a full role-assignment flow would be needed
-    # for a more precise test. Here we just verify the endpoint exists and
-    # returns 401 for an unauthenticated request.
+async def test_trigger_run_requires_workflow_execute_permission(client: AsyncClient):
+    """
+    POST /run requires workflow:execute. A user holding the seeded Editor
+    role (workflow:write but NOT workflow:execute — see seed_roles.py) must
+    get 403, proving the permission check actually discriminates rather than
+    just requiring *some* authenticated user.
+    """
+    from sqlalchemy import update as sa_update
+    from test_workflow_versions import create_workflow, create_workspace, register_and_get_token
+
+    from src.core.cache import invalidate_permissions_cache
+    from src.core.redis import get_redis
+    from src.core.security import decode_access_token
+    from src.modules.auth.models import OrgMembership, Role
+
+    data = await register_and_get_token(client, "perm-check")
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    claims = decode_access_token(token)
+    user_id = uuid.UUID(claims["user_id"])
+    org_id = uuid.UUID(claims["org_id"])
+
+    ws = await create_workspace(client, token)
+    wf = await create_workflow(client, token, ws["id"])
+
+    # Downgrade the registering user from Owner (seeded with "*") to Editor,
+    # the only system role that isolates workflow:write without workflow:execute.
+    async with async_session_maker() as session:
+        editor_role = (
+            (
+                await session.execute(select(Role).where(Role.name == "Editor", Role.is_system == True))  # noqa: E712
+            )
+            .scalars()
+            .first()
+        )
+        assert editor_role is not None, "Editor system role must be seeded"
+
+        await session.execute(
+            sa_update(OrgMembership).where(OrgMembership.user_id == user_id, OrgMembership.organization_id == org_id).values(role_id=editor_role.id)
+        )
+        await session.commit()
+
+    # The permission-check dependency caches resolved permissions in Redis;
+    # the cache entry populated under Owner during setup above must be evicted
+    # or this test would pass against stale "*" permissions.
+    redis = await get_redis()
+    await invalidate_permissions_cache(redis, str(org_id), str(user_id))
+
+    resp = await client.post(
+        f"/api/v1/workflows/{wf['id']}/run",
+        json={"trigger_payload": {}},
+        headers=headers,
+    )
+    assert resp.status_code == 403
+    assert "workflow:execute" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_trigger_run_requires_authentication(client: AsyncClient):
+    """POST /run without a token returns 401 — distinct from the 403
+    permission-denied case covered above; both are real, separate behaviors."""
     resp = await client.post("/api/v1/workflows/00000000-0000-0000-0000-000000000001/run", json={})
     assert resp.status_code == 401
 

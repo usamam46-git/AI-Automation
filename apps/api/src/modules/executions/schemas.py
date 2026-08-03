@@ -12,6 +12,29 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
+# Status types
+# ---------------------------------------------------------------------------
+# Literal (not an Enum) to match the ResumeRequest.decision pattern already
+# established in this file. Values mirror the lifecycle documented on the
+# WorkflowRun/NodeExecution model columns (src/modules/executions/models.py);
+# confirmed against every place a status string is actually assigned
+# (graph_tasks.py, repository.py, service.py). "cancelled" and "skipped" are
+# not assigned by any code path yet but are part of the documented model
+# lifecycle, so they're kept here to match that contract rather than narrow it.
+
+WorkflowRunStatus = Literal[
+    "pending",
+    "running",
+    "waiting_approval",
+    "completed",
+    "failed",
+    "cancelled",
+    "rejected",
+]
+
+NodeExecutionStatus = Literal["succeeded", "failed", "skipped"]
+
+# ---------------------------------------------------------------------------
 # Request schemas
 # ---------------------------------------------------------------------------
 
@@ -48,7 +71,7 @@ class NodeExecutionResponse(BaseModel):
 
     id: uuid.UUID
     node_key: str
-    status: str
+    status: NodeExecutionStatus
     input: dict[str, Any] | None
     output: dict[str, Any] | None
     tokens_prompt: int | None
@@ -65,7 +88,7 @@ class WorkflowRunResponse(BaseModel):
     id: uuid.UUID
     workflow_version_id: uuid.UUID
     organization_id: uuid.UUID
-    status: str
+    status: WorkflowRunStatus
     trigger_payload: dict[str, Any] | None
     interrupt_payload: dict[str, Any] | None
     current_node_key: str | None

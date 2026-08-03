@@ -69,7 +69,8 @@ verified via a full read-only orientation pass — see note below.)
   Workflow Versions/Nodes/Edges CRUD, Graph Compiler + Redis-backed LRU cache,
   Celery task queues + LangGraph execution engine + PostgresSaver checkpointer
   (Vol. 2 §5, §6.3–6.5). Full execution lifecycle: trigger → run → human_approval
-  interrupt → approve/reject → completed/rejected. All 69 tests pass.
+  interrupt → approve/reject → completed/rejected. Execution engine phase fully
+  closed out (permission test + status typing hardened 2026-08-03). All 70 tests pass.
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
