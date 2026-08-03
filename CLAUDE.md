@@ -70,7 +70,10 @@ verified via a full read-only orientation pass — see note below.)
   Celery task queues + LangGraph execution engine + PostgresSaver checkpointer
   (Vol. 2 §5, §6.3–6.5). Full execution lifecycle: trigger → run → human_approval
   interrupt → approve/reject → completed/rejected. Execution engine phase fully
-  closed out (permission test + status typing hardened 2026-08-03). All 70 tests pass.
+  closed out (permission test + status typing hardened 2026-08-03).
+  LLMClient + real agent-node execution landed 2026-08-03 (Vol. 2 §8, Vol. 4 §6):
+  agent nodes call OpenAI with structured outputs and persist real
+  tokens_prompt/tokens_completion/cost_usd. All 100 tests pass.
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -79,8 +82,23 @@ verified via a full read-only orientation pass — see note below.)
   which submits `aput` and `aput_writes` as concurrent asyncio tasks.
 - `organizations` module has DB models only (no service/router). `executions` module
   is now fully implemented.
-- Next: Builder canvas (React Flow) in frontend + Executions UI, OR further backend
-  features (webhook triggers, audit logs, billing stubs).
+- LLM layer: `src/core/llm_client.py` is the single OpenAI wrapper (retries/backoff,
+  cost calculation, token counting, LangSmith hook). Its `_MODEL_PRICING` table is
+  hand-maintained — OpenAI has no pricing API, so re-verify rates on any pricing
+  change. `agent_handler` reads inline node config; `tool`/`subgraph` remain stubs.
+  Cost columns widened to `Numeric(12,6)` (migration `20260803_widen_cost_precision`).
+- Next (tomorrow, committed scope): **mutating-tool approval lint rule**
+  (Vol. 4 §4.3, cross-ref Vol. 2 §6.1). Reject publishing with 422 if any node
+  with `is_mutating: true` in its config has no `human_approval` node anywhere in
+  its upstream dependency path. Goes in the SAME validation layer as the existing
+  structural checks — `GraphValidationError` in
+  `src/modules/workflows/service.py`, surfaced as 422 by `_raise_validation_error`
+  (service.py:226). Reuse the DFS in `_find_cycle` as the traversal model.
+  See the "Mutating-tool approval lint" memory for the two open design points.
+  This closes the gap now flagged in apps/api/CLAUDE.md's security section.
+- Then: `tool`/`subgraph` handlers, BYOK via the integrations module (the
+  `get_llm_client(api_key_override)` seam is already in place), then Builder canvas
+  (React Flow) + Executions UI.
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list). Builder canvas (React Flow) and Executions
   UI intentionally deferred until the execution layer exists.

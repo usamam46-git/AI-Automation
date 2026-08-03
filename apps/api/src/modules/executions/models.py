@@ -79,7 +79,7 @@ class WorkflowRun(UUIDMixin, TenantMixin, TimestampMixin, Base):
     started_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     total_cost_usd: Mapped[float | None] = mapped_column(
-        Numeric(10, 4),
+        Numeric(12, 6),
         nullable=True,
         default=0.0,
         comment="Running total of all node_executions.cost_usd for this run.",
@@ -138,7 +138,7 @@ class NodeExecution(UUIDMixin, TimestampMixin, Base):
     tokens_prompt: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="Prompt token count (LLM nodes only).")
     tokens_completion: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="Completion token count (LLM nodes only).")
     cost_usd: Mapped[float | None] = mapped_column(
-        Numeric(10, 4),
+        Numeric(12, 6),
         nullable=True,
         comment="Computed cost for this node execution (LLM nodes only).",
     )

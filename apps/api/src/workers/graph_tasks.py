@@ -34,9 +34,10 @@ from typing import Any
 from celery import Task
 from celery.exceptions import MaxRetriesExceededError
 from langgraph.types import Command
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from src.core.llm_client import LLMConfigurationError, LLMTransientError
 from src.db.database import async_session_maker
 from src.graphs.compiler import (
     DraftVersionCompileError,
@@ -44,7 +45,7 @@ from src.graphs.compiler import (
     _compile_state_graph,
     initial_state_from_trigger,
 )
-from src.graphs.node_handlers import NodeNotImplementedError
+from src.graphs.node_handlers import AgentNodeConfigError, NodeNotImplementedError
 from src.modules.executions.models import NodeExecution, WorkflowRun
 from src.modules.workflows.models import WorkflowVersion
 from src.workers.celery_app import celery_app
@@ -53,7 +54,19 @@ from src.workers.postgres_saver import PostgresSaver
 logger = logging.getLogger(__name__)
 
 # Errors that indicate a structural problem with the graph — never retry.
-_NON_RETRYABLE = (NodeNotImplementedError, DraftVersionCompileError, GraphCompileError)
+#
+# LLMTransientError belongs here despite being transient in origin: LLMClient has
+# already retried it 3x with backoff (Vol. 2 §14 — "up to 3 attempts, then node
+# marked failed"). Retrying again at the Celery layer would compound to 12 API
+# calls and 12x the cost for one node.
+_NON_RETRYABLE = (
+    NodeNotImplementedError,
+    AgentNodeConfigError,
+    DraftVersionCompileError,
+    GraphCompileError,
+    LLMConfigurationError,
+    LLMTransientError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -102,12 +115,18 @@ async def _insert_node_execution(
     output_snapshot: dict[str, Any] | None,
     latency_ms: int,
     attempt: int,
+    tokens_prompt: int | None = None,
+    tokens_completion: int | None = None,
+    cost_usd: float | None = None,
 ) -> bool:
     """
     Insert a NodeExecution row after checking idempotency.
     Returns False and skips insert if a succeeded row already exists for
     (workflow_run_id, node_key, attempt) — guards against duplicate writes
     on Celery retry.
+
+    The token/cost arguments stay optional because non-LLM nodes (start, end,
+    human_approval gates) have no usage to report and leave those columns NULL.
     """
     async with async_session_maker() as session:
         existing_stmt = select(NodeExecution).where(
@@ -126,12 +145,60 @@ async def _insert_node_execution(
             status=status,
             input=input_snapshot,
             output=output_snapshot,
+            tokens_prompt=tokens_prompt,
+            tokens_completion=tokens_completion,
+            cost_usd=cost_usd,
             latency_ms=latency_ms,
             attempt=attempt,
         )
         session.add(row)
         await session.commit()
     return True
+
+
+def _usage_for_node(node_output: Any, node_key: str) -> dict[str, Any]:
+    """
+    Pull this node's token/cost bookkeeping off the `node_usage` state channel.
+
+    Agent handlers return usage keyed by node_key; every other node type returns
+    nothing, yielding an empty dict and NULL columns.
+    """
+    if not isinstance(node_output, dict):
+        return {}
+    usage = (node_output.get("node_usage") or {}).get(node_key)
+    return usage if isinstance(usage, dict) else {}
+
+
+def _output_snapshot(node_output: Any) -> dict[str, Any]:
+    """
+    Shape a handler's return value for the `output` audit column.
+
+    `node_usage` is stripped: it now has dedicated tokens_prompt/tokens_completion/
+    cost_usd columns, and duplicating it into the JSONB snapshot would let the two
+    representations drift.
+    """
+    if not isinstance(node_output, dict):
+        return {"value": node_output}
+    return {key: value for key, value in node_output.items() if key != "node_usage"}
+
+
+async def _add_run_cost(run_id: uuid.UUID, delta: float) -> None:
+    """
+    Increment workflow_runs.total_cost_usd by `delta` (Vol. 2 §3.2: "sum of node
+    executions' cost").
+
+    The increment happens SQL-side rather than read-modify-write in Python so
+    concurrent writers cannot lose an update. Using the SQLAlchemy column
+    expression instead of raw text() also sidesteps the `::cast` vs `:param`
+    conflict that bites text() queries in this codebase.
+    """
+    async with async_session_maker() as session:
+        from sqlalchemy import update as sa_update
+
+        await session.execute(
+            sa_update(WorkflowRun).where(WorkflowRun.id == run_id).values(total_cost_usd=func.coalesce(WorkflowRun.total_cost_usd, 0) + delta)
+        )
+        await session.commit()
 
 
 async def _mark_failed(run_id: uuid.UUID, error_detail: str) -> None:
@@ -187,15 +254,21 @@ async def _stream_graph(
             # node_output from "updates" mode is the dict the handler returned.
             # The input snapshot is the full prior state; for audit purposes
             # we record just the output here (full state is in the checkpoint).
+            usage = _usage_for_node(node_output, node_key)
             await _insert_node_execution(
                 workflow_run_id=run_id,
                 node_key=node_key,
                 status="succeeded",
                 input_snapshot=None,  # state snapshot not available in updates mode
-                output_snapshot=node_output if isinstance(node_output, dict) else {"value": node_output},
+                output_snapshot=_output_snapshot(node_output),
                 latency_ms=latency_ms,
                 attempt=attempt,
+                tokens_prompt=usage.get("tokens_prompt"),
+                tokens_completion=usage.get("tokens_completion"),
+                cost_usd=usage.get("cost_usd"),
             )
+            if usage.get("cost_usd"):
+                await _add_run_cost(run_id, float(usage["cost_usd"]))
 
         node_start_time = time.monotonic()
 

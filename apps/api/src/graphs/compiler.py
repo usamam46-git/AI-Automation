@@ -55,6 +55,12 @@ def _workflow_state_schema() -> type:
         organization_id: str
         trigger_payload: dict[str, Any]
         node_outputs: dict[str, Any]
+        # Per-node token/cost bookkeeping, keyed by node_key. Kept as a sibling of
+        # node_outputs rather than nested inside it so that bookkeeping never
+        # appears on the condition-DSL-addressable surface. The execution engine
+        # streams with stream_mode="updates" and only sees what a handler returns,
+        # so this is the sole channel by which usage reaches node_executions.
+        node_usage: dict[str, Any]
         messages: Annotated[list[Any], operator.add]
         errors: Annotated[list[dict[str, Any]], operator.add]
         current_cost_usd: float
@@ -91,9 +97,10 @@ def _bind_node_handler(node: WorkflowNode) -> Callable[..., dict[str, Any]]:
 
         return _human_approval
     if node_type == "agent":
+        node_config = node.config or {}
 
         def _agent(state: dict[str, Any]) -> dict[str, Any]:
-            return agent_handler(state, node_key=node_key, node_type="agent")
+            return agent_handler(state, node_key=node_key, config=node_config)
 
         return _agent
     if node_type == "tool":
@@ -114,7 +121,13 @@ def _bind_node_handler(node: WorkflowNode) -> Callable[..., dict[str, Any]]:
 def _log_unresolved_config_refs(nodes: list[WorkflowNode]) -> None:
     for node in nodes:
         config = node.config or {}
+        # An agent node carrying inline config resolves nothing at runtime, so its
+        # agent_id is a forward-compat no-op rather than an unresolved reference —
+        # warning on it would fire for every agent node on every compile.
+        inline_agent = node.node_type == "agent" and "output_schema" in config
         for ref_key in ("agent_id", "tool_id", "prompt_id"):
+            if ref_key == "agent_id" and inline_agent:
+                continue
             if ref_key in config:
                 logger.warning(
                     "Compile-time reference check skipped: %s=%s on node '%s' (module not yet implemented)",
@@ -261,6 +274,7 @@ def initial_state_from_trigger(
         "organization_id": str(organization_id),
         "trigger_payload": trigger_payload or {},
         "node_outputs": {},
+        "node_usage": {},
         "messages": [],
         "errors": [],
         "current_cost_usd": 0.0,

@@ -23,7 +23,7 @@ from src.graphs.compiler import (
     run_graph_sync,
 )
 from src.graphs.condition_eval import evaluate_condition
-from src.graphs.node_handlers import NodeNotImplementedError
+from src.graphs.node_handlers import AgentNodeConfigError
 from src.modules.workflows.models import WorkflowEdge, WorkflowNode, WorkflowVersion
 
 # ---------------------------------------------------------------------------
@@ -187,11 +187,20 @@ def test_compile_draft_version_rejected():
         compile_graph_sync(version)
 
 
-def test_agent_node_compiles_but_raises_on_invoke():
+def test_agent_node_with_only_agent_id_raises_config_error():
+    """
+    An agent node carrying only an opaque `agent_id` still cannot execute.
+
+    This test previously asserted NodeNotImplementedError, because agent_handler
+    was a stub. agent_handler is now real, but the agents module is not — there is
+    no AgentVersion to resolve `agent_id` against — so such a node must fail loudly
+    at invoke time rather than silently calling OpenAI with no prompt or schema.
+    The guarantee under test is unchanged; only the exception it surfaces moved.
+    """
     version = _agent_graph()
     compiled = compile_for_test_run(version)
     state = initial_state_from_trigger(organization_id=uuid.uuid4())
-    with pytest.raises(NodeNotImplementedError, match="Agent module"):
+    with pytest.raises(AgentNodeConfigError, match="system_prompt"):
         run_graph_sync(compiled, state, thread_id="agent-run")
 
 

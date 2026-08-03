@@ -56,16 +56,29 @@ and router.
   tokens: httpOnly, Secure, SameSite=Strict cookie, rotated on every use.
 - Never log or return raw secrets/API keys in any response.
 - Any tool/node that mutates external state (ERP writes, payments) must sit
-  downstream of a `human_approval` node in the graph — this is enforced at
-  the compiler level, don't bypass it.
+  downstream of a `human_approval` node in the graph (Vol. 4 §4.3).
+  **DOCUMENTED TARGET, NOT YET ENFORCED** — this file previously claimed the
+  compiler enforced it; it does not. No code in `src/graphs/compiler.py` or
+  `validate_graph_structure()` checks upstream approval today. Scheduled for
+  the next backend phase; until it lands, treat it as a rule authors must
+  follow manually, and do not rely on it as a safety net.
 
 ## Known temporary gaps (don't silently "fix" these — they're deliberate)
 
-- `agent_id`/`tool_id`/`prompt_id` references inside node `config` are
-  stored as opaque UUIDs with no FK validation, since those modules aren't
-  built yet. Compiler logs a warning, doesn't block.
-- `agent`/`tool`/`subgraph` node handlers are stubs that raise
+- `tool_id`/`prompt_id` references inside node `config` are stored as opaque
+  UUIDs with no FK validation, since those modules aren't built yet. Compiler
+  logs a warning, doesn't block.
+- `tool`/`subgraph` node handlers are stubs that raise
   `NodeNotImplementedError` if actually invoked.
+- `agent` nodes carry their model/prompt/schema **inline** in node `config`
+  (`system_prompt`, `output_schema`, `input_fields`, `model`, `temperature`,
+  `max_tokens`) rather than resolving `agent_id` against `agents`/
+  `agent_versions`. This is a deliberate temporary denormalization — the
+  agents module is models-only, so there is nothing to look up. `agent_id` is
+  accepted and ignored. When the agents module lands it should resolve
+  `agent_id` into this same shape so neither `agent_handler` nor the Builder
+  UI's node config panel has to change. A node carrying *only* `agent_id`
+  raises `AgentNodeConfigError` at invoke time.
 
 ## Deliberate design decisions (not bugs)
 
