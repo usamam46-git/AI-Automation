@@ -11,7 +11,8 @@ Architecture note (deliberate simplification per implementation Decision 5):
   This matches Vol. 6 §9's stated RPO for this phase.
 
 Error handling:
-  - NodeNotImplementedError, DraftVersionCompileError, GraphCompileError:
+  - NodeNotImplementedError, DraftVersionCompileError, GraphCompileError,
+    and the node-level config/exhausted-retry errors in _NON_RETRYABLE:
     non-retryable — mark run failed immediately.
   - All other exceptions: retried up to 3 times with exponential backoff,
     then dead-lettered with run marked failed.
@@ -45,7 +46,13 @@ from src.graphs.compiler import (
     _compile_state_graph,
     initial_state_from_trigger,
 )
-from src.graphs.node_handlers import AgentNodeConfigError, NodeNotImplementedError
+from src.graphs.node_handlers import (
+    AgentNodeConfigError,
+    NodeNotImplementedError,
+    ToolAuthenticationError,
+    ToolExecutionError,
+    ToolNodeConfigError,
+)
 from src.modules.executions.models import NodeExecution, WorkflowRun
 from src.modules.workflows.models import WorkflowVersion
 from src.workers.celery_app import celery_app
@@ -59,6 +66,11 @@ logger = logging.getLogger(__name__)
 # already retried it 3x with backoff (Vol. 2 §14 — "up to 3 attempts, then node
 # marked failed"). Retrying again at the Celery layer would compound to 12 API
 # calls and 12x the cost for one node.
+#
+# ToolExecutionError is here for exactly the same reason — tool_handler already
+# retried the outbound call 3x — and this matters more for tools than for LLM calls:
+# a mutating tool node (an ERP write, a payment) re-driven by a Celery retry could
+# post the same journal entry four times.
 _NON_RETRYABLE = (
     NodeNotImplementedError,
     AgentNodeConfigError,
@@ -66,6 +78,9 @@ _NON_RETRYABLE = (
     GraphCompileError,
     LLMConfigurationError,
     LLMTransientError,
+    ToolNodeConfigError,
+    ToolExecutionError,
+    ToolAuthenticationError,
 )
 
 

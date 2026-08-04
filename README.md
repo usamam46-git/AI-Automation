@@ -1,7 +1,7 @@
 # AI Automation Platform (AAP)
 
 **Status**: Active Development  
-**Current Phase**: Phase 3 — Execution Engine (Celery + LangGraph Runtime + PostgresSaver) complete; next up is the Visual Builder Canvas / Executions UI
+**Current Phase**: Phase 4 — Node Execution (real agent + tool handlers, mutating-tool approval guardrail) complete; next up is the Visual Builder Canvas / Executions UI
 
 ## The End Goal
 
@@ -20,7 +20,9 @@ At its core, AAP combines **Autonomous AI Agents** with a **Visual Workflow Engi
 
 ## What We've Built So Far
 
-We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8), the **Authentication & RBAC Layer** (Volume 2 §10 - §11), the **Workflow Engine data layer** (Volume 2 §3.2), the **Graph Compiler** (Volume 2 §6.1), and now the full **Workflow Execution Engine** — Celery task queue, LangGraph runtime, and a custom PostgreSQL checkpointer (Volume 2 §5, §6.3 - §6.5).
+We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8), the **Authentication & RBAC Layer** (Volume 2 §10 - §11), the **Workflow Engine data layer** (Volume 2 §3.2), the **Graph Compiler** (Volume 2 §6.1), the full **Workflow Execution Engine** — Celery task queue, LangGraph runtime, and a custom PostgreSQL checkpointer (Volume 2 §5, §6.3 - §6.5) — and most recently **real node execution**: agent nodes that call OpenAI with structured outputs (Volume 2 §8, Volume 4 §6), tool nodes that make real outbound calls (Volume 2 §7.2), and a publish-time guardrail that blocks workflows which would mutate external state without human approval (Volume 4 §4.3).
+
+**156 tests pass** (`cd apps/api && poetry run pytest`), with `ruff` clean across `src/` and `tests/`.
 
 ### Highlights:
 1. **Docker Infrastructure:** Configured `docker-compose.yml` with `pgvector/pgvector:pg16` for PostgreSQL, alongside Redis and MinIO (S3 compatible object storage).
@@ -59,8 +61,8 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
    - Translates published `WorkflowVersion` rows into LangGraph `CompiledStateGraph` objects.
    - Structured condition DSL on edges (`field` / `operator` / `value`) — safe dotted-path evaluation, no `eval()`.
    - `condition`-type nodes compile into `add_conditional_edges` routing (not executable graph nodes).
-   - Real handlers: `start`, `end`, `human_approval` (uses LangGraph `interrupt()`; resume wiring now lives in the Execution Engine — see point 9).
-   - Stub handlers: `agent`, `tool`, `subgraph` raise `NodeNotImplementedError` if invoked.
+   - Real handlers: `start`, `end`, `human_approval` (uses LangGraph `interrupt()`; resume wiring lives in the Execution Engine — see point 9), plus `agent` and `tool` (see points 10 and 11).
+   - Stub handler: `subgraph` raises `NodeNotImplementedError` if invoked.
    - Bounded process-local compiled graph LRU cache with Redis invalidation markers; invalidated on draft replace via `save_draft`. `COMPILED_GRAPH_CACHE_MAXSIZE` controls the per-process max size and defaults to `1000`.
    - Synchronous in-process test runner with LangGraph `MemorySaver` (unit tests); real execution always compiles fresh with the production `PostgresSaver` and deliberately bypasses the Redis cache — see point 9.
 9. **Workflow Execution Engine (`apps/api/src/workers/`, `apps/api/src/modules/executions/`):**
@@ -71,6 +73,23 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
    - **RBAC:** three dedicated permissions — `workflow:execute`, `execution:read`, `execution:approve` — layered independently from `workflow:write`. Owner/Admin hold all three; Editor holds neither (can build workflows but not run them); Approver holds only `execution:read` + `execution:approve`.
    - **Worker-restart resilient:** a completely fresh worker process, with a brand-new `PostgresSaver` instance and zero in-memory state, can resume any in-flight run purely by loading its checkpoint from Postgres.
    - **Audit trail:** append-only `node_executions` rows per node invocation, idempotent against Celery retries (checked via a `(run_id, node_key, attempt)` succeeded-row lookup before insert).
+10. **Agent Node Execution (`apps/api/src/core/llm_client.py`):**
+    - Single OpenAI wrapper handling structured outputs (strict JSON Schema), token counting, cost calculation, and a LangSmith tracing hook.
+    - Hand-rolled retry with exponential backoff (1s/2s/4s) on transient provider errors only — rate limits, timeouts, connection failures, 5xx. Auth errors and malformed schemas surface on the first attempt.
+    - `agent` nodes call the model with only the state fields they declared in `input_fields` (dotted paths resolved by the same evaluator the condition DSL uses), and persist real `tokens_prompt` / `tokens_completion` / `cost_usd` per node execution, rolled up into `workflow_runs.total_cost_usd`.
+    - Agent config lives **inline** on the node (`model`, `system_prompt`, `output_schema`, `input_fields`, ...) — a deliberate temporary denormalization until the Agents module exists.
+    - BYOK seam (`get_llm_client(api_key_override)`) is already in place, not yet wired to per-org keys.
+11. **Tool Node Execution (`apps/api/src/graphs/node_handlers.py`):**
+    - Two of Volume 2 §7.2's four tool types are real: **`http_request`** (outbound call via `httpx`, config-driven method/URL/headers/body, same retry-and-backoff shape as the LLM client) and a mock **`erp_connector`** (makes no network call; simulates posting a journal entry and returns a `MOCK-<uuid>` confirmation, so ERP workflow shapes from Volume 5 can be proven end-to-end before a real adapter exists). `python_function` and `mcp` are rejected by name rather than silently accepted.
+    - Values reach a request through `body_fields` / `payload_fields` — `{destination_key: "dotted.state.path"}` maps resolved by the same safe path evaluator as the condition DSL. **No templating engine, no `eval()`.**
+    - **Response status is classified three ways, deliberately:** `401`/`403` raise immediately (a credential failure returned as data would be indistinguishable from a business "not found" and would silently route the graph down the wrong branch); other `4xx` are returned as node output so graphs can route on them; `429` and `5xx` are retried, then raised.
+    - **Credential containment:** a tool node's recorded output carries `status_code` and `body` only — request and response headers are never echoed into `node_executions.output`, and URLs are query-stripped before reaching any log line or error message. Both are pinned by tests.
+    - Tool nodes leave `tokens_*` / `cost_usd` NULL — they have no LLM cost.
+12. **Mutating-Tool Approval Guardrail (Volume 4 §4.3):**
+    - A workflow **cannot be published** if any node marked `is_mutating: true` in its config has no `human_approval` node anywhere in its upstream dependency path. Returns 422 naming the offending `node_key`s.
+    - Enforced at **publish time only** — an author can still save a half-built draft while wiring the approval gate.
+    - Uses **"at least one"** semantics: a mutating node passes if any approval node exists among its ancestors, even where an individual branch reaches it unapproved. This matches the blueprint's wording and keeps its own reference workflows (Volume 5 §1 and §5, which both route straight to the journal-entry write on their clean branch) publishable.
+    - **Known limitation, stated plainly:** `is_mutating` lives in free-form JSONB config, so a misspelled key silently skips the gate. A non-boolean value is rejected at node-invoke time, which catches `"true"` but not `is_mutation`.
 
 ---
 
@@ -121,4 +140,4 @@ Connect to the database using your favorite client (DBeaver, pgAdmin, VS Code SQ
 
 ---
 
-*This repository is actively being built. The Celery + LangGraph execution engine (runtime, PostgresSaver checkpointing, human-approval interrupts, executions API) is now complete. Next phases: the Visual Builder Canvas (React Flow) + Executions UI on the frontend, and/or further backend features (webhook triggers, audit logs, billing stubs).*
+*This repository is actively being built. Workflows now execute end-to-end: an agent node extracts structured data with an LLM, a condition routes on it, a human approves, and a tool writes to an external system — with cost, tokens, and a per-node audit trail persisted throughout. Next phases: the Visual Builder Canvas (React Flow) + Executions UI on the frontend, the `subgraph` handler and a real `tools` module on the backend, and BYOK for per-organization API keys.*

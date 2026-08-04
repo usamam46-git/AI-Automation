@@ -2,6 +2,7 @@
 tests/test_graph_compiler.py — Unit and integration tests for the LangGraph compiler.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from src.graphs.cache import cache_graph, get_cached_graph, invalidate_cached_gr
 from src.graphs.compiler import (
     DraftVersionCompileError,
     _compile_state_graph,
+    _log_unresolved_config_refs,
     compile_for_test_run,
     compile_graph,
     compile_graph_sync,
@@ -202,6 +204,61 @@ def test_agent_node_with_only_agent_id_raises_config_error():
     state = initial_state_from_trigger(organization_id=uuid.uuid4())
     with pytest.raises(AgentNodeConfigError, match="system_prompt"):
         run_graph_sync(compiled, state, thread_id="agent-run")
+
+
+@pytest.mark.parametrize(
+    ("node", "expect_warning"),
+    [
+        # Non-inline agent node: bare agent_id is an unresolved reference — warn.
+        (_node("extract", "agent", {"agent_id": "abc-123"}), True),
+        # Inline agent node (output_schema present): agent_id is a forward-compat
+        # no-op, not an unresolved reference — must NOT warn.
+        (_node("extract", "agent", {"agent_id": "abc-123", "output_schema": {}}), False),
+        # tool node with tool_id and no inline config — genuinely unresolved, warn.
+        (_node("call_erp", "tool", {"tool_id": "def-456"}), True),
+        # Inline tool node (tool_type present): tool_id is a forward-compat no-op,
+        # exactly as for inline agent nodes — must NOT warn.
+        (_node("call_erp", "tool", {"tool_id": "def-456", "tool_type": "erp_connector"}), False),
+        # any node with prompt_id — warn.
+        (_node("summarize", "agent", {"output_schema": {}, "prompt_id": "ghi-789"}), True),
+        # node with no ref_key in config at all — no warning.
+        (_node("route", "condition", {"field": "x", "operator": "eq", "value": 1}), False),
+        # non-agent node carrying an agent_id-shaped key isn't special-cased by
+        # node_type — the inline-agent exemption only applies to node_type == "agent".
+        (_node("noop", "start", {"agent_id": "abc-123"}), True),
+    ],
+    ids=[
+        "agent-bare-id-warns",
+        "agent-inline-schema-silent",
+        "tool-id-warns",
+        "tool-inline-type-silent",
+        "prompt-id-warns",
+        "no-refs-silent",
+        "non-agent-node-with-agent-id-warns",
+    ],
+)
+def test_log_unresolved_config_refs_scoping(caplog, node, expect_warning):
+    """
+    _log_unresolved_config_refs must warn on unresolved agent_id/tool_id/prompt_id
+    references, EXCEPT for inline agent nodes (node_type == "agent" AND
+    output_schema present), where agent_id is a deliberate forward-compat no-op.
+    """
+    with caplog.at_level(logging.WARNING, logger="src.graphs.compiler"):
+        _log_unresolved_config_refs([node])
+
+    warned = any(node.node_key in record.message for record in caplog.records)
+    assert warned is expect_warning
+
+
+def test_log_unresolved_config_refs_multi_ref_node_warns_once_per_ref(caplog):
+    """A node carrying multiple unresolved refs gets one warning per ref_key."""
+    node = _node("call_erp", "tool", {"tool_id": "def-456", "prompt_id": "ghi-789"})
+
+    with caplog.at_level(logging.WARNING, logger="src.graphs.compiler"):
+        _log_unresolved_config_refs([node])
+
+    matching = [record for record in caplog.records if node.node_key in record.message]
+    assert len(matching) == 2
 
 
 @pytest.mark.asyncio

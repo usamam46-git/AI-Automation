@@ -165,6 +165,71 @@ def _find_cycle(node_keys: set[str], edges: list[EdgeInput]) -> list[str] | None
     return None
 
 
+def validate_mutating_approval(nodes: list[NodeInput], edges: list[EdgeInput]) -> None:
+    """
+    Reject a graph where a mutating node has no `human_approval` node upstream (Vol. 4 §4.3).
+
+    Deliberately NOT part of `validate_graph_structure`: that runs at save_draft too,
+    and blocking Save would stop an author from parking a half-built graph while they
+    wire the approval gate. This is a publish-time gate only.
+
+    Semantics are ∃, not ∀: a mutating node is flagged only when *zero* human_approval
+    nodes exist anywhere in its ancestor set — not when some individual path to it
+    skips one. Vol. 4 §4.3's wording is "has **no** upstream approval node in its
+    dependency path", and ∀ would reject the blueprint's own reference workflows:
+    both Vol. 5 §1 (Invoice Processing) and Vol. 5 §5 (Journal Validation) route
+    straight to the journal-entry write on their non-anomalous branch. The residual
+    risk — that auto-approve branch posting with no human in the loop — is the
+    blueprint's design decision, not a gap here.
+
+    `is_mutating` is read from the node's inline `config`, since the tools module is
+    models-only and there is no Tool row to resolve `tool_id` against. Only a literal
+    `True` counts; `_tool_config` rejects non-bool values at invoke time so a string
+    "true" cannot quietly read as non-mutating here.
+    """
+    mutating_keys = [node.node_key for node in nodes if (node.config or {}).get("is_mutating") is True]
+    if not mutating_keys:
+        return
+
+    approval_keys = {node.node_key for node in nodes if _node_type_str(node.node_type) == NodeType.human_approval.value}
+
+    # Reverse adjacency (target -> sources): the same idiom as _find_cycle's forward
+    # adjacency, inverted, so a walk from a node reaches its ancestors. Condition
+    # nodes are traversed naturally — they exist as stored rows and are only elided
+    # later, at compile time.
+    ancestors_of: dict[str, list[str]] = {node.node_key: [] for node in nodes}
+    for edge in edges:
+        if edge.target_node_key in ancestors_of:
+            ancestors_of[edge.target_node_key].append(edge.source_node_key)
+
+    unguarded: list[str] = []
+    for mutating_key in mutating_keys:
+        # Iterative rather than _find_cycle's recursion: no RecursionError ceiling on
+        # a deep graph. The visited set also makes this safe independently of the
+        # cycle check that validate_graph_structure already ran.
+        seen: set[str] = set()
+        queue = list(ancestors_of.get(mutating_key, []))
+        approved = False
+        while queue:
+            current = queue.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in approval_keys:
+                approved = True
+                break
+            queue.extend(ancestors_of.get(current, []))
+        if not approved:
+            unguarded.append(mutating_key)
+
+    if unguarded:
+        raise GraphValidationError(
+            f"Mutating nodes have no human_approval node in their upstream dependency path: {sorted(unguarded)}. "
+            f"A node marked 'is_mutating: true' writes to an external system (ERP writes, payments) and must be "
+            f"reachable only after human approval (Vol. 4 §4.3)."
+        )
+
+
 def _nodes_edges_from_version(version: WorkflowVersion) -> tuple[list[NodeInput], list[EdgeInput]]:
     nodes = [
         NodeInput(
@@ -376,6 +441,9 @@ class WorkflowService:
         nodes, edges = _nodes_edges_from_version(version)
         try:
             validate_graph_structure(nodes, edges)
+            # Publish-only, unlike the structural checks above: a draft may legitimately
+            # hold a mutating node whose approval gate is not wired yet (Vol. 4 §4.3).
+            validate_mutating_approval(nodes, edges)
         except GraphValidationError as exc:
             self._raise_validation_error(exc)
 

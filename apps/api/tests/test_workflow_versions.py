@@ -3,6 +3,7 @@ tests/test_workflow_versions.py — Unit and integration tests for workflow vers
 
 Coverage:
 - Unit: structural graph validation (valid graph, edge refs, duplicates, start/end, orphans, cycles)
+- Unit: the mutating-tool approval guardrail (Vol. 4 §4.3), publish-only
 - Integration: draft save/replace, publish lifecycle, cross-tenant isolation, API 422 errors
 """
 
@@ -14,7 +15,7 @@ from httpx import AsyncClient
 from test_workflows import create_workflow, create_workspace, register_and_get_token
 
 from src.modules.workflows.schemas import EdgeInput, NodeInput, NodeType
-from src.modules.workflows.service import GraphValidationError, validate_graph_structure
+from src.modules.workflows.service import GraphValidationError, validate_graph_structure, validate_mutating_approval
 
 # ---------------------------------------------------------------------------
 # Graph fixtures
@@ -115,6 +116,190 @@ def test_validate_graph_structure_cycle_detected():
     with pytest.raises(GraphValidationError) as exc:
         validate_graph_structure(nodes, edges)
     assert "Cycle detected" in str(exc.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — mutating-tool approval guardrail (Vol. 4 §4.3)
+# ---------------------------------------------------------------------------
+
+MUTATING_TOOL_CONFIG = {
+    "tool_type": "erp_connector",
+    "action": "create_journal_entry",
+    "is_mutating": True,
+    "payload": {"vendor": "Acme", "amount": 10, "account_code": "5000"},
+}
+
+
+def _tool_node(key: str, config: dict) -> NodeInput:
+    return NodeInput(node_key=key, node_type=NodeType.tool, config=config, position_x=0, position_y=0)
+
+
+def approved_mutating_graph() -> tuple[list[NodeInput], list[EdgeInput]]:
+    """start → approve → post_je(mutating) → end."""
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        NodeInput(node_key="approve", node_type=NodeType.human_approval, config={}, position_x=100, position_y=0),
+        _tool_node("post_je", MUTATING_TOOL_CONFIG),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=300, position_y=0),
+    ]
+    edges = [
+        EdgeInput(source_node_key="start", target_node_key="approve"),
+        EdgeInput(source_node_key="approve", target_node_key="post_je"),
+        EdgeInput(source_node_key="post_je", target_node_key="end"),
+    ]
+    return nodes, edges
+
+
+def unapproved_mutating_graph() -> tuple[list[NodeInput], list[EdgeInput]]:
+    """start → post_je(mutating) → end — no approval anywhere."""
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        _tool_node("post_je", MUTATING_TOOL_CONFIG),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=200, position_y=0),
+    ]
+    edges = [
+        EdgeInput(source_node_key="start", target_node_key="post_je"),
+        EdgeInput(source_node_key="post_je", target_node_key="end"),
+    ]
+    return nodes, edges
+
+
+def test_mutating_node_downstream_of_approval_passes():
+    nodes, edges = approved_mutating_graph()
+    validate_mutating_approval(nodes, edges)  # must not raise
+
+
+def test_mutating_node_without_upstream_approval_is_rejected():
+    nodes, edges = unapproved_mutating_graph()
+    with pytest.raises(GraphValidationError) as exc:
+        validate_mutating_approval(nodes, edges)
+    assert "no human_approval node" in str(exc.value.detail)
+    assert "post_je" in str(exc.value.detail)
+
+
+def test_non_mutating_tool_without_approval_passes():
+    """The gate keys on `is_mutating`, not on node_type — a read-only tool is fine."""
+    nodes, edges = unapproved_mutating_graph()
+    nodes[1] = _tool_node("post_je", {"tool_type": "http_request", "url": "https://example.com", "is_mutating": False})
+    validate_mutating_approval(nodes, edges)
+
+
+def test_approval_downstream_of_mutating_node_is_rejected():
+    """Direction matters: approving *after* the write has already happened is no gate."""
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        _tool_node("post_je", MUTATING_TOOL_CONFIG),
+        NodeInput(node_key="approve", node_type=NodeType.human_approval, config={}, position_x=200, position_y=0),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=300, position_y=0),
+    ]
+    edges = [
+        EdgeInput(source_node_key="start", target_node_key="post_je"),
+        EdgeInput(source_node_key="post_je", target_node_key="approve"),
+        EdgeInput(source_node_key="approve", target_node_key="end"),
+    ]
+    with pytest.raises(GraphValidationError) as exc:
+        validate_mutating_approval(nodes, edges)
+    assert "post_je" in str(exc.value.detail)
+
+
+def test_mutating_node_with_one_approved_branch_passes_exists_semantics():
+    """
+    THE interpretation test — names which semantics shipped.
+
+    This is Vol. 5 §5 (Journal Validation) verbatim: the non-anomalous branch routes
+    straight to the journal-entry write, while the anomalous branch goes through a
+    controller review first. Under ∃ semantics ("no approval node ANYWHERE upstream")
+    this publishes. Under ∀ semantics ("every path must pass one") it would not — and
+    neither would Vol. 5 §1, so the blueprint's own reference workflows would be
+    unbuildable.
+    """
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        NodeInput(node_key="anomaly_check", node_type=NodeType.condition, config={}, position_x=100, position_y=0),
+        NodeInput(node_key="approve", node_type=NodeType.human_approval, config={}, position_x=200, position_y=0),
+        _tool_node("post_je", MUTATING_TOOL_CONFIG),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=400, position_y=0),
+    ]
+    edges = [
+        EdgeInput(source_node_key="start", target_node_key="anomaly_check"),
+        # anomalous → controller review → post
+        EdgeInput(
+            source_node_key="anomaly_check",
+            target_node_key="approve",
+            condition={"field": "node_outputs.anomaly.score", "operator": "gte", "value": 0.8, "branch": "anomalous"},
+        ),
+        EdgeInput(source_node_key="approve", target_node_key="post_je"),
+        # not anomalous → straight to post, no approval on THIS path
+        EdgeInput(
+            source_node_key="anomaly_check",
+            target_node_key="post_je",
+            condition={"field": "node_outputs.anomaly.score", "operator": "lt", "value": 0.8, "branch": "clean"},
+        ),
+        EdgeInput(source_node_key="post_je", target_node_key="end"),
+    ]
+    validate_mutating_approval(nodes, edges)  # must not raise
+
+
+def test_approval_reachable_through_a_condition_node_counts():
+    """
+    Condition rows are traversed by the walk. They exist as stored nodes and are only
+    elided later, at compile time — so an approval sitting behind one still guards.
+    """
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        NodeInput(node_key="approve", node_type=NodeType.human_approval, config={}, position_x=100, position_y=0),
+        NodeInput(node_key="route", node_type=NodeType.condition, config={}, position_x=200, position_y=0),
+        _tool_node("post_je", MUTATING_TOOL_CONFIG),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=400, position_y=0),
+    ]
+    edges = [
+        EdgeInput(source_node_key="start", target_node_key="approve"),
+        EdgeInput(source_node_key="approve", target_node_key="route"),
+        EdgeInput(source_node_key="route", target_node_key="post_je"),
+        EdgeInput(source_node_key="post_je", target_node_key="end"),
+    ]
+    validate_mutating_approval(nodes, edges)
+
+
+def test_every_offending_node_is_named_not_just_the_first():
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        _tool_node("post_je", MUTATING_TOOL_CONFIG),
+        _tool_node("release_payment", MUTATING_TOOL_CONFIG),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=300, position_y=0),
+    ]
+    edges = [
+        EdgeInput(source_node_key="start", target_node_key="post_je"),
+        EdgeInput(source_node_key="post_je", target_node_key="release_payment"),
+        EdgeInput(source_node_key="release_payment", target_node_key="end"),
+    ]
+    with pytest.raises(GraphValidationError) as exc:
+        validate_mutating_approval(nodes, edges)
+    detail = str(exc.value.detail)
+    assert "post_je" in detail
+    assert "release_payment" in detail
+
+
+def test_string_true_is_mutating_does_not_trip_the_gate_but_is_rejected_at_runtime():
+    """
+    Documents the fail-open edge of config-embedded `is_mutating`: only a literal
+    JSON true is recognised here. `_tool_config` is what closes it, rejecting a
+    non-bool at invoke time (see test_tool_nodes.test_tool_config_error_non_bool_is_mutating).
+    """
+    from src.graphs.node_handlers import ToolNodeConfigError, tool_handler
+
+    nodes, edges = unapproved_mutating_graph()
+    nodes[1] = _tool_node("post_je", {**MUTATING_TOOL_CONFIG, "is_mutating": "true"})
+
+    validate_mutating_approval(nodes, edges)  # gate does not fire...
+
+    with pytest.raises(ToolNodeConfigError, match="malformed 'is_mutating'"):
+        tool_handler({}, node_key="post_je", config=nodes[1].config)  # ...but the node cannot run
+
+
+def test_graph_with_no_mutating_nodes_is_a_no_op():
+    nodes, edges = valid_graph()
+    validate_mutating_approval(nodes, edges)
 
 
 # ---------------------------------------------------------------------------
@@ -316,3 +501,53 @@ async def test_invalid_graph_via_api_returns_422(client: AsyncClient):
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     detail = resp.json()["detail"]
     assert "nonexistent node_key" in str(detail)
+
+
+# ---------------------------------------------------------------------------
+# Integration — the mutating-tool approval gate fires at publish, not at save
+# ---------------------------------------------------------------------------
+
+
+async def _save_draft(client: AsyncClient, tag: str, nodes, edges) -> tuple[dict, str, str]:
+    data = await register_and_get_token(client, tag)
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ws = await create_workspace(client, token)
+    wf = await create_workflow(client, token, ws["id"])
+
+    resp = await client.post(f"/api/v1/workflows/{wf['id']}/versions", json=graph_payload(nodes, edges), headers=headers)
+    return headers, wf["id"], resp
+
+
+@pytest.mark.asyncio
+async def test_unapproved_mutating_graph_saves_as_draft_but_fails_to_publish(client: AsyncClient):
+    """
+    Both halves of the publish-only decision in one test: an author can park a
+    half-built graph whose approval gate isn't wired yet (201), but it cannot be
+    published (422) with the offending node named.
+    """
+    nodes, edges = unapproved_mutating_graph()
+    headers, workflow_id, saved = await _save_draft(client, "V-MUT-DRAFT", nodes, edges)
+
+    assert saved.status_code == status.HTTP_201_CREATED, saved.text
+    version_id = saved.json()["id"]
+
+    published = await client.post(f"/api/v1/workflows/{workflow_id}/versions/{version_id}/publish", headers=headers)
+    assert published.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    detail = str(published.json()["detail"])
+    assert "post_je" in detail
+    assert "human_approval" in detail
+
+
+@pytest.mark.asyncio
+async def test_approved_mutating_graph_publishes(client: AsyncClient):
+    nodes, edges = approved_mutating_graph()
+    headers, workflow_id, saved = await _save_draft(client, "V-MUT-OK", nodes, edges)
+
+    assert saved.status_code == status.HTTP_201_CREATED, saved.text
+    version_id = saved.json()["id"]
+
+    published = await client.post(f"/api/v1/workflows/{workflow_id}/versions/{version_id}/publish", headers=headers)
+    assert published.status_code == status.HTTP_200_OK, published.text
+    assert published.json()["published_at"] is not None

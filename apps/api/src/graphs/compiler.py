@@ -104,9 +104,10 @@ def _bind_node_handler(node: WorkflowNode) -> Callable[..., dict[str, Any]]:
 
         return _agent
     if node_type == "tool":
+        tool_config = node.config or {}
 
         def _tool(state: dict[str, Any]) -> dict[str, Any]:
-            return tool_handler(state, node_key=node_key, node_type="tool")
+            return tool_handler(state, node_key=node_key, config=tool_config)
 
         return _tool
     if node_type == "subgraph":
@@ -125,8 +126,14 @@ def _log_unresolved_config_refs(nodes: list[WorkflowNode]) -> None:
         # agent_id is a forward-compat no-op rather than an unresolved reference —
         # warning on it would fire for every agent node on every compile.
         inline_agent = node.node_type == "agent" and "output_schema" in config
+        # Same reasoning for tool nodes: one carrying inline `tool_type` config
+        # resolves nothing at runtime, so its tool_id is forward-compat, not an
+        # unresolved reference.
+        inline_tool = node.node_type == "tool" and "tool_type" in config
         for ref_key in ("agent_id", "tool_id", "prompt_id"):
             if ref_key == "agent_id" and inline_agent:
+                continue
+            if ref_key == "tool_id" and inline_tool:
                 continue
             if ref_key in config:
                 logger.warning(

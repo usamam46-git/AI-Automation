@@ -73,7 +73,11 @@ verified via a full read-only orientation pass — see note below.)
   closed out (permission test + status typing hardened 2026-08-03).
   LLMClient + real agent-node execution landed 2026-08-03 (Vol. 2 §8, Vol. 4 §6):
   agent nodes call OpenAI with structured outputs and persist real
-  tokens_prompt/tokens_completion/cost_usd. All 100 tests pass.
+  tokens_prompt/tokens_completion/cost_usd.
+  Real `tool_handler` + the mutating-tool approval guardrail landed 2026-08-04
+  (Vol. 2 §7.2, Vol. 4 §4.3) — see the two bullets below.
+  **156 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
+  2026-08-04: 114 pre-existing + 42 new).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -85,20 +89,31 @@ verified via a full read-only orientation pass — see note below.)
 - LLM layer: `src/core/llm_client.py` is the single OpenAI wrapper (retries/backoff,
   cost calculation, token counting, LangSmith hook). Its `_MODEL_PRICING` table is
   hand-maintained — OpenAI has no pricing API, so re-verify rates on any pricing
-  change. `agent_handler` reads inline node config; `tool`/`subgraph` remain stubs.
+  change. `agent_handler` reads inline node config; `subgraph` remains a stub.
   Cost columns widened to `Numeric(12,6)` (migration `20260803_widen_cost_precision`).
-- Next (tomorrow, committed scope): **mutating-tool approval lint rule**
-  (Vol. 4 §4.3, cross-ref Vol. 2 §6.1). Reject publishing with 422 if any node
-  with `is_mutating: true` in its config has no `human_approval` node anywhere in
-  its upstream dependency path. Goes in the SAME validation layer as the existing
-  structural checks — `GraphValidationError` in
-  `src/modules/workflows/service.py`, surfaced as 422 by `_raise_validation_error`
-  (service.py:226). Reuse the DFS in `_find_cycle` as the traversal model.
-  See the "Mutating-tool approval lint" memory for the two open design points.
-  This closes the gap now flagged in apps/api/CLAUDE.md's security section.
-- Then: `tool`/`subgraph` handlers, BYOK via the integrations module (the
+- Tool layer (2026-08-04, Vol. 2 §7.2): `tool_handler` in `src/graphs/node_handlers.py`
+  is real for two of the four blueprint tool types — `http_request` (outbound httpx
+  call, retry shape copied from `LLMClient._call_with_retry`) and a mock
+  `erp_connector` (no network call, returns `MOCK-<uuid>` confirmations).
+  `python_function`/`mcp` are rejected by name. Config is inline on the node, same
+  denormalization as agent nodes. Tool nodes get `node_executions` rows for free via
+  the existing generic `_stream_graph` loop and leave tokens/cost NULL by emitting no
+  `node_usage`. `httpx` moved from dev-only to a runtime dependency.
+- **Mutating-tool approval guardrail is ENFORCED** (Vol. 4 §4.3), no longer a
+  documented target: `validate_mutating_approval()` in
+  `src/modules/workflows/service.py`, called from `publish_version` only, 422 via
+  `_raise_validation_error`, naming the offending node_keys. Three settled design
+  points, all recorded in apps/api/CLAUDE.md's security section — **publish-only**
+  (not save_draft, so half-built drafts still save), **∃-semantics** (flag only when
+  zero approvals exist upstream; ∀ would reject Vol. 5 §1 and §5, the blueprint's own
+  reference workflows), and **config-embedded `is_mutating`**, which is fail-open on
+  a misspelled key. Do not restate the rule as stronger than it is.
+- Next: `subgraph` handler, real `tools` module (CRUD + `tool_executions` rows written
+  *before* mutating calls, per Vol. 4 §4.3), BYOK via the integrations module (the
   `get_llm_client(api_key_override)` seam is already in place), then Builder canvas
-  (React Flow) + Executions UI.
+  (React Flow) + Executions UI. The Builder's node config panel must construct the
+  inline agent AND tool config shapes exactly as documented in apps/api/CLAUDE.md —
+  changing either later means a backend + frontend change together.
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list). Builder canvas (React Flow) and Executions
   UI intentionally deferred until the execution layer exists.
