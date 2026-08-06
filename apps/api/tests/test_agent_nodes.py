@@ -172,15 +172,16 @@ async def test_agent_node_runs_and_persists_tokens_and_cost(client: AsyncClient,
     run_id = uuid.UUID(run_data["id"])
 
     version = await _load_version(ctx["version_id"])
+    org_id = uuid.UUID(run_data["organization_id"])
     initial_state = initial_state_from_trigger(
-        organization_id=uuid.UUID(run_data["organization_id"]),
+        organization_id=org_id,
         trigger_payload={"document": "invoice.pdf"},
         run_id=str(run_id),
     )
 
     mock, mock_openai = _patched_openai()
     try:
-        await _stream_graph(run_id, version, initial_state, attempt=1)
+        await _stream_graph(run_id, version, initial_state, attempt=1, organization_id=org_id)
     finally:
         mock.stop()
 
@@ -235,15 +236,16 @@ async def test_agent_cost_and_tokens_exposed_over_http(client: AsyncClient, monk
     run_id = uuid.UUID(run_data["id"])
 
     version = await _load_version(ctx["version_id"])
+    org_id = uuid.UUID(run_data["organization_id"])
     state = initial_state_from_trigger(
-        organization_id=uuid.UUID(run_data["organization_id"]),
+        organization_id=org_id,
         trigger_payload={"document": "x.pdf"},
         run_id=str(run_id),
     )
 
     mock, _ = _patched_openai()
     try:
-        await _stream_graph(run_id, version, state, attempt=1)
+        await _stream_graph(run_id, version, state, attempt=1, organization_id=org_id)
     finally:
         mock.stop()
 

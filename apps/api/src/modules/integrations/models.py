@@ -1,15 +1,13 @@
 """
-modules/integrations/models.py — Stub external integration model (§3.6).
+modules/integrations/models.py — External integration credentials (§3.6, Vol. 2 §13).
 
-Integrations represent connections to third-party services (Gmail, NetSuite,
-QuickBooks, Slack, etc.).  Full fields (OAuth token storage, connector type,
-sync status) will be added when we reach the integrations section.
-
-credentials in the full implementation will be AES-256-GCM encrypted at the
-application layer before being stored (see Vol. 2 §13).
+Real for one type today: `openai_api_key` (BYOK). Other integration types
+(Slack, NetSuite/QuickBooks OAuth, etc.) will reuse this same shape — the
+`type` discriminator plus `config` catch-all exist so adding a second type
+later is a new row, not a schema rewrite.
 """
 
-from sqlalchemy import Text
+from sqlalchemy import LargeBinary, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,21 +15,33 @@ from src.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
 
 
 class Integration(UUIDMixin, TenantMixin, TimestampMixin, Base):
-    """
-    Stub: external service integration owned by an Organization.
-    Full fields (service type, OAuth tokens, sync config, etc.)
-    will be added in the integrations section.
-    """
+    """External service credential owned by an Organization."""
 
     __tablename__ = "integrations"
+    __table_args__ = (UniqueConstraint("organization_id", "type", name="uq_integrations_org_type"),)
 
     name: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        comment="Stub: human-readable integration name, e.g. 'NetSuite Production'.",
+        comment="Human-readable name, e.g. 'OpenAI API Key'.",
+    )
+    type: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Integration type discriminator, e.g. 'openai_api_key'.",
+    )
+    credentials: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+        comment="AES-256-GCM encrypted secret (nonce || ciphertext+tag) — see src/core/encryption.py. Never the raw value (Vol. 2 §13).",
+    )
+    last_four: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Last 4 characters of the raw secret, stored in plaintext, for masked display only.",
     )
     config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
-        comment="Catch-all for integration config until the section is fleshed out.",
+        comment="Catch-all for non-secret settings. Unused by openai_api_key today.",
     )

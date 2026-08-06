@@ -155,14 +155,15 @@ async def test_happy_path_full_run(client: AsyncClient):
 
     # Manually drive execution (replaces Celery worker for test purposes)
     version = await _load_version(version_id)
+    org_id = uuid.UUID(run_data["organization_id"])
     initial_state = initial_state_from_trigger(
-        organization_id=uuid.UUID(run_data["organization_id"]),
+        organization_id=org_id,
         trigger_payload={"approve": True},
         run_id=str(run_id),
     )
 
     # First stream — should pause at human_approval
-    await _stream_graph(run_id, version, initial_state, attempt=1)
+    await _stream_graph(run_id, version, initial_state, attempt=1, organization_id=org_id)
 
     run = await _load_run_with_executions(run_id)
     assert run.status == "waiting_approval"
@@ -185,7 +186,7 @@ async def test_happy_path_full_run(client: AsyncClient):
     # Resume stream (replaces Celery resume_workflow task)
     from langgraph.types import Command
 
-    await _stream_graph(run_id, version, Command(resume={"decision": "approved"}), attempt=1)
+    await _stream_graph(run_id, version, Command(resume={"decision": "approved"}), attempt=1, organization_id=org_id)
 
     run = await _load_run_with_executions(run_id)
     assert run.status == "completed"
@@ -223,12 +224,13 @@ async def test_reject_path(client: AsyncClient):
 
     # Drive to waiting_approval
     version = await _load_version(version_id)
+    org_id = uuid.UUID(resp.json()["organization_id"])
     initial_state = initial_state_from_trigger(
-        organization_id=uuid.UUID(resp.json()["organization_id"]),
+        organization_id=org_id,
         trigger_payload={"approve": True},
         run_id=str(run_id),
     )
-    await _stream_graph(run_id, version, initial_state, attempt=1)
+    await _stream_graph(run_id, version, initial_state, attempt=1, organization_id=org_id)
 
     # Update to waiting_approval directly (stream already did this, confirm)
     run = await _load_run_with_executions(run_id)
@@ -321,7 +323,7 @@ async def test_worker_restart_restores_from_checkpoint(client: AsyncClient):
     )
 
     # FIRST worker instance: stream until interrupt
-    await _stream_graph(run_id, version, initial_state, attempt=1)
+    await _stream_graph(run_id, version, initial_state, attempt=1, organization_id=org_id)
 
     run = await _load_run_with_executions(run_id)
     assert run.status == "waiting_approval"
@@ -338,7 +340,7 @@ async def test_worker_restart_restores_from_checkpoint(client: AsyncClient):
     from langgraph.types import Command
 
     version2 = await _load_version(version_id)  # fresh load from DB
-    await _stream_graph(run_id, version2, Command(resume={"decision": "approved"}), attempt=1)
+    await _stream_graph(run_id, version2, Command(resume={"decision": "approved"}), attempt=1, organization_id=org_id)
 
     run = await _load_run_with_executions(run_id)
     assert run.status == "completed", f"Expected completed, got {run.status}"

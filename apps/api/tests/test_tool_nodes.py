@@ -573,9 +573,11 @@ async def test_erp_tool_workflow_runs_through_approval_and_persists_null_cost(cl
     )
 
     # First stream — agent runs, low confidence routes to the approval gate.
+    org_id = uuid.UUID(run_data["organization_id"])
+
     mock, _ = _patched_openai()
     try:
-        await _stream_graph(run_id, version, initial_state, attempt=1)
+        await _stream_graph(run_id, version, initial_state, attempt=1, organization_id=org_id)
     finally:
         mock.stop()
 
@@ -589,7 +591,7 @@ async def test_erp_tool_workflow_runs_through_approval_and_persists_null_cost(cl
     # Resume — approval returns, then the mutating tool node executes.
     from langgraph.types import Command
 
-    await _stream_graph(run_id, version, Command(resume={"decision": "approved"}), attempt=1)
+    await _stream_graph(run_id, version, Command(resume={"decision": "approved"}), attempt=1, organization_id=org_id)
 
     run = await _load_run_with_executions(run_id)
     assert run.status == "completed"

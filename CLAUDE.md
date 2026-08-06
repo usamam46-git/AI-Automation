@@ -76,8 +76,9 @@ verified via a full read-only orientation pass — see note below.)
   tokens_prompt/tokens_completion/cost_usd.
   Real `tool_handler` + the mutating-tool approval guardrail landed 2026-08-04
   (Vol. 2 §7.2, Vol. 4 §4.3) — see the two bullets below.
-  **156 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
-  2026-08-04: 114 pre-existing + 42 new).
+  BYOK OpenAI keys landed 2026-08-06 (Vol. 2 §13) — see the bullet below.
+  **170 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
+  2026-08-06: 156 pre-existing + 14 new).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -108,12 +109,27 @@ verified via a full read-only orientation pass — see note below.)
   zero approvals exist upstream; ∀ would reject Vol. 5 §1 and §5, the blueprint's own
   reference workflows), and **config-embedded `is_mutating`**, which is fail-open on
   a misspelled key. Do not restate the rule as stronger than it is.
+- **BYOK OpenAI keys landed 2026-08-06** (Vol. 2 §13): `integrations` module is
+  now real for one type, `openai_api_key` — `src/modules/integrations/
+  {models,schemas,repository,service,router}.py`, `PUT/GET/DELETE
+  /api/v1/integrations/{integration_type}`. AES-256-GCM at rest
+  (`src/core/encryption.py`), key in `INTEGRATION_ENCRYPTION_KEY` (new secret,
+  separate from `SECRET_KEY`/`JWT_SECRET_KEY`). Wired into execution: `graph_tasks.
+  _resolve_llm_client_factory()` resolves the org's key once per run and binds it
+  via `functools.partial(get_llm_client, api_key_override=...)`, threaded through
+  `_compile_state_graph`/`_bind_node_handler`'s new `client_factory` param — no
+  stored key means the pre-BYOK `settings.OPENAI_API_KEY` fallback is unchanged.
+  `INTEGRATION_READ`/`INTEGRATION_WRITE` are Owner-only (not in Admin's
+  `seed_roles.py` list), matching `BILLING_READ`/`BILLING_WRITE`. No live
+  key-validation call to OpenAI at set-time (deliberate — see apps/api/CLAUDE.md
+  security section); only a structural `sk-` prefix check. Migration:
+  `alembic/versions/20260806_integration_creds.py`.
 - Next: `subgraph` handler, real `tools` module (CRUD + `tool_executions` rows written
-  *before* mutating calls, per Vol. 4 §4.3), BYOK via the integrations module (the
-  `get_llm_client(api_key_override)` seam is already in place), then Builder canvas
-  (React Flow) + Executions UI. The Builder's node config panel must construct the
-  inline agent AND tool config shapes exactly as documented in apps/api/CLAUDE.md —
-  changing either later means a backend + frontend change together.
+  *before* mutating calls, per Vol. 4 §4.3), then Builder canvas (React Flow) +
+  Executions UI, then a Settings UI page for the BYOK endpoints above. The
+  Builder's node config panel must construct the inline agent AND tool config
+  shapes exactly as documented in apps/api/CLAUDE.md — changing either later
+  means a backend + frontend change together.
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list). Builder canvas (React Flow) and Executions
   UI intentionally deferred until the execution layer exists.

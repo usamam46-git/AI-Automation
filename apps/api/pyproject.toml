@@ -31,6 +31,10 @@ python-jose = { version = "^3.3.0", extras = ["cryptography"] }
 passlib = { version = "^1.7.4", extras = ["argon2"] }
 python-multipart = "^0.0.9"   # form-data for OAuth2 flows
 
+# Encryption at rest (integration credentials, Vol. 2 §13) — direct dependency
+# since we use AESGCM directly, not just transitively via python-jose[cryptography]
+cryptography = "^42.0.0"
+
 # Background jobs
 celery = { version = "^5.4.0", extras = ["redis"] }
 redis = { version = "^5.0.4", extras = ["hiredis"] }

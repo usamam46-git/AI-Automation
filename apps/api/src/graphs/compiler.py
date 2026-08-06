@@ -22,6 +22,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
+from src.core.llm_client import LLMClient, get_llm_client
 from src.graphs import cache as graph_cache
 from src.graphs.condition_eval import evaluate_condition
 from src.graphs.node_handlers import (
@@ -83,7 +84,11 @@ def _branch_key(edge: WorkflowEdge, index: int) -> str:
     return edge.target_node_key
 
 
-def _bind_node_handler(node: WorkflowNode) -> Callable[..., dict[str, Any]]:
+def _bind_node_handler(
+    node: WorkflowNode,
+    *,
+    client_factory: Callable[..., LLMClient] = get_llm_client,
+) -> Callable[..., dict[str, Any]]:
     node_type = node.node_type
     node_key = node.node_key
     if node_type == "start":
@@ -100,7 +105,7 @@ def _bind_node_handler(node: WorkflowNode) -> Callable[..., dict[str, Any]]:
         node_config = node.config or {}
 
         def _agent(state: dict[str, Any]) -> dict[str, Any]:
-            return agent_handler(state, node_key=node_key, config=node_config)
+            return agent_handler(state, node_key=node_key, config=node_config, client_factory=client_factory)
 
         return _agent
     if node_type == "tool":
@@ -163,6 +168,7 @@ def _compile_state_graph(
     workflow_version: WorkflowVersion,
     *,
     checkpointer: BaseCheckpointSaver | None = None,
+    client_factory: Callable[..., LLMClient] = get_llm_client,
 ) -> tuple[CompiledStateGraph, CompileStats]:
     if workflow_version.published_at is None:
         raise DraftVersionCompileError(f"Workflow version {workflow_version.id} is a draft; only published versions can be compiled.")
@@ -178,7 +184,7 @@ def _compile_state_graph(
     for node in nodes:
         if node.node_type == CONDITION_NODE_TYPE:
             continue
-        builder.add_node(node.node_key, _bind_node_handler(node))
+        builder.add_node(node.node_key, _bind_node_handler(node, client_factory=client_factory))
         langgraph_nodes += 1
 
     start_nodes = [n for n in nodes if n.node_type == "start"]

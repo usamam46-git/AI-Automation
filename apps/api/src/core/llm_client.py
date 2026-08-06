@@ -289,10 +289,12 @@ class LLMClient:
     Wrapper around OpenAI chat completions with structured outputs.
 
     Args:
-        api_key_override: Use this key instead of settings.OPENAI_API_KEY.
-            Not wired to anything yet — this is the seam for org-level BYOK,
-            which will resolve a per-organization key from the integrations
-            module and pass it here without changing any call site.
+        api_key_override: Use this key instead of settings.OPENAI_API_KEY. Wired
+            from the `integrations` module (Vol. 2 §13): `graph_tasks._stream_graph`
+            resolves a per-organization key, if stored, and binds it here via
+            `functools.partial(get_llm_client, api_key_override=...)` before
+            compiling — see `_resolve_llm_client_factory` in
+            src/workers/graph_tasks.py. None when the org has no stored key.
         max_attempts: Total attempts including the first (Vol. 2 §14 specifies 3).
         retry_base_delay: Seconds for the first backoff; doubles each retry
             (1s, 2s, 4s), mirroring the Celery task backoff in

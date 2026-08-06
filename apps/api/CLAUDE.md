@@ -20,8 +20,9 @@ Each domain module (`src/modules/<name>/`) has exactly: `models.py`,
 `auth`, `organizations`, `workspaces`, `workflows` (includes shell +
 versions/nodes/edges), `agents` (stub), `tools` (stub), `prompts` (stub),
 `knowledge_base` (stub), `chat` (stub), `notifications`, `audit_logs`,
-`billing` (stub), `integrations` (stub), `webhooks` (stub), `settings`
-(stub).
+`billing` (stub), `integrations` (real for one type — BYOK `openai_api_key`,
+see security section below; other integration types remain stub), `webhooks`
+(stub), `settings` (stub).
 
 `src/graphs/` is separate from `src/modules/workflows/` on purpose — it
 holds the LangGraph compiler (`compiler.py`), per-node-type handlers
@@ -55,6 +56,19 @@ and router.
 - Access tokens: short-lived JWT (15 min), never in localStorage. Refresh
   tokens: httpOnly, Secure, SameSite=Strict cookie, rotated on every use.
 - Never log or return raw secrets/API keys in any response.
+- BYOK OpenAI keys (`integrations` module, Vol. 2 §13): encrypted at rest with
+  AES-256-GCM (`src/core/encryption.py`), key from `INTEGRATION_ENCRYPTION_KEY`
+  (separate secret from `SECRET_KEY`/`JWT_SECRET_KEY`, required, no default).
+  `IntegrationStatusResponse` only ever exposes `last_four` — there is no
+  code path that decrypts and returns the raw key over HTTP, even to the
+  owning org. `INTEGRATION_READ`/`INTEGRATION_WRITE` are Owner-only (not
+  granted to Admin in `seed_roles.py`), same reasoning as `BILLING_READ`/
+  `BILLING_WRITE`: a stored key is a direct billing-exposure lever. Wired
+  into execution via `LLMClient.api_key_override` — see the docstring on
+  that parameter and `_resolve_llm_client_factory` in
+  `src/workers/graph_tasks.py`. No live validation call to OpenAI at
+  set-time (would put a third-party network dependency on a write
+  endpoint) — only structural checks (`sk-` prefix).
 - Any node with `is_mutating: true` in its `config` (ERP writes, payments) must
   sit downstream of a `human_approval` node (Vol. 4 §4.3). **ENFORCED** by
   `validate_mutating_approval()` in `src/modules/workflows/service.py`, which

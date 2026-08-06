@@ -149,8 +149,9 @@ def agent_handler(
     returns, but polluting `node_outputs` would leak bookkeeping into the
     condition-DSL-addressable surface.
 
-    `client_factory` is injectable purely so tests can supply a fake without
-    patching module globals. BYOK will later pass an org key through it.
+    `client_factory` is injectable so tests can supply a fake without patching
+    module globals, and so `_compile_state_graph`/`_bind_node_handler` can bind
+    a per-organization key here (Vol. 2 §13 BYOK) without changing this signature.
 
     Note: a single fixed model call. Escalating to a stronger model on low
     confidence (Vol. 4 §11.1) is deliberately not implemented here.

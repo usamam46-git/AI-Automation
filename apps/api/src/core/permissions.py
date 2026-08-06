@@ -36,6 +36,12 @@ ORG_DELETE = "org:delete"
 MEMBER_INVITE = "member:invite"
 MEMBER_REMOVE = "member:remove"
 
+# Integration permissions — Owner-only (not granted to Admin in seed_roles.py),
+# same reasoning as BILLING_READ/BILLING_WRITE: a stored BYOK key is a direct
+# billing-exposure lever for the org, not an ordinary content-editing concern.
+INTEGRATION_READ = "integration:read"
+INTEGRATION_WRITE = "integration:write"
+
 
 def permission_granted(permissions: list[str], required: str) -> bool:
     """Return True if the role's permission list grants the required permission."""

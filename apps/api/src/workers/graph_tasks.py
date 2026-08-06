@@ -26,9 +26,11 @@ Idempotency:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,7 +40,7 @@ from langgraph.types import Command
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from src.core.llm_client import LLMConfigurationError, LLMTransientError
+from src.core.llm_client import LLMClient, LLMConfigurationError, LLMTransientError, get_llm_client
 from src.db.database import async_session_maker
 from src.graphs.compiler import (
     DraftVersionCompileError,
@@ -54,6 +56,7 @@ from src.graphs.node_handlers import (
     ToolNodeConfigError,
 )
 from src.modules.executions.models import NodeExecution, WorkflowRun
+from src.modules.integrations.service import IntegrationService
 from src.modules.workflows.models import WorkflowVersion
 from src.workers.celery_app import celery_app
 from src.workers.postgres_saver import PostgresSaver
@@ -230,18 +233,31 @@ async def _mark_failed(run_id: uuid.UUID, error_detail: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_llm_client_factory(organization_id: uuid.UUID) -> Callable[..., LLMClient]:
+    """
+    BYOK seam (Vol. 2 §13): resolve the org's stored OpenAI key, if any, and bind
+    it as `api_key_override`. When no key is stored, `api_key_override=None`
+    reproduces the pre-BYOK fallback to settings.OPENAI_API_KEY exactly.
+    """
+    async with async_session_maker() as session:
+        api_key = await IntegrationService(session).get_decrypted_openai_key(organization_id)
+    return functools.partial(get_llm_client, api_key_override=api_key)
+
+
 async def _stream_graph(
     run_id: uuid.UUID,
     version: WorkflowVersion,
     stream_input: dict[str, Any] | Command,
     attempt: int,
+    organization_id: uuid.UUID,
 ) -> None:
     """
     Compile the graph (fresh, with PostgresSaver), stream it to completion or
     interrupt, write NodeExecution rows after each superstep.
     """
     saver = PostgresSaver(async_session_maker)
-    compiled, _ = _compile_state_graph(version, checkpointer=saver)
+    client_factory = await _resolve_llm_client_factory(organization_id)
+    compiled, _ = _compile_state_graph(version, checkpointer=saver, client_factory=client_factory)
 
     config = {"configurable": {"thread_id": str(run_id)}}
 
@@ -358,7 +374,7 @@ async def _execute_workflow_async(run_id: uuid.UUID, attempt: int) -> None:
         run_id=str(run_id),
     )
 
-    await _stream_graph(run_id, version, initial_state, attempt)
+    await _stream_graph(run_id, version, initial_state, attempt, run.organization_id)
 
 
 @celery_app.task(
@@ -410,4 +426,4 @@ async def _resume_workflow_async(
         logger.info("Skipping resume_workflow for run=%s (status=%s)", run_id, run.status)
         return
 
-    await _stream_graph(run_id, version, Command(resume=resume_payload), attempt)
+    await _stream_graph(run_id, version, Command(resume=resume_payload), attempt, run.organization_id)
