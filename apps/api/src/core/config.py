@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     DEBUG: bool = Field(default=False)
     SECRET_KEY: str = Field(...)  # General secret
     JWT_SECRET_KEY: str = Field(...)  # used for JWT signing — must be set
-    INTEGRATION_ENCRYPTION_KEY: str = Field(...)  # base64-encoded 32-byte AES-256-GCM key for integration credentials (Vol. 2 §13) — distinct from SECRET_KEY/JWT_SECRET_KEY on purpose
+    INTEGRATION_ENCRYPTION_KEY: str = Field(
+        ...
+    )  # base64-encoded 32-byte AES-256-GCM key for integration credentials (Vol. 2 §13) — distinct from SECRET_KEY/JWT_SECRET_KEY on purpose
 
     # ------------------------------------------------------------------
     # Database

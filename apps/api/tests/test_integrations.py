@@ -57,9 +57,11 @@ def test_decrypt_rejects_tampered_blob():
 async def test_set_key_encrypts_before_storing():
     mock_db = AsyncMock()
     service = IntegrationService(mock_db)
-    service.repository.upsert = AsyncMock(side_effect=lambda org_id, type_, name, credentials, last_four: Integration(
-        organization_id=org_id, type=type_, name=name, credentials=credentials, last_four=last_four
-    ))
+    service.repository.upsert = AsyncMock(
+        side_effect=lambda org_id, type_, name, credentials, last_four: Integration(
+            organization_id=org_id, type=type_, name=name, credentials=credentials, last_four=last_four
+        )
+    )
 
     org_id = uuid.uuid4()
     result = await service.set_key(org_id, "openai_api_key", "sk-abcd1234")

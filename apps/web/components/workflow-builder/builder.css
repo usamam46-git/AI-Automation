@@ -1,0 +1,78 @@
+/*
+ * React Flow theming. Non-optional: the stock stylesheet ships light-mode,
+ * blue-tinted-slate defaults that clash badly with the true-black dark theme.
+ * Every --xy-* variable below is mapped onto a design token so the canvas
+ * follows light/dark automatically without a colorMode prop.
+ */
+
+.builder-canvas {
+  --xy-background-color: var(--background);
+  --xy-background-pattern-color: var(--border);
+
+  --xy-edge-stroke: var(--muted-foreground);
+  --xy-edge-stroke-selected: var(--foreground);
+  --xy-edge-stroke-width: 1.5;
+  --xy-edge-label-background-color: var(--card);
+  --xy-edge-label-color: var(--foreground);
+  --xy-connectionline-stroke: var(--muted-foreground);
+  --xy-connectionline-stroke-width: 1.5;
+
+  --xy-handle-background-color: var(--background);
+  --xy-handle-border-color: var(--muted-foreground);
+
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--accent);
+  --xy-controls-button-color: var(--muted-foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.08);
+
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: color-mix(in oklab, var(--background) 65%, transparent);
+  --xy-minimap-mask-stroke-color: var(--border);
+  --xy-minimap-node-background-color: var(--muted-foreground);
+  --xy-minimap-node-stroke-color: transparent;
+
+  --xy-selection-background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --xy-selection-border: 1px dashed var(--muted-foreground);
+  --xy-attribution-background-color: transparent;
+}
+
+/* Stock handles are 6px dots that are hard to grab; nudge to a comfortable
+   target and pull them clear of the node's rounded border. */
+.builder-canvas .react-flow__handle {
+  width: 9px;
+  height: 9px;
+  border-width: 1.5px;
+}
+
+.builder-canvas .react-flow__handle-top {
+  top: -5px;
+}
+
+.builder-canvas .react-flow__handle-bottom {
+  bottom: -5px;
+}
+
+.builder-canvas .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.builder-canvas .react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.builder-canvas .react-flow__attribution {
+  padding: 0 4px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  opacity: 0.45;
+}
+
+.builder-canvas .react-flow__attribution a {
+  color: inherit;
+}

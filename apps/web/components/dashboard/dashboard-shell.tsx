@@ -52,7 +52,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     if (!currentWorkspaceId && currentWorkspace) setCurrentWorkspaceId(currentWorkspace.id);
   }, [currentWorkspace, currentWorkspaceId, setCurrentWorkspaceId]);
 
-  const title = pathname.includes("workspaces") ? "Workspaces" : "Workflows";
+  const activeNavItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  const title = activeNavItem?.label ?? "Workflows";
 
   async function logout() {
     try {
@@ -101,7 +102,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <nav className="flex flex-1 flex-col gap-1 p-3">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const active = pathname === item.href;
+            const active = item.href === activeNavItem?.href;
             return (
               <Link key={item.href} href={item.href} className={cn("flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent", active && "bg-sidebar-accent font-medium")}>
                 <Icon className="size-4" />{item.label}

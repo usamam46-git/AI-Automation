@@ -5,5 +5,8 @@
       "Bash(poetry run:*)",
       "Bash(1:*)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "magic"
+  ]
 }

@@ -58,6 +58,90 @@ export type WorkflowPayload = {
   trigger_config?: Record<string, unknown> | null;
 };
 
+// --- Workflow graph (versions / nodes / edges) ---------------------------
+// Mirrors apps/api/src/modules/workflows/schemas.py. There is no `trigger`
+// node type — `Workflow.trigger_type` is a field on the shell, not a node.
+export type NodeType = "agent" | "tool" | "condition" | "human_approval" | "subgraph" | "start" | "end";
+
+// Exactly the operators in apps/api/src/graphs/condition_eval.py.
+export type ConditionOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "contains";
+
+export type EdgeCondition = {
+  field: string;
+  operator: ConditionOperator;
+  value: unknown;
+  branch?: string | null;
+};
+
+export type NodeInput = {
+  node_key: string;
+  node_type: NodeType;
+  config: Record<string, unknown>;
+  position_x: number;
+  position_y: number;
+};
+
+export type EdgeInput = {
+  source_node_key: string;
+  target_node_key: string;
+  condition: Record<string, unknown> | null;
+};
+
+export type WorkflowNode = {
+  id: string;
+  node_key: string;
+  node_type: NodeType;
+  config: Record<string, unknown> | null;
+  position_x: number | null;
+  position_y: number | null;
+};
+
+export type WorkflowEdge = {
+  id: string;
+  source_node_key: string;
+  target_node_key: string;
+  condition: Record<string, unknown> | null;
+};
+
+export type WorkflowVersion = {
+  id: string;
+  workflow_id: string;
+  version_number: number;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  published_by: string | null;
+  published_at: string | null;
+  created_at: string;
+};
+
+export type WorkflowVersionSummary = {
+  id: string;
+  version_number: number;
+  published_at: string | null;
+  node_count: number;
+  edge_count: number;
+};
+
+export type WorkflowVersionPayload = {
+  nodes: NodeInput[];
+  edges: EdgeInput[];
+};
+
+export type WorkflowRunStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "rejected";
+
+export type WorkflowRun = {
+  id: string;
+  workflow_version_id: string;
+  organization_id: string;
+  status: WorkflowRunStatus;
+  current_node_key: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  total_cost_usd: number | null;
+  error: Record<string, unknown> | null;
+  created_at: string;
+};
+
 export const authApi = {
   async login(payload: LoginPayload) {
     const { data } = await apiClient.post<TokenResponse>("/auth/login", payload);
@@ -110,5 +194,37 @@ export const workflowsApi = {
   },
   async archive(workflowId: string) {
     await apiClient.delete(`/workflows/${workflowId}`);
+  },
+  async get(workflowId: string) {
+    const { data } = await apiClient.get<Workflow>(`/workflows/${workflowId}`);
+    return data;
+  },
+  async listVersions(workflowId: string) {
+    const { data } = await apiClient.get<WorkflowVersionSummary[]>(`/workflows/${workflowId}/versions`);
+    return data;
+  },
+  async getVersion(workflowId: string, versionId: string) {
+    const { data } = await apiClient.get<WorkflowVersion>(`/workflows/${workflowId}/versions/${versionId}`);
+    return data;
+  },
+  // Fully replaces the draft's node/edge rows — there is no delta/patch path.
+  // Creates version N+1 when the latest version is already published.
+  async saveVersion(workflowId: string, payload: WorkflowVersionPayload) {
+    const { data } = await apiClient.post<WorkflowVersion>(`/workflows/${workflowId}/versions`, payload);
+    return data;
+  },
+  async publishVersion(workflowId: string, versionId: string) {
+    const { data } = await apiClient.post<WorkflowVersion>(`/workflows/${workflowId}/versions/${versionId}/publish`);
+    return data;
+  },
+};
+
+export const executionsApi = {
+  // 422s when the workflow has no published version — see ExecutionService.trigger_run.
+  async triggerRun(workflowId: string, payload: { trigger_payload?: Record<string, unknown> | null } = {}) {
+    const { data } = await apiClient.post<WorkflowRun>(`/workflows/${workflowId}/run`, {
+      trigger_payload: payload.trigger_payload ?? null,
+    });
+    return data;
   },
 };

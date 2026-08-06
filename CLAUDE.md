@@ -77,8 +77,10 @@ verified via a full read-only orientation pass — see note below.)
   Real `tool_handler` + the mutating-tool approval guardrail landed 2026-08-04
   (Vol. 2 §7.2, Vol. 4 §4.3) — see the two bullets below.
   BYOK OpenAI keys landed 2026-08-06 (Vol. 2 §13) — see the bullet below.
-  **170 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
-  2026-08-06: 156 pre-existing + 14 new).
+  Draft/publish validation split landed 2026-08-06 as Phase 0 of the Builder
+  canvas work — see the bullet below.
+  **181 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
+  2026-08-06: 156 + 14 BYOK + 11 validation-split).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -124,16 +126,47 @@ verified via a full read-only orientation pass — see note below.)
   key-validation call to OpenAI at set-time (deliberate — see apps/api/CLAUDE.md
   security section); only a structural `sk-` prefix check. Migration:
   `alembic/versions/20260806_integration_creds.py`.
+- **Draft/publish validation split landed 2026-08-06** (Phase 0 of the Builder canvas):
+  `save_draft` now calls the new lenient `validate_draft_structure()` (duplicate
+  `node_key` + edges referencing a missing key only); start/end presence, orphans and
+  cycles are publish-only, joining `validate_mutating_approval` under the same rationale
+  its docstring already gave. Required because the canvas autosaves mid-construction and
+  every intermediate graph violates a shape rule. Also fixed a live **HTTP 500** in
+  `validate_graph_structure`: `orphan_keys` was initialised inside the `for edge in edges`
+  loop, so an edgeless graph (drop a start + an end, don't connect them yet) raised
+  `UnboundLocalError`. See apps/api/CLAUDE.md's security section for the full rule.
+- **Builder canvas landed 2026-08-06** (Vol. 3 §4) — all four phases, built by hand
+  with shadcn/ui on the existing oklch tokens. The 21st.dev MCP was dropped: it is
+  configured in `.mcp.json` but never authenticated, and nothing needed it.
+  Route `apps/web/app/(dashboard)/workflows/[workflowId]/builder/page.tsx`;
+  `lib/{node-catalog,graph-mapping,graph-validation,output-schema}.ts`;
+  `hooks/use-workflow-autosave.ts`; `stores/workflow-builder-store.ts`;
+  `components/workflow-builder/*` (canvas, toolbar, palette, node card, config panel
+  and its five forms, three reusable editors, `builder.css`).
+  Working end to end: drag/drop, connect, delete, per-type config forms, inline
+  validation, 800ms debounced autosave, publish, and Test Run. Also enabled the
+  previously-disabled "Open Builder" button and fixed the shell's nav active-match
+  (`startsWith`) for nested routes.
+  **32 frontend tests pass** (`npm test` from `apps/web/` — vitest over the pure `lib/`
+  modules only; canvas interaction and theming are manual-verification by design).
+  `npm run build`, `tsc --noEmit` and `eslint` are clean.
+  **Not yet verified in a browser** — the canvas has not been seen rendering in either
+  theme, and no workflow has been built through the UI end to end. That is the next
+  thing to do, and the React Flow stock-CSS override is the specific risk.
+  Three contracts to know before touching it, all detailed in apps/web/CLAUDE.md:
+  React Flow node `id` **is** `node_key`; `lib/graph-validation.ts` duplicates all seven
+  backend rules in TypeScript (∃-semantics on the mutating-approval walk — do not
+  tighten to ∀); and the config forms construct the inline agent/tool shapes exactly as
+  `_agent_config`/`_tool_config` accept them, so changing either side means changing both.
 - Next: `subgraph` handler, real `tools` module (CRUD + `tool_executions` rows written
-  *before* mutating calls, per Vol. 4 §4.3), then Builder canvas (React Flow) +
-  Executions UI, then a Settings UI page for the BYOK endpoints above. The
-  Builder's node config panel must construct the inline agent AND tool config
-  shapes exactly as documented in apps/api/CLAUDE.md — changing either later
-  means a backend + frontend change together.
+  *before* mutating calls, per Vol. 4 §4.3), Executions UI, and a Settings UI page for
+  the BYOK endpoints above.
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
-  workspaces, workflows list). Builder canvas (React Flow) and Executions
-  UI intentionally deferred until the execution layer exists.
-  `app/(marketing)/` referenced in apps/web/CLAUDE.md does not exist yet.
+  workspaces, workflows list) plus the builder canvas scaffold (see above).
+  Executions UI still intentionally deferred. `app/(marketing)/` referenced
+  in apps/web/CLAUDE.md does not exist yet. `apps/web` has **no test
+  infrastructure** — vitest for the pure `lib/` modules is proposed in the
+  plan, not yet added.
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with
 that exact casing (not `claude.md`) — a lowercase filename will silently

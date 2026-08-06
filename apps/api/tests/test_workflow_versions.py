@@ -15,7 +15,12 @@ from httpx import AsyncClient
 from test_workflows import create_workflow, create_workspace, register_and_get_token
 
 from src.modules.workflows.schemas import EdgeInput, NodeInput, NodeType
-from src.modules.workflows.service import GraphValidationError, validate_graph_structure, validate_mutating_approval
+from src.modules.workflows.service import (
+    GraphValidationError,
+    validate_draft_structure,
+    validate_graph_structure,
+    validate_mutating_approval,
+)
 
 # ---------------------------------------------------------------------------
 # Graph fixtures
@@ -116,6 +121,85 @@ def test_validate_graph_structure_cycle_detected():
     with pytest.raises(GraphValidationError) as exc:
         validate_graph_structure(nodes, edges)
     assert "Cycle detected" in str(exc.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — draft-safe validation (the Builder canvas autosaves mid-construction)
+# ---------------------------------------------------------------------------
+
+
+def _n(key: str, node_type: NodeType) -> NodeInput:
+    return NodeInput(node_key=key, node_type=node_type, config={}, position_x=0, position_y=0)
+
+
+# Every intermediate state a canvas passes through while a graph is being drawn.
+# Each of these violates a *shape* rule and must still be persistable as a draft.
+@pytest.mark.parametrize(
+    ("label", "nodes", "edges"),
+    [
+        ("empty canvas", [], []),
+        ("one agent node dropped", [_n("agent_1", NodeType.agent)], []),
+        ("start and end dropped, not yet connected", [_n("start", NodeType.start), _n("end", NodeType.end)], []),
+        (
+            "start to agent, no end yet",
+            [_n("start", NodeType.start), _n("agent_1", NodeType.agent)],
+            [EdgeInput(source_node_key="start", target_node_key="agent_1")],
+        ),
+        (
+            "connected pair plus an unattached node",
+            [_n("start", NodeType.start), _n("end", NodeType.end), _n("agent_1", NodeType.agent)],
+            [EdgeInput(source_node_key="start", target_node_key="end")],
+        ),
+        (
+            "a cycle mid-rewire",
+            [_n("start", NodeType.start), _n("a", NodeType.agent), _n("b", NodeType.agent), _n("end", NodeType.end)],
+            [
+                EdgeInput(source_node_key="start", target_node_key="a"),
+                EdgeInput(source_node_key="a", target_node_key="b"),
+                EdgeInput(source_node_key="b", target_node_key="a"),
+                EdgeInput(source_node_key="b", target_node_key="end"),
+            ],
+        ),
+    ],
+)
+def test_validate_draft_structure_allows_partial_graphs(label: str, nodes: list[NodeInput], edges: list[EdgeInput]):
+    validate_draft_structure(nodes, edges)  # must not raise
+    # Sanity: each of these is genuinely rejected by the strict publish-time rules, so
+    # the parametrize list can't silently rot into a set of already-valid graphs and
+    # stop proving anything about the split.
+    with pytest.raises(GraphValidationError):
+        validate_graph_structure(nodes, edges)
+
+
+def test_validate_draft_structure_rejects_duplicate_node_key():
+    """node_key is the identity edges reference — duplicates make the graph ambiguous."""
+    nodes = [_n("start", NodeType.start), _n("agent_1", NodeType.agent), _n("agent_1", NodeType.tool)]
+    with pytest.raises(GraphValidationError) as exc:
+        validate_draft_structure(nodes, [])
+    assert "Duplicate node_key" in str(exc.value.detail)
+    assert "agent_1" in str(exc.value.detail)
+
+
+def test_validate_draft_structure_rejects_edge_to_nonexistent_node():
+    nodes = [_n("start", NodeType.start)]
+    edges = [EdgeInput(source_node_key="start", target_node_key="ghost")]
+    with pytest.raises(GraphValidationError) as exc:
+        validate_draft_structure(nodes, edges)
+    detail = exc.value.detail
+    assert isinstance(detail, dict)
+    assert detail["invalid_edges"][0]["target_node_key"] == "ghost"
+
+
+def test_validate_graph_structure_start_and_end_with_no_edges_is_a_validation_error_not_a_crash():
+    """
+    Regression: `orphan_keys` used to be initialised inside the `for edge in edges` loop,
+    so an edgeless graph raised UnboundLocalError and the endpoint returned 500 instead
+    of 422. Dropping a start and an end node before connecting them hits this exactly.
+    """
+    nodes = [_n("start", NodeType.start), _n("end", NodeType.end)]
+    with pytest.raises(GraphValidationError) as exc:
+        validate_graph_structure(nodes, [])
+    assert "Orphan nodes" in str(exc.value.detail)
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +635,61 @@ async def test_approved_mutating_graph_publishes(client: AsyncClient):
     published = await client.post(f"/api/v1/workflows/{workflow_id}/versions/{version_id}/publish", headers=headers)
     assert published.status_code == status.HTTP_200_OK, published.text
     assert published.json()["published_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Integration — structural rules moved to publish, so the Builder can autosave
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_incomplete_graph_saves_as_draft_then_publishes_once_completed(client: AsyncClient):
+    """
+    The Builder autosave path end to end. A graph is saved at three stages of
+    construction — each rejected by the strict publish rules — and only the finished
+    graph publishes. Before the draft/publish validation split, the very first save
+    returned 500 (edgeless graph -> UnboundLocalError) and the second 422.
+    """
+    incomplete = [_n("start", NodeType.start), _n("end", NodeType.end)]
+    headers, workflow_id, saved = await _save_draft(client, "V-PARTIAL", incomplete, [])
+    assert saved.status_code == status.HTTP_201_CREATED, saved.text
+    version_id = saved.json()["id"]
+
+    # Publishing the same incomplete graph is still refused, naming both orphans.
+    refused = await client.post(f"/api/v1/workflows/{workflow_id}/versions/{version_id}/publish", headers=headers)
+    assert refused.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert "Orphan nodes" in str(refused.json()["detail"])
+
+    # Author drops an agent but has only wired the first edge — still saves.
+    partial_nodes = [_n("start", NodeType.start), _n("agent_1", NodeType.agent), _n("end", NodeType.end)]
+    partial_edges = [EdgeInput(source_node_key="start", target_node_key="agent_1")]
+    mid = await client.post(
+        f"/api/v1/workflows/{workflow_id}/versions",
+        json=graph_payload(partial_nodes, partial_edges),
+        headers=headers,
+    )
+    assert mid.status_code == status.HTTP_201_CREATED, mid.text
+    assert mid.json()["id"] == version_id  # replaced the same draft, no version churn
+
+    # Final edge connected — now it publishes.
+    complete_edges = [*partial_edges, EdgeInput(source_node_key="agent_1", target_node_key="end")]
+    final = await client.post(
+        f"/api/v1/workflows/{workflow_id}/versions",
+        json=graph_payload(partial_nodes, complete_edges),
+        headers=headers,
+    )
+    assert final.status_code == status.HTTP_201_CREATED, final.text
+
+    published = await client.post(f"/api/v1/workflows/{workflow_id}/versions/{version_id}/publish", headers=headers)
+    assert published.status_code == status.HTTP_200_OK, published.text
+    assert published.json()["published_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_draft_save_still_rejects_duplicate_node_key(client: AsyncClient):
+    """The data-integrity half of the split is NOT relaxed — this must stay a 422 at save."""
+    nodes = [_n("start", NodeType.start), _n("dupe", NodeType.agent), _n("dupe", NodeType.tool)]
+    _headers, _workflow_id, saved = await _save_draft(client, "V-DUPE", nodes, [])
+
+    assert saved.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, saved.text
+    assert "Duplicate node_key" in str(saved.json()["detail"])

@@ -4,6 +4,12 @@
 !.env.example
 !.env.template
 
+# MCP server config — holds a live 21st.dev API_KEY inline.
+# To share this with the team instead, replace the literal key with "${MAGIC_API_KEY}"
+# (Claude Code expands env vars in .mcp.json), keep the real value in .env, and
+# un-ignore this file.
+.mcp.json
+
 # Python
 __pycache__/
 *.py[cod]

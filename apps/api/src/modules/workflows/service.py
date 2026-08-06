@@ -7,7 +7,11 @@ Critical business rules:
 2. Workflow status "published" is set only by publish_version — not via PATCH.
 3. Soft-delete (archive) is the only deletion path — never hard-delete.
 4. Published workflow versions are immutable — any mutation attempt returns 409.
-5. Graph structural validation runs at save and publish time (not at execution).
+5. Graph validation is split by intent, never run at execution time: save_draft
+   enforces data integrity only (validate_draft_structure), while publish_version
+   adds the full shape rules (validate_graph_structure) plus the mutating-tool
+   approval guardrail (validate_mutating_approval). A draft is allowed to be an
+   unfinished graph; a published version is not.
 """
 
 import uuid
@@ -52,16 +56,23 @@ class GraphValidationError(Exception):
         super().__init__(str(detail))
 
 
-def validate_graph_structure(nodes: list[NodeInput], edges: list[EdgeInput]) -> None:
+def validate_draft_structure(nodes: list[NodeInput], edges: list[EdgeInput]) -> None:
     """
-    Validate graph structure before persisting.
+    Data-integrity-only validation — safe to run against a half-built graph (save_draft).
 
-    Checks:
-    - Unique node_key values
-    - Edge endpoints reference existing nodes
-    - At least one start and one end node
-    - No orphan nodes (every non-start has incoming, every non-end has outgoing)
-    - No cycles (loop support deferred to compiler phase)
+    Deliberately excludes the *shape* rules that `validate_graph_structure` adds
+    (start/end presence, orphans, cycles). The Builder canvas autosaves after every
+    node drop and edge connection, and every intermediate state of a graph under
+    construction violates at least one of them: a single dropped node has no start,
+    a connected pair has no end, an unattached node is an orphan. Enforcing them here
+    would mean a draft is only persistable once it is already complete — an author who
+    dropped four nodes and closed the tab would lose all four.
+
+    Same reasoning, and the same publish-time-only placement, as
+    `validate_mutating_approval` below. What stays here are the two rules that would
+    corrupt storage rather than merely describe an unfinished graph: `node_key` is the
+    identity edges reference, so duplicates make the graph ambiguous, and an edge
+    pointing at a nonexistent key cannot be stored coherently.
     """
     node_keys = [node.node_key for node in nodes]
     seen_keys: set[str] = set()
@@ -98,6 +109,22 @@ def validate_graph_structure(nodes: list[NodeInput], edges: list[EdgeInput]) -> 
             }
         )
 
+
+def validate_graph_structure(nodes: list[NodeInput], edges: list[EdgeInput]) -> None:
+    """
+    Full structural validation — publish-time only (see `validate_draft_structure`).
+
+    Checks:
+    - Unique node_key values                    (via validate_draft_structure)
+    - Edge endpoints reference existing nodes   (via validate_draft_structure)
+    - At least one start and one end node
+    - No orphan nodes (every non-start has incoming, every non-end has outgoing)
+    - No cycles (loop support deferred to compiler phase)
+    """
+    validate_draft_structure(nodes, edges)
+
+    node_key_set = {node.node_key for node in nodes}
+
     start_nodes = [node.node_key for node in nodes if _node_type_str(node.node_type) == NodeType.start.value]
     end_nodes = [node.node_key for node in nodes if _node_type_str(node.node_type) == NodeType.end.value]
 
@@ -112,17 +139,20 @@ def validate_graph_structure(nodes: list[NodeInput], edges: list[EdgeInput]) -> 
         outgoing[edge.source_node_key] += 1
         incoming[edge.target_node_key] += 1
 
-        orphan_keys: list[str] = []
-        for node in nodes:
-            node_type = _node_type_str(node.node_type)
-            if (
-                node_type != NodeType.start.value
-                and incoming[node.node_key] == 0
-                or node_type != NodeType.end.value
-                and outgoing[node.node_key] == 0
-                and node.node_key not in orphan_keys
-            ):
-                orphan_keys.append(node.node_key)
+    # Scanned once, after the full edge tally — not inside the loop above. Previously
+    # `orphan_keys` was initialised inside `for edge in edges`, which left it unbound when
+    # `edges` was empty: a graph of just start+end raised UnboundLocalError, so the
+    # endpoint returned 500 instead of a validation error. It also redid the whole scan on
+    # every edge iteration against partial counts, with only the final pass surviving —
+    # same answer, wasted work. The `not in orphan_keys` guard additionally bound to only
+    # one arm of the `or`; it was dead either way, since each node is visited once.
+    orphan_keys: list[str] = []
+    for node in nodes:
+        node_type = _node_type_str(node.node_type)
+        missing_incoming = node_type != NodeType.start.value and incoming[node.node_key] == 0
+        missing_outgoing = node_type != NodeType.end.value and outgoing[node.node_key] == 0
+        if (missing_incoming or missing_outgoing) and node.node_key not in orphan_keys:
+            orphan_keys.append(node.node_key)
     if orphan_keys:
         raise GraphValidationError(f"Orphan nodes detected (missing required edges): {sorted(orphan_keys)}")
 
@@ -369,8 +399,10 @@ class WorkflowService:
     ) -> WorkflowVersionResponse:
         await self.get_workflow(organization_id, workflow_id)
 
+        # Draft-safe subset only — the Builder canvas autosaves mid-construction, and
+        # the shape rules are deferred to publish_version. See validate_draft_structure.
         try:
-            validate_graph_structure(data.nodes, data.edges)
+            validate_draft_structure(data.nodes, data.edges)
         except GraphValidationError as exc:
             self._raise_validation_error(exc)
 

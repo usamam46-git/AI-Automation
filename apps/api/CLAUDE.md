@@ -69,6 +69,17 @@ and router.
   `src/workers/graph_tasks.py`. No live validation call to OpenAI at
   set-time (would put a third-party network dependency on a write
   endpoint) — only structural checks (`sk-` prefix).
+- Graph validation is **split by intent** — don't collapse these back together:
+  `save_draft` calls `validate_draft_structure()` (duplicate `node_key`, edges
+  referencing a missing `node_key` — the two rules that would corrupt storage),
+  while `publish_version` calls the full `validate_graph_structure()` (adds
+  start/end presence, orphans, cycles) plus `validate_mutating_approval()`. A
+  draft is *allowed* to be an unfinished graph: the Builder canvas autosaves
+  after every node drop, and every intermediate state violates at least one
+  shape rule. The compiler is unaffected — it only compiles versions with
+  `published_at` set. `test_validate_draft_structure_allows_partial_graphs`
+  pins both halves (each parametrized case must save AND must fail strict
+  validation, so the list can't rot into already-valid graphs).
 - Any node with `is_mutating: true` in its `config` (ERP writes, payments) must
   sit downstream of a `human_approval` node (Vol. 4 §4.3). **ENFORCED** by
   `validate_mutating_approval()` in `src/modules/workflows/service.py`, which
