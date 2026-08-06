@@ -140,4 +140,4 @@ Connect to the database using your favorite client (DBeaver, pgAdmin, VS Code SQ
 
 ---
 
-*This repository is actively being built. Workflows now execute end-to-end: an agent node extracts structured data with an LLM, a condition routes on it, a human approves, and a tool writes to an external system — with cost, tokens, and a per-node audit trail persisted throughout. Next phases: the Visual Builder Canvas (React Flow) + Executions UI on the frontend, the `subgraph` handler and a real `tools` module on the backend, and BYOK for per-organization API keys.*
+*This repository is actively being built. Workflows now execute end-to-end: an agent node extracts structured data with an LLM, a condition routes on it, a human approves, and a tool writes to an external system — with cost, tokens, and a per-node audit trail persisted throughout. Next phases: the Visual Builder Canvas (React Flow) + Executions UI on the frontend, the `subgraph` handler and a real `tools` module on the backend, and BYOK for per-organization API keys*
