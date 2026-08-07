@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ChevronDown, FolderKanban, LayoutGrid, LogOut, Plus, Workflow } from "lucide-react";
+import { Activity, Bot, ChevronDown, FolderKanban, LayoutGrid, LogOut, Plus, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,8 +18,12 @@ import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 import { useAuthStore } from "@/stores/auth-store";
 
+// activeNavItem below uses `find` on a startsWith match, so the FIRST matching
+// entry wins. Every href here must be a distinct top-level segment — a nested
+// route like /workflows/x/executions would be swallowed by /workflows.
 const navItems = [
   { label: "Workflows", href: "/workflows", icon: Workflow },
+  { label: "Executions", href: "/executions", icon: Activity },
   { label: "Workspaces", href: "/workspaces", icon: LayoutGrid },
 ];
 

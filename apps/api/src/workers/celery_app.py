@@ -12,6 +12,7 @@ respective modules exist.
 
 from celery import Celery
 
+import src.db.all_models  # noqa: F401 — registers every ORM mapper; see module docstring
 from src.core.config import settings
 
 celery_app = Celery(
@@ -20,6 +21,13 @@ celery_app = Celery(
     # Result backend disabled per Decision 10 — run state lives in
     # workflow_runs / node_executions, not Celery's result store.
     backend=None,
+    # Required: `celery -A src.workers.celery_app worker` imports THIS module
+    # only. Without an explicit include the task registry is empty, the worker
+    # boots clean, and then discards every job with "Received unregistered task
+    # of type ...". The test suite cannot catch that — it bypasses the broker
+    # and awaits _stream_graph() directly — so this is only ever visible when a
+    # run triggered from the UI sits at `pending` forever.
+    include=["src.workers.graph_tasks"],
 )
 
 celery_app.conf.update(

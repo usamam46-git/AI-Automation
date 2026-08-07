@@ -1,14 +1,20 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { Loader2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useTriggerRun } from "@/components/workflows/use-trigger-run";
 import { type Workflow } from "@/lib/api";
 
 export function WorkflowDetailDialog({ workflow, open, onOpenChange, workspaceName }: { workflow: Workflow | null; open: boolean; onOpenChange: (open: boolean) => void; workspaceName?: string }) {
   const router = useRouter();
+  const triggerRun = useTriggerRun();
   if (!workflow) return null;
+
+  const canRun = Boolean(workflow.current_version_id);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -26,7 +32,16 @@ export function WorkflowDetailDialog({ workflow, open, onOpenChange, workspaceNa
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => router.push(`/workflows/${workflow.id}/builder`)}>Open Builder</Button>
-          <Button onClick={() => onOpenChange(false)}>Done</Button>
+          {canRun ? (
+            <Button onClick={() => triggerRun.mutate(workflow.id)} disabled={triggerRun.isPending}>
+              {triggerRun.isPending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}Run now
+            </Button>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild><span tabIndex={0}><Button disabled><Play className="size-4" />Run now</Button></span></TooltipTrigger>
+              <TooltipContent>Publish a version before running this workflow.</TooltipContent>
+            </Tooltip>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

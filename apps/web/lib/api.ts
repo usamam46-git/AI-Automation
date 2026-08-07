@@ -127,20 +127,71 @@ export type WorkflowVersionPayload = {
   edges: EdgeInput[];
 };
 
-export type WorkflowRunStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "rejected";
+// --- Executions -----------------------------------------------------------
+// Mirrors apps/api/src/modules/executions/schemas.py.
+
+export type WorkflowRunStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled" | "rejected";
+
+export type NodeExecutionStatus = "succeeded" | "failed" | "skipped";
+
+// Append-only: every retry writes a NEW row, so one node_key can appear
+// several times with a rising `attempt`. There is no started_at/completed_at —
+// only latency_ms and created_at. And no node_type: resolving a node's type
+// (for its icon) means joining against the version's nodes by node_key.
+export type NodeExecution = {
+  id: string;
+  node_key: string;
+  status: NodeExecutionStatus;
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
+  tokens_prompt: number | null;
+  tokens_completion: number | null;
+  cost_usd: number | null;
+  latency_ms: number;
+  attempt: number;
+  created_at: string;
+};
 
 export type WorkflowRun = {
   id: string;
   workflow_version_id: string;
   organization_id: string;
   status: WorkflowRunStatus;
+  trigger_payload: Record<string, unknown> | null;
+  // Shape emitted by human_approval_handler: { type: "approval_request",
+  // node_outputs: {...} }. There is no prompt/message string in it — the
+  // approval UI renders node_outputs as the evidence. See apps/web/CLAUDE.md.
+  interrupt_payload: Record<string, unknown> | null;
   current_node_key: string | null;
   started_at: string | null;
   completed_at: string | null;
   total_cost_usd: number | null;
   error: Record<string, unknown> | null;
+  node_executions: NodeExecution[];
+  created_at: string;
+  // Denormalized from the run's version -> workflow, so the viewer header can
+  // name the workflow and the timeline can fetch the version's nodes.
+  workflow_id: string;
+  workflow_name: string;
+  version_number: number;
+};
+
+// Lighter list row — no node_executions, no payloads. See WorkflowRunSummary
+// in the backend schemas for why the two shapes are separate.
+export type WorkflowRunSummary = {
+  id: string;
+  workflow_id: string;
+  workflow_name: string;
+  workflow_version_id: string;
+  version_number: number;
+  status: WorkflowRunStatus;
+  started_at: string | null;
+  completed_at: string | null;
+  total_cost_usd: number | null;
   created_at: string;
 };
+
+export type ResumeDecision = "approved" | "rejected";
 
 export const authApi = {
   async login(payload: LoginPayload) {
@@ -224,6 +275,31 @@ export const executionsApi = {
   async triggerRun(workflowId: string, payload: { trigger_payload?: Record<string, unknown> | null } = {}) {
     const { data } = await apiClient.post<WorkflowRun>(`/workflows/${workflowId}/run`, {
       trigger_payload: payload.trigger_payload ?? null,
+    });
+    return data;
+  },
+  // Bare array, cursor-paginated. `cursor` is the raw ISO created_at of the
+  // previous page's last row — the same convention as the workflows list.
+  async list(params: { workflowId?: string | null; status?: WorkflowRunStatus | "all"; cursor?: string | null; limit?: number } = {}) {
+    const { data } = await apiClient.get<WorkflowRunSummary[]>("/executions", {
+      params: {
+        workflow_id: params.workflowId || undefined,
+        status: params.status && params.status !== "all" ? params.status : undefined,
+        cursor: params.cursor || undefined,
+        limit: params.limit || undefined,
+      },
+    });
+    return data;
+  },
+  async get(runId: string) {
+    const { data } = await apiClient.get<WorkflowRun>(`/executions/${runId}`);
+    return data;
+  },
+  // 409s when the run is no longer waiting_approval (e.g. another tab decided first).
+  async resume(runId: string, payload: { decision: ResumeDecision; comment?: string | null }) {
+    const { data } = await apiClient.post<WorkflowRun>(`/executions/${runId}/resume`, {
+      decision: payload.decision,
+      comment: payload.comment || null,
     });
     return data;
   },

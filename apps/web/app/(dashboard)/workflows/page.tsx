@@ -2,10 +2,11 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MoreHorizontal, Plus } from "lucide-react";
+import { MoreHorizontal, Play, Plus } from "lucide-react";
 import { ArchiveWorkflowDialog } from "@/components/workflows/archive-workflow-dialog";
 import { WorkflowDetailDialog } from "@/components/workflows/workflow-detail-dialog";
 import { WorkflowDialog } from "@/components/workflows/workflow-dialog";
+import { useTriggerRun } from "@/components/workflows/use-trigger-run";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -41,6 +42,7 @@ export default function WorkflowsPage() {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState<Workflow | null>(null);
   const [archivingWorkflow, setArchivingWorkflow] = React.useState<Workflow | null>(null);
+  const triggerRun = useTriggerRun();
 
   const workspacesQuery = useQuery({ queryKey: ["workspaces", orgId], queryFn: workspacesApi.list, enabled: Boolean(orgId) });
   const workspaces = workspacesQuery.data ?? [];
@@ -90,6 +92,7 @@ export default function WorkflowsPage() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" onClick={(event) => event.stopPropagation()}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => triggerRun.mutate(workflow.id)} disabled={!workflow.current_version_id || triggerRun.isPending}><Play className="size-4" />Run now</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setSelectedWorkflow(workflow)}>View details</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setArchivingWorkflow(workflow)} className="text-destructive">Archive</DropdownMenuItem>
                 </DropdownMenuContent>

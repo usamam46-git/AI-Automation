@@ -1,7 +1,7 @@
 # AI Automation Platform (AAP)
 
 **Status**: Active Development  
-**Current Phase**: Phase 4 — Node Execution (real agent + tool handlers, mutating-tool approval guardrail) complete; next up is the Visual Builder Canvas / Executions UI
+**Current Phase**: Phase 5 — the loop is closed. You can register, draw a workflow on the canvas, publish it, trigger a run, watch it pause for approval, and approve it to completion **entirely through the UI** — never touching the API or reading a database row by hand. Next up: the `subgraph` handler, a real `tools` module, and the dashboard home.
 
 ## The End Goal
 
@@ -20,9 +20,9 @@ At its core, AAP combines **Autonomous AI Agents** with a **Visual Workflow Engi
 
 ## What We've Built So Far
 
-We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8), the **Authentication & RBAC Layer** (Volume 2 §10 - §11), the **Workflow Engine data layer** (Volume 2 §3.2), the **Graph Compiler** (Volume 2 §6.1), the full **Workflow Execution Engine** — Celery task queue, LangGraph runtime, and a custom PostgreSQL checkpointer (Volume 2 §5, §6.3 - §6.5) — and most recently **real node execution**: agent nodes that call OpenAI with structured outputs (Volume 2 §8, Volume 4 §6), tool nodes that make real outbound calls (Volume 2 §7.2), and a publish-time guardrail that blocks workflows which would mutate external state without human approval (Volume 4 §4.3).
+We have completed the foundational **Database Schema and Migration Layer** (Volume 2 §1 - §3.8), the **Authentication & RBAC Layer** (Volume 2 §10 - §11), the **Workflow Engine data layer** (Volume 2 §3.2), the **Graph Compiler** (Volume 2 §6.1), the full **Workflow Execution Engine** — Celery task queue, LangGraph runtime, and a custom PostgreSQL checkpointer (Volume 2 §5, §6.3 - §6.5) — **real node execution** (agent nodes calling OpenAI with structured outputs, tool nodes making real outbound calls, and a publish-time guardrail against unapproved mutations), **BYOK credential storage** (Volume 2 §13), and the two frontend surfaces that make all of it usable: the **Visual Builder Canvas** (Volume 3 §4) and the **Execution Viewer** (Volume 3 §6).
 
-**156 tests pass** (`cd apps/api && poetry run pytest`), with `ruff` clean across `src/` and `tests/`.
+**188 backend tests pass** (`cd apps/api && poetry run pytest`) with `ruff check` and `ruff format --check` clean, and **65 frontend tests pass** (`cd apps/web && npm test`) with `eslint`, `tsc --noEmit`, and `next build` clean. Both suites run on every push and PR via GitHub Actions (`.github/workflows/ci.yml`).
 
 ### Highlights:
 1. **Docker Infrastructure:** Configured `docker-compose.yml` with `pgvector/pgvector:pg16` for PostgreSQL, alongside Redis and MinIO (S3 compatible object storage).
@@ -90,54 +90,99 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
     - Enforced at **publish time only** — an author can still save a half-built draft while wiring the approval gate.
     - Uses **"at least one"** semantics: a mutating node passes if any approval node exists among its ancestors, even where an individual branch reaches it unapproved. This matches the blueprint's wording and keeps its own reference workflows (Volume 5 §1 and §5, which both route straight to the journal-entry write on their clean branch) publishable.
     - **Known limitation, stated plainly:** `is_mutating` lives in free-form JSONB config, so a misspelled key silently skips the gate. A non-boolean value is rejected at node-invoke time, which catches `"true"` but not `is_mutation`.
+13. **BYOK Credential Storage (`apps/api/src/modules/integrations/`, Volume 2 §13):**
+    - Organizations can store their own OpenAI API key: `PUT` / `GET` / `DELETE /api/v1/integrations/{integration_type}`.
+    - Encrypted at rest with **AES-256-GCM** under `INTEGRATION_ENCRYPTION_KEY` — a secret deliberately separate from `SECRET_KEY` and `JWT_SECRET_KEY`, so rotating a signing key never silently invalidates stored credentials.
+    - **There is no code path that returns a stored key over HTTP**, even to the owning org. The status response exposes `last_four` and nothing else.
+    - `integration:read` / `integration:write` are **Owner-only** — not granted to Admin — on the same reasoning as the billing permissions: a stored key is a direct billing-exposure lever.
+    - Wired into execution: the org's key is resolved once per run and bound into the LLM client factory, falling back to the platform key when unset.
+14. **Draft/Publish Validation Split:**
+    - `save_draft` runs only the two rules that would corrupt storage (duplicate `node_key`, edges pointing at a missing key). Start/end presence, orphans, and cycles are **publish-time only**.
+    - This is required, not lax: the canvas autosaves after every node drop, and every half-built graph violates at least one shape rule. The compiler is unaffected — it only ever compiles versions that have been published.
+15. **Visual Builder Canvas (`apps/web/app/(dashboard)/workflows/[workflowId]/builder/`, Volume 3 §4):**
+    - React Flow (`@xyflow/react`) canvas built by hand on shadcn/ui: drag-and-drop from a node palette, edge connection, per-type config forms, inline validation, 800 ms debounced autosave, and publish.
+    - All seven node types share one card component driven by a data-only catalog (`lib/node-catalog.ts`) — no per-type component forks.
+    - The graph lives in the React Query cache, not Zustand — `staleTime: Infinity` and `refetchOnWindowFocus: false` are load-bearing, since a background refetch would overwrite the canvas mid-edit.
+    - `lib/graph-validation.ts` mirrors all seven backend rules in TypeScript for instant feedback. The server's 422 stays the authority; the vitest suite exists specifically to catch drift between the two implementations.
+16. **Execution Viewer (`apps/web/app/(dashboard)/executions/`, Volume 3 §6):**
+    - **List view** — every run in the org, newest first, cursor-paginated, filterable by workflow and status, with duration and cost per row.
+    - **Timeline view** — node-by-node down the left using the *same* icon taxonomy as the builder canvas, with the selected node's input, output, timing, tokens, and cost on the right. Nodes that haven't run yet are shown too, resolved from the run's published version (a `node_execution` row only exists once a node actually runs).
+    - **Sticky approval bar** when a run is `waiting_approval`, rendering the interrupt payload's upstream node outputs as the evidence to decide on, with Approve / Reject wired to the resume endpoint. No optimistic update — the UI waits for server confirmation.
+    - **Live status by polling** (~2.5 s on the detail page, 10 s on the list and only while something is still in flight), stopping automatically once a run reaches a terminal state. Real WebSocket streaming (Volume 2 §9.2) is a deliberate future upgrade — the Redis Pub/Sub fan-out it needs does not exist yet.
+    - New backend endpoint `GET /api/v1/executions` (org-scoped, cursor-paginated, `execution:read`) added to serve it.
+17. **Three latent Celery-worker bugs found and fixed** while proving that loop end-to-end. The worker had **never successfully executed a task from the broker**, and the test suite could not have caught it — tests drive the graph directly and bypass Celery entirely:
+    - The Celery app declared no `include`, so its task registry was empty and every job was discarded as "unregistered task".
+    - Once tasks registered, SQLAlchemy mapper configuration failed: the worker imports only some model modules, and the rest are relationship targets. Fixed with a single `src/db/all_models.py` registration module.
+    - Each task ran its own `asyncio.run()` against a module-level connection pool, so asyncpg connections outlived the event loop that created them and the *second* task in any worker process always died. Fixed by disposing the engine inside each task's loop.
 
 ---
 
 ## 🛠️ Local Setup Instructions
 
-Want to spin this up on your local machine? Ensure you have Docker and Poetry (or Pipx) installed.
+Want to spin this up on your local machine? You'll need Docker, [Poetry](https://python-poetry.org/) **2.x** (the lock file is `lock-version 2.1`, which Poetry 1.x cannot read), and Node 22.
 
 ### 1. Start the Infrastructure
-We use Docker to run the database, cache, and object storage.
+Postgres **and Redis are both required** — Redis backs the permission cache, the rate limiter, and the Celery broker.
 ```bash
 cd infra
-docker compose up -d postgres
+docker compose up -d postgres redis
 ```
 
-### 2. Install Dependencies
-We use `pyproject.toml` to manage our dependencies. If you have [Poetry](https://python-poetry.org/) installed:
+### 2. Configure Environment
+Create `apps/api/.env`. Three variables are **required and have no defaults** — the app refuses to start without them:
+
+```dotenv
+SECRET_KEY=<any long random string>
+JWT_SECRET_KEY=<any long random string>
+# Must base64-decode to exactly 32 bytes (AES-256-GCM):
+#   python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
+INTEGRATION_ENCRYPTION_KEY=<base64 32-byte key>
+
+DATABASE_URL=postgresql+asyncpg://aap_user:aap_pass@localhost:5432/aap_db
+REDIS_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=redis://localhost:6379/1
+
+# Optional — agent nodes need a key from here or from an org's BYOK integration.
+OPENAI_API_KEY=
+```
+
+### 3. Install Dependencies & Migrate
 ```bash
 cd apps/api
 poetry install
+poetry run alembic upgrade head
+poetry run python src/db/seed_roles.py   # seeds the 5 system RBAC roles
 ```
 
-*(Alternatively, if you don't have Poetry, you can install the dependencies via pip manually):*
+### 4. Run the Stack
+Three processes. **The Celery worker is not optional** — without it a triggered run is created and then sits at `pending` forever, which looks like a frontend bug but isn't.
+
 ```bash
-cd apps/api
-python -m pip install alembic sqlalchemy asyncpg psycopg2-binary pgvector pydantic-settings pydantic
+# terminal 1 — API
+cd apps/api && poetry run uvicorn src.main:app --reload --port 8000
+
+# terminal 2 — worker (use --pool=solo on Windows)
+cd apps/api && poetry run celery -A src.workers.celery_app worker --loglevel=info -Q workflow_execution
+
+# terminal 3 — frontend
+cd apps/web && npm install && npm run dev
 ```
 
-### 3. Run Database Migrations
-Push the database schemas, indexes, and RLS policies into the live Postgres container:
+Then open <http://localhost:3000>, register an account, and build a workflow.
+
+### 5. Run Tests
 ```bash
-cd apps/api
-alembic upgrade head
+cd apps/api && poetry run pytest            # 188 backend tests
+cd apps/web && npm test                     # 65 frontend tests (pure lib/ modules)
 ```
 
-### 4. Run Tests
-```bash
-cd apps/api
-poetry run pytest
-```
+CI runs the same commands plus `ruff check`, `ruff format --check`, `eslint`, `tsc --noEmit`, and `next build` — see `.github/workflows/ci.yml`.
 
-### 5. Explore the Database
-Connect to the database using your favorite client (DBeaver, pgAdmin, VS Code SQLTools) with the following credentials:
-- **Host:** `localhost`
-- **Port:** `5432`
-- **User:** `aap_user`
-- **Password:** `aap_pass`
-- **Database:** `aap_db`
+### 6. Explore the Database
+Connect with your favourite client (DBeaver, pgAdmin, VS Code SQLTools):
+- **Host:** `localhost` · **Port:** `5432`
+- **User:** `aap_user` · **Password:** `aap_pass` · **Database:** `aap_db`
 
 ---
 
-*This repository is actively being built. Workflows now execute end-to-end: an agent node extracts structured data with an LLM, a condition routes on it, a human approves, and a tool writes to an external system — with cost, tokens, and a per-node audit trail persisted throughout. Next phases: the Visual Builder Canvas (React Flow) + Executions UI on the frontend, the `subgraph` handler and a real `tools` module on the backend, and BYOK for per-organization API keys*
+*This repository is actively being built. The core loop now works end-to-end through the UI: draw a workflow on the canvas, publish it, trigger a run, watch the timeline fill in node by node, approve the human-in-the-loop step, and see it complete — with tokens, cost, and a per-node audit trail persisted throughout. Next phases: the `subgraph` handler and a real `tools` module on the backend, the dashboard home and a Settings page for BYOK keys on the frontend, and WebSocket streaming to replace the Execution Viewer's polling.*

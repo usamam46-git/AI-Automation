@@ -79,8 +79,8 @@ verified via a full read-only orientation pass — see note below.)
   BYOK OpenAI keys landed 2026-08-06 (Vol. 2 §13) — see the bullet below.
   Draft/publish validation split landed 2026-08-06 as Phase 0 of the Builder
   canvas work — see the bullet below.
-  **181 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
-  2026-08-06: 156 + 14 BYOK + 11 validation-split).
+  **188 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
+  2026-08-07: 156 + 14 BYOK + 11 validation-split + 7 executions-list).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -158,15 +158,39 @@ verified via a full read-only orientation pass — see note below.)
   backend rules in TypeScript (∃-semantics on the mutating-approval walk — do not
   tighten to ∀); and the config forms construct the inline agent/tool shapes exactly as
   `_agent_config`/`_tool_config` accept them, so changing either side means changing both.
+- **Execution Viewer landed 2026-08-07** (Vol. 3 §6) — the loop is closed end to end:
+  register → build on the canvas → publish → **Run now** → watch it pause → approve →
+  completed, never touching the API or a DB row. Verified in a browser, both paths
+  (approve → `completed`, reject → `rejected`).
+  Backend: `GET /api/v1/executions` added to the EXISTING `modules/executions/` files —
+  org-scoped, cursor-paginated on the same raw-ISO-`created_at` convention as the
+  Workflows list (bare array, no envelope), filterable by `workflow_id` + `status`,
+  `execution:read`. New lighter `WorkflowRunSummary`; `WorkflowRunResponse` gained
+  `workflow_id`/`workflow_name`/`version_number` (model `@property`s + an eager-load in
+  `get_run`) because the run only stores `workflow_version_id` and both the §6.1 header
+  and the timeline's icon lookup need the workflow.
+  Frontend: `app/(dashboard)/executions/{page,[runId]/page}.tsx`,
+  `components/executions/*`, `lib/{run-status,run-timeline}.ts`, "Run now" on the
+  workflows row menu + detail dialog, Executions nav entry. Live status is **polling**
+  (~2.5s detail / 10s list, stops on terminal) — no WebSocket; that infra still
+  doesn't exist. Three contracts in apps/web/CLAUDE.md: the version fetch is
+  mandatory for node icons and pending rows, `interrupt_payload` has no prompt text,
+  and `current_node_key` is unreliable for highlighting.
+  **188 backend tests** (181 + 7 new) and **65 frontend tests** (32 + 33 new).
+- **Three pre-existing Celery-worker bugs fixed 2026-08-07** while proving the loop.
+  The worker had never run a task from the broker: empty task registry (no `include`),
+  unregistered SQLAlchemy mappers (new `src/db/all_models.py`), and a stale asyncpg
+  connection pool across per-task event loops (new `_run_async` in `graph_tasks.py`).
+  Details in apps/api/CLAUDE.md — do not undo any of the three.
 - Next: `subgraph` handler, real `tools` module (CRUD + `tool_executions` rows written
-  *before* mutating calls, per Vol. 4 §4.3), Executions UI, and a Settings UI page for
-  the BYOK endpoints above.
+  *before* mutating calls, per Vol. 4 §4.3), Dashboard home stat cards / "Recent
+  Executions" (Vol. 3 §5), and a Settings UI page for the BYOK endpoints above.
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
-  workspaces, workflows list) plus the builder canvas scaffold (see above).
-  Executions UI still intentionally deferred. `app/(marketing)/` referenced
-  in apps/web/CLAUDE.md does not exist yet. `apps/web` has **no test
-  infrastructure** — vitest for the pure `lib/` modules is proposed in the
-  plan, not yet added.
+  workspaces, workflows list), the builder canvas, and the Execution Viewer
+  (see above). `app/(marketing)/` referenced in apps/web/CLAUDE.md does not
+  exist yet. `apps/web` DOES have test infrastructure — `vitest.config.mts`,
+  `npm test`, 65 tests over the pure `lib/` modules only (no React harness;
+  canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with
 that exact casing (not `claude.md`) — a lowercase filename will silently

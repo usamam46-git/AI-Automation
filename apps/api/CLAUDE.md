@@ -100,6 +100,33 @@ and router.
     value at invoke time, which catches `"true"` but not `is_mutation`. A typed
     column would fail closed; revisit when the tools module lands.
 
+## Celery worker — two invariants that were silently broken until 2026-08-07
+
+The worker had never successfully executed a task from the broker. Both of these
+are load-bearing; breaking either produces a run that sits at `pending` forever
+while the UI looks like the bug.
+
+- **`celery_app` must declare `include=["src.workers.graph_tasks"]`.** `celery -A
+  src.workers.celery_app worker` imports only that module. Without `include` the
+  task registry is empty, the worker boots clean, and every job is discarded with
+  "Received unregistered task of type ...".
+- **Non-FastAPI entry points must import `src.db.all_models`.** SQLAlchemy
+  resolves `relationship("Workspace")` string targets at first mapper
+  configuration. The worker imports executions/workflows models but not
+  workspaces/auth/audit_logs/tools, which are relationship targets from them, so
+  the first query dies with "expression 'Workspace' failed to locate a name".
+  The FastAPI app never hits this because its routers transitively import
+  everything. `alembic/env.py` keeps its own copy of that import list.
+- **Celery tasks must run through `_run_async`, not bare `asyncio.run`.**
+  `db.database.engine` is a module-level pool and each task runs its own
+  `asyncio.run()`, i.e. a fresh event loop. asyncpg connections are bound to the
+  loop that opened them, so a connection pooled by task N is checked out by task
+  N+1 against a dead loop and the first write raises `AttributeError: 'NoneType'
+  object has no attribute 'send'`. `_run_async` disposes the engine inside the
+  same loop. `pool_pre_ping` does not help — the ping runs on the dead transport.
+  The test suite cannot catch this: it awaits `_stream_graph()` directly and
+  never goes through the Celery task functions.
+
 ## Known temporary gaps (don't silently "fix" these — they're deliberate)
 
 - `tool_id`/`prompt_id` references inside node `config` are stored as opaque

@@ -97,10 +97,43 @@ async def _register_and_publish(client: AsyncClient, tag: str) -> dict[str, Any]
     return {
         "token": token,
         "headers": headers,
+        "workspace_id": ws["id"],
         "workflow_id": wf["id"],
+        "workflow_name": wf["name"],
         "version_id": version_id,
         "org_id": data.get("org_id"),  # may be None depending on registration shape
     }
+
+
+async def _publish_second_workflow(client: AsyncClient, token: str, workspace_id: str, name: str) -> dict[str, Any]:
+    """Create + publish another workflow inside an ALREADY-registered org."""
+    from test_workflow_versions import create_workflow, graph_payload
+
+    from src.modules.workflows.schemas import EdgeInput, NodeInput, NodeType
+
+    headers = {"Authorization": f"Bearer {token}"}
+    wf = await create_workflow(client, token, workspace_id, name=name)
+
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=100, position_y=0),
+    ]
+    edges = [EdgeInput(source_node_key="start", target_node_key="end")]
+
+    saved = await client.post(f"/api/v1/workflows/{wf['id']}/versions", json=graph_payload(nodes, edges), headers=headers)
+    assert saved.status_code == 201, saved.text
+    version_id = saved.json()["id"]
+
+    published = await client.post(f"/api/v1/workflows/{wf['id']}/versions/{version_id}/publish", headers=headers)
+    assert published.status_code == 200, published.text
+
+    return {"workflow_id": wf["id"], "version_id": version_id}
+
+
+async def _trigger(client: AsyncClient, headers: dict[str, str], workflow_id: str) -> str:
+    resp = await client.post(f"/api/v1/workflows/{workflow_id}/run", json={"trigger_payload": {"approve": True}}, headers=headers)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
 
 
 async def _load_run_with_executions(run_id: uuid.UUID) -> WorkflowRun:
@@ -441,3 +474,227 @@ async def test_resume_requires_waiting_approval_status(client: AsyncClient):
     )
     assert resume_resp.status_code == 409
     assert "waiting_approval" in resume_resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/executions — list endpoint (Vol. 3 §1.1's executions/page.tsx)
+#
+# Cursor convention mirrors the Workflows/Workspaces list endpoints exactly:
+# bare JSON array (no envelope), ?cursor=<ISO created_at of the last row>&limit=N,
+# ORDER BY created_at DESC. See tests/test_workspaces.py::test_workspace_cursor_pagination.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_executions_returns_org_runs(client: AsyncClient):
+    """Both of the org's runs come back as summaries carrying the joined workflow name."""
+    ctx = await _register_and_publish(client, "list-basic")
+    headers = ctx["headers"]
+
+    run_a = await _trigger(client, headers, ctx["workflow_id"])
+    run_b = await _trigger(client, headers, ctx["workflow_id"])
+
+    resp = await client.get("/api/v1/executions", headers=headers)
+    assert resp.status_code == 200, resp.text
+    runs = resp.json()
+
+    by_id = {run["id"]: run for run in runs}
+    assert run_a in by_id
+    assert run_b in by_id
+
+    row = by_id[run_a]
+    assert row["workflow_id"] == ctx["workflow_id"]
+    assert row["workflow_name"] == ctx["workflow_name"]
+    assert row["workflow_version_id"] == ctx["version_id"]
+    assert row["version_number"] == 1
+    assert row["status"] == "pending"
+
+    # The summary shape must NOT carry the per-node audit trail or the payloads —
+    # that is the whole reason it exists separately from WorkflowRunResponse.
+    for absent in ("node_executions", "trigger_payload", "interrupt_payload", "checkpoint_state", "error"):
+        assert absent not in row, f"{absent} must not appear in the list summary"
+
+    # Newest first.
+    created = [run["created_at"] for run in runs]
+    assert created == sorted(created, reverse=True)
+
+
+@pytest.mark.asyncio
+async def test_list_executions_cross_tenant_isolation(client: AsyncClient):
+    """
+    Org A's list must contain none of Org B's runs.
+
+    A list endpoint leaks by *inclusion*, not by status code — the 404 assertion
+    used for single-resource reads has no analogue here, so assert disjointness.
+    """
+    ctx_a = await _register_and_publish(client, "list-tenant-a")
+    ctx_b = await _register_and_publish(client, "list-tenant-b")
+
+    run_a = await _trigger(client, ctx_a["headers"], ctx_a["workflow_id"])
+    run_b = await _trigger(client, ctx_b["headers"], ctx_b["workflow_id"])
+
+    list_a = {run["id"] for run in (await client.get("/api/v1/executions", headers=ctx_a["headers"])).json()}
+    list_b = {run["id"] for run in (await client.get("/api/v1/executions", headers=ctx_b["headers"])).json()}
+
+    assert run_a in list_a and run_a not in list_b
+    assert run_b in list_b and run_b not in list_a
+    assert list_a.isdisjoint(list_b)
+
+    # Filtering by another org's workflow_id must not act as a bypass.
+    cross = await client.get(f"/api/v1/executions?workflow_id={ctx_b['workflow_id']}", headers=ctx_a["headers"])
+    assert cross.status_code == 200
+    assert cross.json() == []
+
+
+@pytest.mark.asyncio
+async def test_list_executions_filter_by_workflow_id(client: AsyncClient):
+    """?workflow_id= narrows to one workflow's runs within the same org."""
+    ctx = await _register_and_publish(client, "list-wf-filter")
+    headers = ctx["headers"]
+    second = await _publish_second_workflow(client, ctx["token"], ctx["workspace_id"], "Second Workflow")
+
+    run_first = await _trigger(client, headers, ctx["workflow_id"])
+    run_second = await _trigger(client, headers, second["workflow_id"])
+
+    resp = await client.get(f"/api/v1/executions?workflow_id={second['workflow_id']}", headers=headers)
+    assert resp.status_code == 200
+    results = resp.json()
+
+    ids = {run["id"] for run in results}
+    assert run_second in ids
+    assert run_first not in ids
+    assert all(run["workflow_id"] == second["workflow_id"] for run in results)
+
+
+@pytest.mark.asyncio
+async def test_list_executions_filter_by_status(client: AsyncClient):
+    """?status= filters on RUN status, not workflow status."""
+    ctx = await _register_and_publish(client, "list-status-filter")
+    headers = ctx["headers"]
+
+    waiting_run = await _trigger(client, headers, ctx["workflow_id"])
+    pending_run = await _trigger(client, headers, ctx["workflow_id"])
+
+    # Drive only the first run to waiting_approval (no Celery worker in tests).
+    run_id = uuid.UUID(waiting_run)
+    org_id = uuid.UUID((await client.get(f"/api/v1/executions/{waiting_run}", headers=headers)).json()["organization_id"])
+    version = await _load_version(ctx["version_id"])
+    initial_state = initial_state_from_trigger(organization_id=org_id, trigger_payload={"approve": True}, run_id=str(run_id))
+    await _stream_graph(run_id, version, initial_state, attempt=1, organization_id=org_id)
+
+    waiting = await client.get("/api/v1/executions?status=waiting_approval", headers=headers)
+    assert waiting.status_code == 200
+    waiting_ids = {run["id"] for run in waiting.json()}
+    assert waiting_run in waiting_ids
+    assert pending_run not in waiting_ids
+    assert all(run["status"] == "waiting_approval" for run in waiting.json())
+
+    completed = await client.get("/api/v1/executions?status=completed", headers=headers)
+    assert waiting_run not in {run["id"] for run in completed.json()}
+
+
+@pytest.mark.asyncio
+async def test_list_executions_cursor_pagination(client: AsyncClient):
+    """
+    Cursor is the raw ISO created_at of the previous page's last row.
+
+    Asserts disjointness rather than exact counts: conftest.py has no truncate
+    fixture, so the test DB accumulates rows across the whole suite.
+    """
+    ctx = await _register_and_publish(client, "list-paging")
+    headers = ctx["headers"]
+
+    for _ in range(6):
+        await _trigger(client, headers, ctx["workflow_id"])
+
+    resp1 = await client.get("/api/v1/executions?limit=4", headers=headers)
+    assert resp1.status_code == 200
+    page1 = resp1.json()
+    assert len(page1) == 4, f"Expected 4, got {len(page1)}"
+
+    cursor = page1[-1]["created_at"]
+    resp2 = await client.get(f"/api/v1/executions?limit=4&cursor={cursor}", headers=headers)
+    assert resp2.status_code == 200
+    page2 = resp2.json()
+    assert len(page2) > 0, "Second page should not be empty"
+
+    assert {run["id"] for run in page1}.isdisjoint({run["id"] for run in page2}), "Pages must not overlap"
+
+    from datetime import datetime as _dt
+
+    cursor_dt = _dt.fromisoformat(cursor.replace("Z", "+00:00"))
+    for run in page2:
+        assert _dt.fromisoformat(run["created_at"].replace("Z", "+00:00")) <= cursor_dt
+
+    # An unparseable cursor is ignored, not rejected — matches WorkflowRepository.list_by_org.
+    garbage = await client.get("/api/v1/executions?cursor=not-a-timestamp", headers=headers)
+    assert garbage.status_code == 200
+    assert len(garbage.json()) > 0
+
+
+@pytest.mark.asyncio
+async def test_list_executions_requires_execution_read(client: AsyncClient):
+    """
+    GET /executions requires execution:read. The seeded Editor role has workflow
+    read/write but no execution permissions at all, so it must get 403 — proving
+    the check discriminates rather than just requiring an authenticated user.
+    """
+    from sqlalchemy import update as sa_update
+    from test_workflow_versions import register_and_get_token
+
+    from src.core.cache import invalidate_permissions_cache
+    from src.core.redis import get_redis
+    from src.core.security import decode_access_token
+    from src.modules.auth.models import OrgMembership, Role
+
+    data = await register_and_get_token(client, "list-perm-check")
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    claims = decode_access_token(token)
+    user_id = uuid.UUID(claims["user_id"])
+    org_id = uuid.UUID(claims["org_id"])
+
+    async with async_session_maker() as session:
+        # `Role.is_system == True` is a SQLAlchemy column expression, not a Python
+        # truth test — `is_system.is_(True)` keeps ruff happy without the noqa
+        # dance that the formatter kept reflowing away from its statement.
+        stmt = select(Role).where(Role.name == "Editor", Role.is_system.is_(True))
+        editor_role = (await session.execute(stmt)).scalars().first()
+        assert editor_role is not None, "Editor system role must be seeded"
+        await session.execute(
+            sa_update(OrgMembership).where(OrgMembership.user_id == user_id, OrgMembership.organization_id == org_id).values(role_id=editor_role.id)
+        )
+        await session.commit()
+
+    # Without this eviction the Redis cache still holds Owner's "*" from
+    # registration and the test would pass vacuously.
+    redis = await get_redis()
+    await invalidate_permissions_cache(redis, str(org_id), str(user_id))
+
+    resp = await client.get("/api/v1/executions", headers=headers)
+    assert resp.status_code == 403
+    assert "execution:read" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_get_run_carries_workflow_identity(client: AsyncClient):
+    """
+    The detail endpoint must expose workflow_id/workflow_name/version_number.
+
+    These are @property attributes on WorkflowRun that read through the
+    workflow_version -> workflow chain; if get_run's eager-load is dropped they
+    raise MissingGreenlet rather than returning wrong data. The Viewer's header
+    needs the name, and its timeline needs workflow_id to fetch the version's
+    nodes for their node_type icons (NodeExecution stores only node_key).
+    """
+    ctx = await _register_and_publish(client, "detail-identity")
+    run_id = await _trigger(client, ctx["headers"], ctx["workflow_id"])
+
+    resp = await client.get(f"/api/v1/executions/{run_id}", headers=ctx["headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["workflow_id"] == ctx["workflow_id"]
+    assert body["workflow_name"] == ctx["workflow_name"]
+    assert body["version_number"] == 1
+    assert body["node_executions"] == []

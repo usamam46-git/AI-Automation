@@ -26,7 +26,12 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.executions.repository import ExecutionRepository
-from src.modules.executions.schemas import ResumeRequest, RunTriggerRequest, WorkflowRunResponse
+from src.modules.executions.schemas import (
+    ResumeRequest,
+    RunTriggerRequest,
+    WorkflowRunResponse,
+    WorkflowRunSummary,
+)
 from src.modules.workflows.repository import WorkflowRepository
 
 
@@ -73,6 +78,41 @@ class ExecutionService:
         # Re-fetch with node_executions (empty at this point but consistent shape)
         run = await self._repo.get_run(organization_id, run.id)
         return WorkflowRunResponse.model_validate(run)
+
+    async def list_runs(
+        self,
+        organization_id: uuid.UUID,
+        workflow_id: uuid.UUID | None = None,
+        status_filter: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> list[WorkflowRunSummary]:
+        """
+        List the org's runs, newest first. `status_filter` is named to avoid
+        shadowing fastapi.status at the router, same as WorkflowService.list_workflows.
+        """
+        rows = await self._repo.list_runs(
+            organization_id,
+            workflow_id=workflow_id,
+            status=status_filter,
+            cursor=cursor,
+            limit=limit,
+        )
+        return [
+            WorkflowRunSummary(
+                id=run.id,
+                workflow_id=wf_id,
+                workflow_name=wf_name,
+                workflow_version_id=run.workflow_version_id,
+                version_number=version_number,
+                status=run.status,
+                started_at=run.started_at,
+                completed_at=run.completed_at,
+                total_cost_usd=float(run.total_cost_usd) if run.total_cost_usd is not None else None,
+                created_at=run.created_at,
+            )
+            for run, wf_id, wf_name, version_number in rows
+        ]
 
     async def get_run(
         self,

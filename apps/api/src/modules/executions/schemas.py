@@ -98,3 +98,39 @@ class WorkflowRunResponse(BaseModel):
     error: dict[str, Any] | None
     node_executions: list[NodeExecutionResponse]
     created_at: datetime
+
+    # Denormalized from workflow_version -> workflow. These are @property
+    # attributes on the WorkflowRun model, not columns, and depend on that
+    # relationship chain being eager-loaded by ExecutionRepository.get_run.
+    # The Viewer's header (Vol. 3 §6.1) needs the name; the timeline needs
+    # workflow_id to fetch the version's nodes for their node_type icons,
+    # since NodeExecution stores only node_key.
+    workflow_id: uuid.UUID
+    workflow_name: str
+    version_number: int
+
+
+class WorkflowRunSummary(BaseModel):
+    """
+    Lighter list-row shape for GET /executions.
+
+    Follows the WorkflowVersionSummary precedent: no from_attributes, built
+    field-by-field in the service, because workflow_name and version_number
+    come off a joined row rather than the WorkflowRun itself.
+
+    Deliberately omits node_executions, trigger_payload, interrupt_payload and
+    error — the list view shows none of them, and node_executions in particular
+    would make every row carry its whole audit trail. The detail endpoint
+    (GET /executions/{run_id}) is where that lives.
+    """
+
+    id: uuid.UUID
+    workflow_id: uuid.UUID
+    workflow_name: str
+    workflow_version_id: uuid.UUID
+    version_number: int
+    status: WorkflowRunStatus
+    started_at: datetime | None
+    completed_at: datetime | None
+    total_cost_usd: float | None
+    created_at: datetime

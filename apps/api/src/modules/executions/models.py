@@ -101,6 +101,31 @@ class WorkflowRun(UUIDMixin, TenantMixin, TimestampMixin, Base):
         viewonly=True,
     )
 
+    # ------------------------------------------------------------------
+    # Derived attributes read by WorkflowRunResponse (from_attributes=True).
+    #
+    # A run only stores workflow_version_id, but the Execution Viewer header
+    # (Vol. 3 §6.1) needs the workflow's name, and its timeline needs the
+    # workflow_id to fetch that version's nodes for their node_type icons.
+    #
+    # These REQUIRE the workflow_version -> workflow chain to be eager-loaded;
+    # ExecutionRepository.get_run does that. Under async SQLAlchemy a missing
+    # eager-load raises MissingGreenlet, which fails loudly rather than
+    # silently returning something wrong.
+    # ------------------------------------------------------------------
+
+    @property
+    def workflow_id(self) -> uuid.UUID:
+        return self.workflow_version.workflow_id
+
+    @property
+    def workflow_name(self) -> str:
+        return self.workflow_version.workflow.name
+
+    @property
+    def version_number(self) -> int:
+        return self.workflow_version.version_number
+
 
 class NodeExecution(UUIDMixin, TimestampMixin, Base):
     """

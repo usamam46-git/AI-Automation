@@ -41,7 +41,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from src.core.llm_client import LLMClient, LLMConfigurationError, LLMTransientError, get_llm_client
-from src.db.database import async_session_maker
+from src.db.database import async_session_maker, engine
 from src.graphs.compiler import (
     DraftVersionCompileError,
     GraphCompileError,
@@ -324,6 +324,38 @@ async def _stream_graph(
 # ---------------------------------------------------------------------------
 
 
+def _run_async(coro: Any) -> Any:
+    """
+    Run a coroutine in a fresh event loop, disposing the SQLAlchemy engine's
+    connection pool before that loop closes.
+
+    This is mandatory, not tidiness. `engine` is a module-level singleton whose
+    pool caches asyncpg connections, and every task below runs its own
+    asyncio.run(), which creates and then destroys a NEW event loop. An asyncpg
+    connection is bound to the loop that opened it, so a connection left in the
+    pool by task N gets checked out by task N+1 against a loop that no longer
+    exists, and the first write fails with
+
+        AttributeError: 'NoneType' object has no attribute 'send'
+
+    `pool_pre_ping` does not save us here: the ping itself runs on the dead
+    transport. Disposing per task costs one reconnect and buys correctness --
+    the pool was never genuinely reused across tasks anyway.
+
+    This went unnoticed because a worker never ran a second task: the Celery app
+    had no `include`, so its task registry was empty and every job was discarded
+    as unregistered.
+    """
+
+    async def _runner() -> Any:
+        try:
+            return await coro
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_runner())
+
+
 @celery_app.task(
     bind=True,
     name="src.workers.graph_tasks.execute_workflow",
@@ -341,10 +373,10 @@ def execute_workflow(self: Task, workflow_run_id: str) -> None:
     attempt = self.request.retries + 1
 
     try:
-        asyncio.run(_execute_workflow_async(run_id, attempt))
+        _run_async(_execute_workflow_async(run_id, attempt))
     except _NON_RETRYABLE as exc:
         logger.error("Non-retryable error in execute_workflow run=%s: %s", run_id, exc)
-        asyncio.run(_mark_failed(run_id, str(exc)))
+        _run_async(_mark_failed(run_id, str(exc)))
         return  # do not retry
     except Exception as exc:
         logger.warning("Transient error in execute_workflow run=%s attempt=%d: %s", run_id, attempt, exc)
@@ -353,7 +385,7 @@ def execute_workflow(self: Task, workflow_run_id: str) -> None:
             raise self.retry(exc=exc, countdown=backoff)
         except MaxRetriesExceededError:
             logger.error("Max retries exceeded for execute_workflow run=%s", run_id)
-            asyncio.run(_mark_failed(run_id, f"Max retries exceeded. Last error: {exc}"))
+            _run_async(_mark_failed(run_id, f"Max retries exceeded. Last error: {exc}"))
 
 
 async def _execute_workflow_async(run_id: uuid.UUID, attempt: int) -> None:
@@ -395,10 +427,10 @@ def resume_workflow(self: Task, workflow_run_id: str, resume_payload: dict[str, 
     attempt = self.request.retries + 1
 
     try:
-        asyncio.run(_resume_workflow_async(run_id, resume_payload, attempt))
+        _run_async(_resume_workflow_async(run_id, resume_payload, attempt))
     except _NON_RETRYABLE as exc:
         logger.error("Non-retryable error in resume_workflow run=%s: %s", run_id, exc)
-        asyncio.run(_mark_failed(run_id, str(exc)))
+        _run_async(_mark_failed(run_id, str(exc)))
         return
     except Exception as exc:
         logger.warning("Transient error in resume_workflow run=%s attempt=%d: %s", run_id, attempt, exc)
@@ -407,7 +439,7 @@ def resume_workflow(self: Task, workflow_run_id: str, resume_payload: dict[str, 
             raise self.retry(exc=exc, countdown=backoff)
         except MaxRetriesExceededError:
             logger.error("Max retries exceeded for resume_workflow run=%s", run_id)
-            asyncio.run(_mark_failed(run_id, f"Max retries exceeded. Last error: {exc}"))
+            _run_async(_mark_failed(run_id, f"Max retries exceeded. Last error: {exc}"))
 
 
 async def _resume_workflow_async(

@@ -161,5 +161,47 @@ manually in the browser.
   exception to "centered state + primary action": it renders a
   `pointer-events-none` hint over a live canvas, because a blocking
   EmptyState would make the empty canvas undroppable.
-- The Executions UI is intentionally NOT built yet. Don't scaffold it
-  speculatively, and don't add links promising a page that doesn't exist.
+
+## Execution Viewer
+
+Built 2026-08-07 (Vol. 3 §6). `app/(dashboard)/executions/page.tsx` (list) and
+`[runId]/page.tsx` (timeline), `components/executions/*`, plus two pure modules
+`lib/run-status.ts` and `lib/run-timeline.ts` covered by vitest.
+
+- **Live status is polling, not WebSocket.** `refetchInterval` ~2.5s on the
+  detail page, 10s on the list page and only while a rendered run is
+  non-terminal. `isTerminalRunStatus()` in `lib/run-status.ts` is the single
+  predicate deciding when to stop — if the two pages ever disagree about
+  terminality, one of them polls forever. Vol. 2 §9.2's
+  `WS /api/v1/ws/executions/{run_id}` is still unbuilt; there is no Redis
+  Pub/Sub fan-out on the backend.
+  Note React Query pauses interval polling while `document.visibilityState`
+  is `hidden` and refetches on focus. That is wanted behaviour, but it means a
+  background tab looks frozen — don't "fix" it by setting
+  `refetchIntervalInBackground`.
+- **The timeline needs the version, not just the run.** `NodeExecution` stores
+  only `node_key` — never `node_type` — so icons come from joining the run's
+  published version's nodes, fetched with `workflowsApi.getVersion` under its
+  own `['execution-version', ...]` key. Never reuse the builder's
+  `['workflow-graph', ...]` key: that entry is the live editable canvas graph
+  at `staleTime: Infinity`, and writing to it would corrupt an open builder.
+  The version is also the only source for nodes that have not run yet (§6.1's
+  `○` rows) — `node_executions.status` is `succeeded|failed|skipped` only.
+- **`interrupt_payload` carries no prompt text.** `human_approval_handler`
+  emits `{type: "approval_request", node_outputs: {...}}` and nothing else, so
+  the approval bar renders a fixed headline plus those upstream outputs as the
+  evidence. §6.1's wireframe shows a domain sentence ("Approve $4,200.00 to
+  Acme Vendor LLC?") that cannot be derived from this. Do NOT invent a
+  message-template field on `human_approval` — it has no config by design.
+- **`current_node_key` is not trustworthy for highlighting.** On interrupt the
+  engine writes the literal string `"human_approval"`, not the node's real key,
+  so a node keyed `approval_1` never matches. `buildTimeline` prefers
+  `current_node_key` when it resolves to a real node and otherwise falls back
+  to the first un-executed `human_approval` node. Pinned by a test; don't
+  simplify it back to a straight equality check.
+- Run-status badge variants live in `components/ui/badge.tsx` alongside the
+  workflow-shell ones, deliberately. Vol. 3 §5 names `--color-status-*` tokens
+  that do not exist in this codebase — that cva IS the status vocabulary, so
+  extend it rather than forking a parallel token set.
+- No "View raw trace in LangSmith" link from the §6.1 wireframe: the LangSmith
+  hook in `LLMClient` is a no-op, so the link would be dead.
