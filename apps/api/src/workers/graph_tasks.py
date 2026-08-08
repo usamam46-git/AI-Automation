@@ -42,6 +42,7 @@ from sqlalchemy.orm import selectinload
 
 from src.core.llm_client import LLMClient, LLMConfigurationError, LLMTransientError, get_llm_client
 from src.db.database import async_session_maker, engine
+from src.db.sync_database import dispose_sync_engine
 from src.graphs.compiler import (
     DraftVersionCompileError,
     GraphCompileError,
@@ -57,6 +58,7 @@ from src.graphs.node_handlers import (
 )
 from src.modules.executions.models import NodeExecution, WorkflowRun
 from src.modules.integrations.service import IntegrationService
+from src.modules.tools.service import ToolExecutionLogger, ToolService
 from src.modules.workflows.models import WorkflowVersion
 from src.workers.celery_app import celery_app
 from src.workers.postgres_saver import PostgresSaver
@@ -136,12 +138,15 @@ async def _insert_node_execution(
     tokens_prompt: int | None = None,
     tokens_completion: int | None = None,
     cost_usd: float | None = None,
-) -> bool:
+) -> uuid.UUID | None:
     """
     Insert a NodeExecution row after checking idempotency.
-    Returns False and skips insert if a succeeded row already exists for
-    (workflow_run_id, node_key, attempt) — guards against duplicate writes
-    on Celery retry.
+
+    Returns the new row's id, or None when the insert was skipped because a row
+    already exists for (workflow_run_id, node_key, attempt) — which guards
+    against duplicate writes on Celery retry. The caller needs the id to
+    back-fill `tool_executions.node_execution_id`; on a skip there is nothing to
+    back-fill and the FK stays NULL, which is exactly what nullable means here.
 
     The token/cost arguments stay optional because non-LLM nodes (start, end,
     human_approval gates) have no usage to report and leave those columns NULL.
@@ -155,7 +160,7 @@ async def _insert_node_execution(
         )
         existing = await session.execute(existing_stmt)
         if existing.scalar_one_or_none() is not None:
-            return False  # already wrote this — skip
+            return None  # already wrote this — skip
 
         row = NodeExecution(
             workflow_run_id=workflow_run_id,
@@ -171,7 +176,7 @@ async def _insert_node_execution(
         )
         session.add(row)
         await session.commit()
-    return True
+        return row.id
 
 
 def _usage_for_node(node_output: Any, node_key: str) -> dict[str, Any]:
@@ -187,17 +192,60 @@ def _usage_for_node(node_output: Any, node_key: str) -> dict[str, Any]:
     return usage if isinstance(usage, dict) else {}
 
 
+#: State channels that carry bookkeeping rather than node output. They have
+#: dedicated columns or dedicated tables, and must not be duplicated into the
+#: `node_executions.output` JSONB snapshot the Execution Viewer renders.
+_BOOKKEEPING_CHANNELS = frozenset({"node_usage", "node_tool_calls"})
+
+
+def _tool_call_ids(node_output: Any, node_key: str) -> list[uuid.UUID]:
+    """Pull this node's tool_executions row ids off the `node_tool_calls` channel."""
+    if not isinstance(node_output, dict):
+        return []
+    raw = (node_output.get("node_tool_calls") or {}).get(node_key) or []
+    ids: list[uuid.UUID] = []
+    for value in raw:
+        try:
+            ids.append(uuid.UUID(str(value)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return ids
+
+
+async def _link_tool_executions(execution_ids: list[uuid.UUID], node_execution_id: uuid.UUID) -> None:
+    """
+    Back-fill `tool_executions.node_execution_id` once the node_executions row exists.
+
+    Deliberately a separate write from the handler's own two: the handler commits
+    its intent row before the call goes out (Vol. 4 §4.3), and at that moment the
+    node_executions row this points at has not been created — `_stream_graph` only
+    inserts it after the superstep yields its chunk. The FK is nullable for exactly
+    this window.
+    """
+    from src.modules.tools.models import ToolExecution
+
+    if not execution_ids:
+        return
+    async with async_session_maker() as session:
+        from sqlalchemy import update as sa_update
+
+        await session.execute(sa_update(ToolExecution).where(ToolExecution.id.in_(execution_ids)).values(node_execution_id=node_execution_id))
+        await session.commit()
+
+
 def _output_snapshot(node_output: Any) -> dict[str, Any]:
     """
     Shape a handler's return value for the `output` audit column.
 
     `node_usage` is stripped: it now has dedicated tokens_prompt/tokens_completion/
     cost_usd columns, and duplicating it into the JSONB snapshot would let the two
-    representations drift.
+    representations drift. `node_tool_calls` is stripped for the same reason — the
+    tool_executions rows it points at are the record, and the ids are transport,
+    not output.
     """
     if not isinstance(node_output, dict):
         return {"value": node_output}
-    return {key: value for key, value in node_output.items() if key != "node_usage"}
+    return {key: value for key, value in node_output.items() if key not in _BOOKKEEPING_CHANNELS}
 
 
 async def _add_run_cost(run_id: uuid.UUID, delta: float) -> None:
@@ -244,6 +292,21 @@ async def _resolve_llm_client_factory(organization_id: uuid.UUID) -> Callable[..
     return functools.partial(get_llm_client, api_key_override=api_key)
 
 
+async def _resolve_tool_configs(version: WorkflowVersion, organization_id: uuid.UUID) -> dict[str, dict[str, Any]]:
+    """
+    Registry seam, exactly parallel to `_resolve_llm_client_factory` above.
+
+    Resolved once per run and bound into the compiled graph, because `tool_handler`
+    is a synchronous function running inside a LangGraph superstep with no session
+    and nothing to await — resolving per invocation would mean a sync DB hop from
+    inside the graph, and would break `compile_for_test_run`, which has no DB at all.
+
+    The DB read lives behind `ToolService` so `src/graphs/` stays DB-free.
+    """
+    async with async_session_maker() as session:
+        return await ToolService(session).resolve_node_configs(organization_id, list(version.nodes))
+
+
 async def _stream_graph(
     run_id: uuid.UUID,
     version: WorkflowVersion,
@@ -257,7 +320,14 @@ async def _stream_graph(
     """
     saver = PostgresSaver(async_session_maker)
     client_factory = await _resolve_llm_client_factory(organization_id)
-    compiled, _ = _compile_state_graph(version, checkpointer=saver, client_factory=client_factory)
+    tool_configs = await _resolve_tool_configs(version, organization_id)
+    compiled, _ = _compile_state_graph(
+        version,
+        checkpointer=saver,
+        client_factory=client_factory,
+        tool_configs=tool_configs,
+        tool_log=ToolExecutionLogger() if tool_configs else None,
+    )
 
     config = {"configurable": {"thread_id": str(run_id)}}
 
@@ -286,7 +356,7 @@ async def _stream_graph(
             # The input snapshot is the full prior state; for audit purposes
             # we record just the output here (full state is in the checkpoint).
             usage = _usage_for_node(node_output, node_key)
-            await _insert_node_execution(
+            node_execution_id = await _insert_node_execution(
                 workflow_run_id=run_id,
                 node_key=node_key,
                 status="succeeded",
@@ -298,6 +368,8 @@ async def _stream_graph(
                 tokens_completion=usage.get("tokens_completion"),
                 cost_usd=usage.get("cost_usd"),
             )
+            if node_execution_id is not None:
+                await _link_tool_executions(_tool_call_ids(node_output, node_key), node_execution_id)
             if usage.get("cost_usd"):
                 await _add_run_cost(run_id, float(usage["cost_usd"]))
 
@@ -345,6 +417,10 @@ def _run_async(coro: Any) -> Any:
     This went unnoticed because a worker never ran a second task: the Celery app
     had no `include`, so its task registry was empty and every job was discarded
     as unregistered.
+
+    The sync engine (`src/db/sync_database.py`, used by ToolExecutionLogger) is
+    disposed alongside it. It uses NullPool so there are no idle connections to
+    release, but an engine must not be carried across a fork either.
     """
 
     async def _runner() -> Any:
@@ -352,6 +428,7 @@ def _run_async(coro: Any) -> Any:
             return await coro
         finally:
             await engine.dispose()
+            dispose_sync_engine()
 
     return asyncio.run(_runner())
 

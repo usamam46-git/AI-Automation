@@ -195,11 +195,11 @@ Then open <http://localhost:3000>, register an account, and build a workflow.
 
 ### 5. Run Tests
 ```bash
-cd apps/api && poetry run pytest            # 188 backend tests
+cd apps/api && poetry run pytest            # 250 backend tests
 cd apps/web && npm test                     # 65 frontend tests (pure lib/ modules)
 ```
 
-⚠️ **`tests/conftest.py` has no test-database isolation** — it runs straight against whatever `DATABASE_URL` resolves to, no transaction rollback, and several tests trigger real `execute_workflow.delay(...)` Celery dispatches against the real broker. Running `pytest` against the same Postgres/Redis your dev stack uses (Option A or B above) **will leave fixture rows behind** (fake orgs/users/workflow runs) and can queue tasks a live worker will then try to process. If that happens, the clean recovery is to drop and recreate the `public` schema and rerun migrations — there's no real data to lose in local dev, but don't assume `pytest` is side-effect-free against a shared or seeded database. CI is unaffected — it provisions a throwaway Postgres per run.
+ℹ️ **`pytest` is destructive to the database it points at, by design.** As of 2026-08-08 `tests/conftest.py` TRUNCATEs every table in the `public` schema (except `alembic_version`) before and after each test, and stubs `.delay()` on the Celery tasks so nothing reaches the broker. That means a run no longer leaves fixture rows behind or queues jobs for a live worker — but it also means **anything already in that database is wiped**. Point `DATABASE_URL` at a scratch database, not one holding data you care about. CI is unaffected: it provisions a throwaway Postgres per run.
 
 CI runs the same commands plus `ruff check`, `ruff format --check`, `eslint`, `tsc --noEmit`, and `next build` — see `.github/workflows/ci.yml`.
 
@@ -210,4 +210,4 @@ Connect with your favourite client (DBeaver, pgAdmin, VS Code SQLTools):
 
 ---
 
-*This repository is actively being built. The core loop now works end-to-end through the UI: draw a workflow on the canvas, publish it, trigger a run, watch the timeline fill in node by node, approve the human-in-the-loop step, and see it complete — with tokens, cost, and a per-node audit trail persisted throughout. Next phases: the `subgraph` handler and a real `tools` module on the backend, the dashboard home and a Settings page for BYOK keys on the frontend, and WebSocket streaming to replace the Execution Viewer's polling.*
+*This repository is actively being built. The core loop now works end-to-end through the UI: draw a workflow on the canvas, publish it, trigger a run, watch the timeline fill in node by node, approve the human-in-the-loop step, and see it complete — with tokens, cost, and a per-node audit trail persisted throughout. Workflows can now call registry tools rather than inline config, and every mutating tool call is logged to `tool_executions` before it executes. Next phases: agent function-calling (the ReAct loop), the `subgraph` handler, real schedule/webhook triggers, the dashboard home, and WebSocket streaming to replace the Execution Viewer's polling.*

@@ -425,8 +425,16 @@ def test_tool_config_error_missing_tool_type():
 
 
 def test_tool_config_error_message_calls_out_tool_id_only_config():
-    """The common authoring mistake deserves a message that names the cause."""
-    with pytest.raises(ToolNodeConfigError, match="tools module is not implemented yet"):
+    """
+    The common authoring mistake deserves a message that names the cause.
+
+    Since the tools module landed, a bare `tool_id` normally never reaches this
+    handler — `graph_tasks._resolve_tool_configs` turns it into inline shape once
+    per run, and an id that can't be resolved raises earlier with its own message.
+    What lands here is a DB-less compile path (`compile_for_test_run`), so the
+    message points at resolution rather than at a missing module.
+    """
+    with pytest.raises(ToolNodeConfigError, match="not resolved against the tools registry"):
         _run_tool({"tool_id": str(uuid.uuid4())})
 
 

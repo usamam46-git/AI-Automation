@@ -62,6 +62,12 @@ def _workflow_state_schema() -> type:
         # streams with stream_mode="updates" and only sees what a handler returns,
         # so this is the sole channel by which usage reaches node_executions.
         node_usage: dict[str, Any]
+        # tool_executions row ids created by a registry-backed tool node, keyed by
+        # node_key. A sibling of node_usage for the same reason and with the same
+        # treatment: bookkeeping, stripped from the output snapshot, never on the
+        # condition-DSL-addressable surface. _stream_graph reads it to back-fill
+        # node_execution_id once the node_executions row exists.
+        node_tool_calls: dict[str, Any]
         messages: Annotated[list[Any], operator.add]
         errors: Annotated[list[dict[str, Any]], operator.add]
         current_cost_usd: float
@@ -88,6 +94,8 @@ def _bind_node_handler(
     node: WorkflowNode,
     *,
     client_factory: Callable[..., LLMClient] = get_llm_client,
+    tool_configs: dict[str, dict[str, Any]] | None = None,
+    tool_log: Any | None = None,
 ) -> Callable[..., dict[str, Any]]:
     node_type = node.node_type
     node_key = node.node_key
@@ -109,10 +117,22 @@ def _bind_node_handler(
 
         return _agent
     if node_type == "tool":
-        tool_config = node.config or {}
+        # A registry-resolved config, when one was supplied for this node, replaces
+        # the node's own config wholesale — `ToolService.resolve_node_configs` has
+        # already folded in the node's overridable keys, and only produces an entry
+        # for nodes with no inline `tool_type`. Absent an entry (inline config, or
+        # no DB at all as in compile_for_test_run) this is the pre-registry path,
+        # byte for byte.
+        resolved = (tool_configs or {}).get(node_key)
+        tool_config = resolved or node.config or {}
+        # Audit logging is bound only for a node the registry actually resolved:
+        # tool_executions.tool_id is NOT NULL, and an inline-config node's stray
+        # forward-compat tool_id may point at no row at all.
+        audit_tool_id = uuid.UUID(str(resolved["tool_id"])) if resolved and resolved.get("tool_id") else None
+        audit_log = tool_log if audit_tool_id is not None else None
 
         def _tool(state: dict[str, Any]) -> dict[str, Any]:
-            return tool_handler(state, node_key=node_key, config=tool_config)
+            return tool_handler(state, node_key=node_key, config=tool_config, tool_log=audit_log, tool_id=audit_tool_id)
 
         return _tool
     if node_type == "subgraph":
@@ -124,7 +144,8 @@ def _bind_node_handler(
     raise GraphCompileError(f"Unsupported node_type '{node_type}' on node '{node_key}'")
 
 
-def _log_unresolved_config_refs(nodes: list[WorkflowNode]) -> None:
+def _log_unresolved_config_refs(nodes: list[WorkflowNode], *, resolved_tool_keys: set[str] | None = None) -> None:
+    resolved_tool_keys = resolved_tool_keys or set()
     for node in nodes:
         config = node.config or {}
         # An agent node carrying inline config resolves nothing at runtime, so its
@@ -133,8 +154,10 @@ def _log_unresolved_config_refs(nodes: list[WorkflowNode]) -> None:
         inline_agent = node.node_type == "agent" and "output_schema" in config
         # Same reasoning for tool nodes: one carrying inline `tool_type` config
         # resolves nothing at runtime, so its tool_id is forward-compat, not an
-        # unresolved reference.
-        inline_tool = node.node_type == "tool" and "tool_type" in config
+        # unresolved reference. A node whose tool_id the caller already resolved
+        # against the registry is likewise not unresolved — the warning predates
+        # the tools module and would now fire on the supported path.
+        inline_tool = node.node_type == "tool" and ("tool_type" in config or node.node_key in resolved_tool_keys)
         for ref_key in ("agent_id", "tool_id", "prompt_id"):
             if ref_key == "agent_id" and inline_agent:
                 continue
@@ -169,13 +192,15 @@ def _compile_state_graph(
     *,
     checkpointer: BaseCheckpointSaver | None = None,
     client_factory: Callable[..., LLMClient] = get_llm_client,
+    tool_configs: dict[str, dict[str, Any]] | None = None,
+    tool_log: Any | None = None,
 ) -> tuple[CompiledStateGraph, CompileStats]:
     if workflow_version.published_at is None:
         raise DraftVersionCompileError(f"Workflow version {workflow_version.id} is a draft; only published versions can be compiled.")
 
     nodes: list[WorkflowNode] = list(workflow_version.nodes)
     edges: list[WorkflowEdge] = list(workflow_version.edges)
-    _log_unresolved_config_refs(nodes)
+    _log_unresolved_config_refs(nodes, resolved_tool_keys=set(tool_configs or {}))
 
     condition_keys = {n.node_key for n in nodes if n.node_type == CONDITION_NODE_TYPE}
     builder = StateGraph(_workflow_state_schema())
@@ -184,7 +209,10 @@ def _compile_state_graph(
     for node in nodes:
         if node.node_type == CONDITION_NODE_TYPE:
             continue
-        builder.add_node(node.node_key, _bind_node_handler(node, client_factory=client_factory))
+        builder.add_node(
+            node.node_key,
+            _bind_node_handler(node, client_factory=client_factory, tool_configs=tool_configs, tool_log=tool_log),
+        )
         langgraph_nodes += 1
 
     start_nodes = [n for n in nodes if n.node_type == "start"]

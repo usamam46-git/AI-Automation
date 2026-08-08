@@ -118,6 +118,15 @@ is **∃-semantics** (flag only when *zero* `human_approval` nodes exist
 upstream); tightening it to ∀ would reject the blueprint's own Vol. 5 §1 and
 §5 workflows and diverge from the server.
 
+**Known divergence, deliberate (2026-08-08):** the mutating-approval walk reads
+`config.is_mutating === true` only. Since the tools module landed, a node may
+also be mutating because the registry `tools` row its `tool_id` points at has
+`is_mutating = true` — and the builder never fetches tools, so it **under-reports**
+for registry-backed nodes. The backend 422 catches them at publish. Closing this
+properly means loading the workspace's tools into the builder (and would also let
+the tool config form offer a registry picker instead of only inline config); until
+then, do not "fix" it by guessing.
+
 The server's 422 stays the authority. `parseValidationDetail()` recovers node
 keys from its mostly-unstructured `detail` strings; anything unattributable
 renders as a toolbar banner rather than being dropped. Publishing is
@@ -205,3 +214,23 @@ Built 2026-08-07 (Vol. 3 §6). `app/(dashboard)/executions/page.tsx` (list) and
   extend it rather than forking a parallel token set.
 - No "View raw trace in LangSmith" link from the §6.1 wireframe: the LangSmith
   hook in `LLMClient` is a no-op, so the link would be dead.
+
+## Settings page (2026-08-08)
+
+`app/(dashboard)/settings/page.tsx` + `components/settings/openai-key-card.tsx`,
+wrapping the BYOK endpoints that had been complete on the backend since
+2026-08-06 and entirely unconsumed. `integrationsApi` is the fifth client in
+`lib/api.ts`.
+
+- **404 is the empty state, not an error.** `GET /integrations/openai_api_key`
+  returns 404 when no key is stored. The card renders "no key stored" for that
+  and reserves `ErrorState` for real failures.
+- **403 is a permanent, explained state.** `integration:read`/`integration:write`
+  are Owner-only by design (a stored key is a direct billing-exposure lever), so
+  a non-Owner gets a locked card, not a retryable error. Both 404 and 403 are
+  excluded from React Query's retry.
+- **`last_four` is the only view of the key that exists.** There is no code path
+  on the server that decrypts and returns the raw value, even to the owning org
+  — don't add a field expecting it to be filled in.
+- Vol. 3 §10 specifies six admin pages; only Integrations has a backend. The
+  other five are deliberately absent rather than stubbed.

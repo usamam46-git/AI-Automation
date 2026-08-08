@@ -14,12 +14,18 @@ Design notes:
   calling / tool spec — the tool registry IS the function-calling contract.
 - config stores type-specific config (endpoint URL, auth reference, etc.)
   encrypted at the application layer for secrets (see Vol. 2 §13).
+- is_mutating is a TYPED COLUMN, deviating from Vol. 4 §4.3, which says tools
+  "are marked `is_mutating: true` in their config". Free-form JSONB fails open
+  on a misspelled key (`is_mutation` reads as non-mutating and walks straight
+  past the publish-time approval guardrail); a bool column cannot. Note this
+  only closes the hole for workflow nodes that reference a `tool_id` — nodes
+  carrying inline config still read the JSONB key and still fail open.
 """
 
 import uuid
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Integer, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +52,11 @@ class Tool(UUIDMixin, TenantMixin, TimestampMixin, Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Sent to the LLM as the function spec's description (Vol. 4 §4.2).",
+    )
     tool_type: Mapped[str] = mapped_column(
         Text,
         nullable=False,
@@ -60,6 +71,20 @@ class Tool(UUIDMixin, TenantMixin, TimestampMixin, Base):
         JSONB,
         nullable=True,
         comment="Type-specific config (endpoint URL, auth refs, etc.).",
+    )
+    is_mutating: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="True if the tool writes external state (ERP posts, payments). Vol. 4 §4.3.",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+        comment="False = soft-deleted. Hard deletes are refused: tool_executions cascades.",
     )
 
     # Relationships

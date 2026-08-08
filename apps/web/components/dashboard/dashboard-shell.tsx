@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Bot, ChevronDown, FolderKanban, LayoutGrid, LogOut, Plus, Workflow } from "lucide-react";
+import { Activity, Bot, ChevronDown, FolderKanban, LayoutGrid, LogOut, Plus, Settings, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ const navItems = [
   { label: "Workflows", href: "/workflows", icon: Workflow },
   { label: "Executions", href: "/executions", icon: Activity },
   { label: "Workspaces", href: "/workspaces", icon: LayoutGrid },
+  { label: "Settings", href: "/settings", icon: Settings },
 ];
 
 const soonItems = [

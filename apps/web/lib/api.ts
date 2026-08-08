@@ -304,3 +304,38 @@ export const executionsApi = {
     return data;
   },
 };
+
+// ---------------------------------------------------------------------------
+// Integrations (BYOK) — Vol. 2 §13
+// ---------------------------------------------------------------------------
+
+export type IntegrationType = "openai_api_key";
+
+// The API NEVER returns the key itself, even to the owning org — `last_four` is
+// the only view of it that exists. Don't add a `key` field expecting the server
+// to fill it in.
+export interface IntegrationStatus {
+  type: IntegrationType;
+  last_four: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const integrationsApi = {
+  // 404 means "no key stored", not "endpoint missing" — the caller treats it as
+  // an empty state rather than an error.
+  async get(type: IntegrationType = "openai_api_key") {
+    const { data } = await apiClient.get<IntegrationStatus>(`/integrations/${type}`);
+    return data;
+  },
+  // 422 when the key fails the structural `sk-` check. There is no live call to
+  // OpenAI at set-time, so a well-formed but invalid key is accepted here and
+  // only fails on the next run.
+  async set(apiKey: string, type: IntegrationType = "openai_api_key") {
+    const { data } = await apiClient.put<IntegrationStatus>(`/integrations/${type}`, { api_key: apiKey });
+    return data;
+  },
+  async remove(type: IntegrationType = "openai_api_key") {
+    await apiClient.delete(`/integrations/${type}`);
+  },
+};

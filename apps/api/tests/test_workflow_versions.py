@@ -693,3 +693,211 @@ async def test_draft_save_still_rejects_duplicate_node_key(client: AsyncClient):
 
     assert saved.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, saved.text
     assert "Duplicate node_key" in str(saved.json()["detail"])
+
+
+# ---------------------------------------------------------------------------
+# Registry-backed tool nodes at publish (Vol. 4 §4.3, tools module 2026-08-08)
+#
+# These live here rather than in test_tools.py because this file owns publish
+# validation. They pin the half of the mutating gate that reads the `tools`
+# table instead of the node's free-form JSONB.
+# ---------------------------------------------------------------------------
+
+
+def _registry_tool_node(key: str, tool_id: str, extra: dict | None = None) -> NodeInput:
+    """A tool node that references the registry and carries NO inline tool_type."""
+    return _tool_node(key, {"tool_id": tool_id, **(extra or {})})
+
+
+async def _registry_ctx(client: AsyncClient, suffix: str) -> dict:
+    data = await register_and_get_token(client, suffix)
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    ws = await create_workspace(client, token)
+    wf = await create_workflow(client, token, ws["id"])
+    return {"headers": headers, "workspace_id": ws["id"], "workflow_id": wf["id"]}
+
+
+async def _make_tool(client: AsyncClient, ctx: dict, name: str, *, is_mutating: bool) -> str:
+    resp = await client.post(
+        "/api/v1/tools",
+        json={
+            "workspace_id": ctx["workspace_id"],
+            "name": name,
+            "tool_type": "erp_connector",
+            "config": {"action": "create_journal_entry"},
+            "is_mutating": is_mutating,
+        },
+        headers=ctx["headers"],
+    )
+    assert resp.status_code == status.HTTP_201_CREATED, resp.text
+    return resp.json()["id"]
+
+
+async def _save_and_publish(client: AsyncClient, ctx: dict, nodes, edges):
+    saved = await client.post(
+        f"/api/v1/workflows/{ctx['workflow_id']}/versions",
+        json=graph_payload(nodes, edges),
+        headers=ctx["headers"],
+    )
+    assert saved.status_code == status.HTTP_201_CREATED, saved.text
+    version_id = saved.json()["id"]
+    return await client.post(
+        f"/api/v1/workflows/{ctx['workflow_id']}/versions/{version_id}/publish",
+        headers=ctx["headers"],
+    )
+
+
+def _linear(tool_node: NodeInput, *, approved: bool):
+    """start → [approve →] tool → end."""
+    nodes = [NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0)]
+    edges = []
+    previous = "start"
+    if approved:
+        nodes.append(NodeInput(node_key="approve", node_type=NodeType.human_approval, config={}, position_x=100, position_y=0))
+        edges.append(EdgeInput(source_node_key=previous, target_node_key="approve"))
+        previous = "approve"
+    nodes.append(tool_node)
+    edges.append(EdgeInput(source_node_key=previous, target_node_key=tool_node.node_key))
+    nodes.append(NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=400, position_y=0))
+    edges.append(EdgeInput(source_node_key=tool_node.node_key, target_node_key="end"))
+    return nodes, edges
+
+
+def test_registry_mutating_flag_is_ignored_without_the_id_set():
+    """
+    The widened signature must be a pure no-op by default.
+
+    This is what keeps every pre-registry unit test — and `save_draft`, which
+    never passes the argument — behaving exactly as before.
+    """
+    nodes, edges = _linear(_registry_tool_node("post_je", str(uuid.uuid4())), approved=False)
+    validate_mutating_approval(nodes, edges)  # no mutating_tool_ids → no gate
+
+
+def test_registry_mutating_flag_fires_when_the_id_is_supplied():
+    tool_id = uuid.uuid4()
+    nodes, edges = _linear(_registry_tool_node("post_je", str(tool_id)), approved=False)
+
+    with pytest.raises(GraphValidationError) as exc:
+        validate_mutating_approval(nodes, edges, mutating_tool_ids={tool_id})
+    assert "post_je" in str(exc.value.detail)
+
+
+def test_node_cannot_downgrade_a_mutating_registry_tool():
+    """
+    Inline config may upgrade a node to mutating, never downgrade it. Without this
+    a node could set is_mutating:false and walk past the gate on a tool the org
+    explicitly marked as writing to the ledger.
+    """
+    tool_id = uuid.uuid4()
+    node = _registry_tool_node("post_je", str(tool_id), {"is_mutating": False})
+    nodes, edges = _linear(node, approved=False)
+
+    with pytest.raises(GraphValidationError) as exc:
+        validate_mutating_approval(nodes, edges, mutating_tool_ids={tool_id})
+    assert "post_je" in str(exc.value.detail)
+
+
+def test_malformed_tool_id_is_not_treated_as_a_registry_reference():
+    """A non-UUID tool_id must not crash the walk — it reports as unresolvable later."""
+    nodes, edges = _linear(_registry_tool_node("post_je", "not-a-uuid"), approved=False)
+    validate_mutating_approval(nodes, edges, mutating_tool_ids={uuid.uuid4()})
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_a_tool_id_with_no_registry_row(client: AsyncClient):
+    """
+    `tool_id` used to be an opaque UUID with no FK check. Now that a registry
+    exists, a dangling reference fails the publish instead of the run.
+    """
+    ctx = await _registry_ctx(client, "V-REG-MISSING")
+    nodes, edges = _linear(_registry_tool_node("post_je", str(uuid.uuid4())), approved=True)
+
+    resp = await _save_and_publish(client, ctx, nodes, edges)
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, resp.text
+    assert "post_je" in str(resp.json()["detail"])
+    assert "registry" in str(resp.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_another_orgs_tool_id(client: AsyncClient):
+    """Cross-org resolution must fail identically to a nonexistent id — no existence leak."""
+    owner = await _registry_ctx(client, "V-REG-OWNER")
+    other = await _registry_ctx(client, "V-REG-OTHER")
+    foreign_tool_id = await _make_tool(client, other, "foreign_tool", is_mutating=False)
+
+    nodes, edges = _linear(_registry_tool_node("post_je", foreign_tool_id), approved=True)
+    resp = await _save_and_publish(client, owner, nodes, edges)
+
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, resp.text
+    assert "registry" in str(resp.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_unapproved_registry_mutating_tool(client: AsyncClient):
+    ctx = await _registry_ctx(client, "V-REG-UNAPPROVED")
+    tool_id = await _make_tool(client, ctx, "post_je_tool", is_mutating=True)
+
+    nodes, edges = _linear(_registry_tool_node("post_je", tool_id), approved=False)
+    resp = await _save_and_publish(client, ctx, nodes, edges)
+
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, resp.text
+    assert "no human_approval node" in str(resp.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_publish_allows_registry_mutating_tool_behind_an_approval(client: AsyncClient):
+    ctx = await _registry_ctx(client, "V-REG-APPROVED")
+    tool_id = await _make_tool(client, ctx, "post_je_tool", is_mutating=True)
+
+    nodes, edges = _linear(_registry_tool_node("post_je", tool_id), approved=True)
+    resp = await _save_and_publish(client, ctx, nodes, edges)
+
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    assert resp.json()["published_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_node_that_downgrades_a_registry_mutating_tool(client: AsyncClient):
+    ctx = await _registry_ctx(client, "V-REG-DOWNGRADE")
+    tool_id = await _make_tool(client, ctx, "post_je_tool", is_mutating=True)
+
+    node = _registry_tool_node("post_je", tool_id, {"is_mutating": False})
+    nodes, edges = _linear(node, approved=False)
+    resp = await _save_and_publish(client, ctx, nodes, edges)
+
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, resp.text
+    assert "no human_approval node" in str(resp.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_draft_save_never_resolves_tool_ids(client: AsyncClient):
+    """
+    Publish-only, like every other gate. An author drops a tool node and wires its
+    tool_id afterwards; the canvas autosaves in between and must not 422.
+    """
+    ctx = await _registry_ctx(client, "V-REG-DRAFT")
+    nodes, edges = _linear(_registry_tool_node("post_je", str(uuid.uuid4())), approved=False)
+
+    saved = await client.post(
+        f"/api/v1/workflows/{ctx['workflow_id']}/versions",
+        json=graph_payload(nodes, edges),
+        headers=ctx["headers"],
+    )
+    assert saved.status_code == status.HTTP_201_CREATED, saved.text
+
+
+@pytest.mark.asyncio
+async def test_inline_configured_node_is_exempt_from_registry_resolution(client: AsyncClient):
+    """
+    Inline config is the supported non-registry path, and CLAUDE.md documents a
+    stray forward-compat `tool_id` alongside it as a no-op. Publishing one must
+    not start failing now that a registry exists to check against.
+    """
+    ctx = await _registry_ctx(client, "V-REG-INLINE")
+    node = _tool_node("post_je", {**MUTATING_TOOL_CONFIG, "tool_id": str(uuid.uuid4())})
+    nodes, edges = _linear(node, approved=True)
+
+    resp = await _save_and_publish(client, ctx, nodes, edges)
+    assert resp.status_code == status.HTTP_200_OK, resp.text

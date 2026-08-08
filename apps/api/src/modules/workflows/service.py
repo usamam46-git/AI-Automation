@@ -195,7 +195,34 @@ def _find_cycle(node_keys: set[str], edges: list[EdgeInput]) -> list[str] | None
     return None
 
 
-def validate_mutating_approval(nodes: list[NodeInput], edges: list[EdgeInput]) -> None:
+def _referenced_tool_ids(nodes: list[NodeInput]) -> dict[str, uuid.UUID]:
+    """
+    Map node_key -> tool_id for every tool node that references the registry.
+
+    A `tool_id` that isn't a UUID is skipped rather than raised on: the caller
+    reports it through the same "unresolvable" path as a well-formed id with no
+    matching row, so an author gets one consistent error instead of two.
+    """
+    referenced: dict[str, uuid.UUID] = {}
+    for node in nodes:
+        if _node_type_str(node.node_type) != NodeType.tool.value:
+            continue
+        raw = (node.config or {}).get("tool_id")
+        if not raw:
+            continue
+        try:
+            referenced[node.node_key] = uuid.UUID(str(raw))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return referenced
+
+
+def validate_mutating_approval(
+    nodes: list[NodeInput],
+    edges: list[EdgeInput],
+    *,
+    mutating_tool_ids: set[uuid.UUID] | None = None,
+) -> None:
     """
     Reject a graph where a mutating node has no `human_approval` node upstream (Vol. 4 §4.3).
 
@@ -212,12 +239,32 @@ def validate_mutating_approval(nodes: list[NodeInput], edges: list[EdgeInput]) -
     risk — that auto-approve branch posting with no human in the loop — is the
     blueprint's design decision, not a gap here.
 
-    `is_mutating` is read from the node's inline `config`, since the tools module is
-    models-only and there is no Tool row to resolve `tool_id` against. Only a literal
-    `True` counts; `_tool_config` rejects non-bool values at invoke time so a string
-    "true" cannot quietly read as non-mutating here.
+    A node counts as mutating if EITHER source says so:
+
+    - its inline `config["is_mutating"]` is a literal `True` (only a literal; a string
+      "true" reads as non-mutating here, and `_tool_config` is what catches it, at
+      invoke time); or
+    - it references a registry `tool_id` whose Tool row has `is_mutating = true`,
+      passed in via `mutating_tool_ids`.
+
+    A node may **upgrade** but never **downgrade**: a registry tool marked mutating
+    stays mutating no matter what the node's inline config claims. Otherwise a node
+    could set `is_mutating: false` and walk straight past this gate.
+
+    The registry half is what makes the flag fail *closed* — a bool column cannot be
+    misspelled the way a JSONB key can. That only holds for nodes referencing a
+    `tool_id`; a node carrying inline config still reads free-form JSONB and still
+    fails open on `is_mutation`. Do not describe this gate as fail-closed wholesale.
+
+    `mutating_tool_ids` defaults to None (an empty set) so a caller with no DB — every
+    unit test, and `save_draft`, which never runs this — gets exactly the pre-registry
+    behavior.
     """
-    mutating_keys = [node.node_key for node in nodes if (node.config or {}).get("is_mutating") is True]
+    mutating_ids = mutating_tool_ids or set()
+    referenced = _referenced_tool_ids(nodes)
+    mutating_keys = [
+        node.node_key for node in nodes if (node.config or {}).get("is_mutating") is True or referenced.get(node.node_key) in mutating_ids
+    ]
     if not mutating_keys:
         return
 
@@ -255,8 +302,8 @@ def validate_mutating_approval(nodes: list[NodeInput], edges: list[EdgeInput]) -
     if unguarded:
         raise GraphValidationError(
             f"Mutating nodes have no human_approval node in their upstream dependency path: {sorted(unguarded)}. "
-            f"A node marked 'is_mutating: true' writes to an external system (ERP writes, payments) and must be "
-            f"reachable only after human approval (Vol. 4 §4.3)."
+            f"A node marked 'is_mutating: true' — inline, or on the registry tool it references — writes to an "
+            f"external system (ERP writes, payments) and must be reachable only after human approval (Vol. 4 §4.3)."
         )
 
 
@@ -452,6 +499,49 @@ class WorkflowService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow version not found.")
         return _version_to_response(version)
 
+    async def _resolve_registry_tools(self, organization_id: uuid.UUID, nodes: list[NodeInput]) -> set[uuid.UUID]:
+        """
+        Resolve every `tool_id` on the graph against the registry, at publish time.
+
+        Two jobs in one indexed query:
+
+        1. **FK validation.** `tool_id` has always been an opaque UUID with no
+           referential check (the compiler only logged a warning). Now that there is
+           a `tools` table to check against, a reference that resolves to nothing —
+           nonexistent, another org's, or soft-deleted — fails the publish with a 422
+           naming the node_key, rather than becoming a run-time explosion later.
+        2. **Mutating flags**, fed to `validate_mutating_approval`.
+
+        Publish-time only, like every other gate here: `save_draft` never calls this,
+        so an author can drop a tool node and wire its `tool_id` afterwards.
+
+        Nodes carrying inline `tool_type` config are exempt from (1) — inline config
+        is the supported non-registry path, and a stray forward-compat `tool_id`
+        alongside it is a documented no-op, not a broken reference.
+        """
+        from src.modules.tools.repository import ToolRepository
+
+        referenced = _referenced_tool_ids(nodes)
+        if not referenced:
+            return set()
+
+        inline_keys = {node.node_key for node in nodes if (node.config or {}).get("tool_type")}
+        must_resolve = {key: tid for key, tid in referenced.items() if key not in inline_keys}
+
+        tools = await ToolRepository(self.db).get_many_by_ids(organization_id, list(set(referenced.values())))
+        by_id = {tool.id: tool for tool in tools}
+
+        unresolved = sorted(key for key, tid in must_resolve.items() if tid not in by_id)
+        if unresolved:
+            self._raise_validation_error(
+                GraphValidationError(
+                    f"Tool nodes reference tools that do not exist in this organization's registry: {unresolved}. "
+                    f"Either point them at a live tool or give them inline 'tool_type' config."
+                )
+            )
+
+        return {tool.id for tool in tools if tool.is_mutating}
+
     async def publish_version(
         self,
         organization_id: uuid.UUID,
@@ -471,11 +561,12 @@ class WorkflowService:
             )
 
         nodes, edges = _nodes_edges_from_version(version)
+        mutating_tool_ids = await self._resolve_registry_tools(organization_id, nodes)
         try:
             validate_graph_structure(nodes, edges)
             # Publish-only, unlike the structural checks above: a draft may legitimately
             # hold a mutating node whose approval gate is not wired yet (Vol. 4 §4.3).
-            validate_mutating_approval(nodes, edges)
+            validate_mutating_approval(nodes, edges, mutating_tool_ids=mutating_tool_ids)
         except GraphValidationError as exc:
             self._raise_validation_error(exc)
 

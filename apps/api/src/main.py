@@ -106,6 +106,7 @@ app.add_middleware(
 from src.modules.auth.router import router as auth_router
 from src.modules.executions.router import router as executions_router
 from src.modules.integrations.router import router as integrations_router
+from src.modules.tools.router import router as tools_router
 from src.modules.workflows.router import router as workflows_router
 from src.modules.workspaces.router import router as workspaces_router
 
@@ -119,6 +120,7 @@ app.include_router(workflows_router, prefix="/api/v1/workflows", tags=["workflow
 # two path prefixes: /api/v1/workflows/{id}/run and /api/v1/executions/{id}
 app.include_router(executions_router, prefix="/api/v1", tags=["executions"])
 app.include_router(integrations_router, prefix="/api/v1/integrations", tags=["integrations"])
+app.include_router(tools_router, prefix="/api/v1/tools", tags=["tools"])
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

@@ -240,7 +240,14 @@ async def test_postgres_saver_missing_run_returns_none():
 
 @pytest.mark.asyncio
 async def test_insert_node_execution_idempotency(client: AsyncClient):
-    """_insert_node_execution returns False and skips if a succeeded row exists."""
+    """
+    _insert_node_execution returns the new row's id, or None when it skipped
+    because a succeeded row already exists for (run, node_key, attempt).
+
+    It returned a bool until the tools module landed; the id is what
+    `_stream_graph` back-fills `tool_executions.node_execution_id` with, and a
+    None return is the signal that there is nothing to back-fill.
+    """
     from src.workers.graph_tasks import _insert_node_execution
 
     ctx = await _create_real_run(client)
@@ -255,7 +262,7 @@ async def test_insert_node_execution_idempotency(client: AsyncClient):
         latency_ms=5,
         attempt=1,
     )
-    assert inserted is True
+    assert isinstance(inserted, uuid.UUID)
 
     inserted_again = await _insert_node_execution(
         workflow_run_id=run_id,
@@ -266,7 +273,7 @@ async def test_insert_node_execution_idempotency(client: AsyncClient):
         latency_ms=3,
         attempt=1,
     )
-    assert inserted_again is False
+    assert inserted_again is None
 
 
 # ---------------------------------------------------------------------------

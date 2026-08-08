@@ -79,8 +79,11 @@ verified via a full read-only orientation pass — see note below.)
   BYOK OpenAI keys landed 2026-08-06 (Vol. 2 §13) — see the bullet below.
   Draft/publish validation split landed 2026-08-06 as Phase 0 of the Builder
   canvas work — see the bullet below.
-  **188 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
-  2026-08-07: 156 + 14 BYOK + 11 validation-split + 7 executions-list).
+  Tools registry + `tool_executions` audit trail landed 2026-08-08 — see the
+  bullet below.
+  **250 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
+  2026-08-08: 188 + 31 tools CRUD + 12 registry resolution + 8 tool_executions
+  + 11 publish-gate cases added to the existing version suite).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -215,22 +218,43 @@ verified via a full read-only orientation pass — see note below.)
   - Full stack (`docker compose up -d --build`, all 8 services) proven end-to-end:
     `api` container boots, migrates-and-seeds itself via `lifespan`, and answers
     `GET /api/docs` with 200 over the mapped port.
-  - **Found but not fixed — needs a design decision, flagging per root CLAUDE.md's
-    own review-first rule rather than guessing:** `apps/api/tests/conftest.py` has
-    no test-database isolation (`setup_services` flushes Redis db0 for cache
-    isolation, but nothing touches Postgres or Celery's broker db, and there's no
-    transaction-rollback fixture). Several tests hit real endpoints that call
-    `execute_workflow.delay(...)`. Running `poetry run pytest` against a
-    Docker-Compose-managed dev stack **writes real fixture rows and dispatches
-    real Celery tasks into it** — caught this via a live worker container churning
-    through ~58 leftover `execute_workflow` tasks and 130 fixture orgs/users sitting
-    in `aap_db` after a routine test run. CI is unaffected (fresh Postgres per run).
-    Vol. 7 §"Testing" gestures at `testcontainers-python` for integration tests but
-    it isn't wired up. Documented as a `⚠️` warning in the README's Run Tests
-    section for now.
-- Next: `subgraph` handler, real `tools` module (CRUD + `tool_executions` rows written
-  *before* mutating calls, per Vol. 4 §4.3), Dashboard home stat cards / "Recent
-  Executions" (Vol. 3 §5), and a Settings UI page for the BYOK endpoints above.
+  - Test-DB/broker isolation was the one gap found here and **left open**; it was
+    closed on 2026-08-08 — see the bullet below.
+- **Test isolation closed 2026-08-08.** `apps/api/tests/conftest.py` now TRUNCATEs
+  every `public` table except `alembic_version` around each test and stubs `.delay`
+  on both Celery tasks. A full run now leaves `aap_db` with zero rows and sends the
+  worker zero jobs (verified). The obvious transaction-rollback approach was tried
+  and rejected for two concrete reasons — see apps/api/CLAUDE.md's testing section
+  before re-attempting it. `testcontainers` (Vol. 7 §4) is still not wired up.
+- **Tools registry landed 2026-08-08** (Vol. 2 §3.3/§7.2, Vol. 4 §4.1/§4.3) — the
+  `tools` module went from models-only to real: `/api/v1/tools` CRUD, `is_mutating`
+  promoted to a typed column, `tool_id` resolved against the registry once per run
+  (the BYOK `client_factory` precedent), and `tool_executions` rows written
+  **before** the call through a second synchronous engine (`src/db/sync_database.py`).
+  Migration: `alembic/versions/20260808_tools_module.py`. Proven end to end against
+  the live Docker stack: publishing a registry-mutating tool with no upstream
+  approval 422s naming the node, deleting a tool referenced by a published version
+  409s, and a `tool_id`-only node runs trigger → approve → completed through the
+  real Celery worker leaving one `tool_executions` row with its `node_execution_id`
+  back-filled and no headers or query strings in `input`.
+  Five contracts in apps/api/CLAUDE.md's tools section; the two most load-bearing:
+  inline `tool_type` config **always** wins over `tool_id`, and a node may override
+  only per-usage state wiring, never the registry's `url`/`method`/`headers`/
+  `action`/`is_mutating`. Agent function-calling (ReAct) is explicitly deferred —
+  `function_specs()` is built and tested, the loop is not, and the reasons are
+  written down.
+- **Settings page + BYOK UI landed 2026-08-08** — `apps/web/app/(dashboard)/settings/`
+  and `components/settings/openai-key-card.tsx` finally consume the integrations
+  endpoints that had been complete and unused since 2026-08-06. Set/replace/remove
+  with a masked `last_four`, 404 rendered as the empty state, 403 as an Owner-only
+  locked card. **65 frontend tests still pass**; `npm run build`, `tsc --noEmit`
+  and `eslint` clean.
+- Next: `subgraph` handler, agent function-calling/ReAct (see the deferral note in
+  apps/api/CLAUDE.md), Dashboard home stat cards / "Recent Executions" (Vol. 3 §5),
+  a tool-registry picker in the Builder's tool config form (which would also close
+  the `graph-validation.ts` under-reporting divergence noted in apps/web/CLAUDE.md),
+  and real triggers (celery beat schedules nothing today; the `beat` and
+  `worker_documents` containers both boot with empty registries).
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list), the builder canvas, and the Execution Viewer
   (see above). `app/(marketing)/` referenced in apps/web/CLAUDE.md does not

@@ -353,7 +353,12 @@ def _tool_config(config: dict[str, Any] | None, node_key: str) -> dict[str, Any]
         raise ToolNodeConfigError(
             f"Tool node '{node_key}' has no usable 'tool_type' in its config. "
             f"Inline tool config requires 'tool_type' (one of {sorted(_TOOL_TYPES)})"
-            + (" (an opaque 'tool_id' alone is not enough — the tools module is not implemented yet)." if config.get("tool_id") else ".")
+            + (
+                " (a 'tool_id' alone reaches this handler only when it was not resolved against the tools registry — "
+                "resolution happens once per run in graph_tasks._resolve_tool_configs, so this is a compile path with no DB)."
+                if config.get("tool_id")
+                else "."
+            )
         )
     if tool_type not in _TOOL_TYPES:
         raise ToolNodeConfigError(
@@ -375,6 +380,25 @@ def _tool_config(config: dict[str, Any] | None, node_key: str) -> dict[str, Any]
     if tool_type == "http_request":
         return {**common, **_http_request_config(config, node_key)}
     return {**common, **_erp_connector_config(config, node_key)}
+
+
+def validate_tool_config(config: dict[str, Any] | None, label: str) -> dict[str, Any]:
+    """
+    Public alias for `_tool_config`, used by the tools registry at write time.
+
+    The point is that a registry row is validated by the exact function that will
+    later execute it, so a row that saves is a row that runs — there is no second
+    "adapter schema" to keep in sync (Vol. 2 §7.2). It is also what makes the
+    registry reject `python_function` and `mcp` at create rather than storing a
+    row that only explodes at invoke time, since `_TOOL_TYPES` already rejects
+    both by name.
+
+    `label` stands in for the node_key in error messages; callers pass the tool's
+    name so a 422 reads sensibly outside a graph.
+
+    Raises ToolNodeConfigError; the service maps it to a 422.
+    """
+    return _tool_config(config, label)
 
 
 def _response_payload(response: httpx.Response) -> Any:
@@ -496,6 +520,35 @@ def _run_erp_connector(cfg: dict[str, Any], state: dict[str, Any], node_key: str
     return {"posted": True, "confirmation_id": confirmation_id, "action": cfg["action"], "payload": payload}
 
 
+def _audit_input(cfg: dict[str, Any]) -> dict[str, Any]:
+    """
+    The intent snapshot written to `tool_executions.input`.
+
+    Same redaction rules as node output, and for the same reason — this row is
+    audit data an operator will read back. `headers` is dropped outright
+    (`tools.config` legitimately holds an Authorization bearer token) and the URL
+    is query-stripped, since `?api_key=...` is a common auth pattern.
+
+    Payload/body values are NOT resolved here: resolving them means reading graph
+    state, and the point of the intent row is that it is written before anything
+    else can fail. The resolved values land in `output` on the way back.
+    """
+    if cfg["tool_type"] == "http_request":
+        return {
+            "tool_type": "http_request",
+            "method": cfg["method"],
+            "url": _safe_url(cfg["url"]),
+            "body_fields": cfg["body_fields"],
+            "is_mutating": cfg["is_mutating"],
+        }
+    return {
+        "tool_type": "erp_connector",
+        "action": cfg["action"],
+        "payload_fields": cfg["payload_fields"],
+        "is_mutating": cfg["is_mutating"],
+    }
+
+
 def tool_handler(
     state: dict[str, Any],
     *,
@@ -504,6 +557,8 @@ def tool_handler(
     client_factory: Callable[..., httpx.Client] = get_http_client,
     max_attempts: int = 3,
     retry_base_delay: float = 1.0,
+    tool_log: Any | None = None,
+    tool_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """
     Execute one `tool`-type node (Vol. 2 §7.2).
@@ -514,24 +569,71 @@ def tool_handler(
     Deliberately returns NO `node_usage` entry: tool nodes have no LLM token or cost
     bookkeeping, and `_usage_for_node` in the execution engine therefore leaves
     tokens_prompt/tokens_completion/cost_usd NULL on the node_executions row.
+
+    `tool_log`/`tool_id` are supplied together, by the compiler, and only for a node
+    the tools registry actually resolved — both are None for inline config and for
+    any DB-less compile path, which is what keeps this a no-op on the pre-registry
+    path. `tool_id` deliberately does NOT fall back to reading `config["tool_id"]`:
+    an inline-config node may carry a stray forward-compat id that resolves to no
+    row, and inserting against it would trip the NOT NULL FK.
+
+    When both are present, an intent row is committed BEFORE the call goes out and
+    updated with the outcome after (Vol. 4 §4.3). The row's id rides back on the
+    `node_tool_calls` channel so `_stream_graph` can back-fill `node_execution_id`
+    once that row exists.
+
+    A logging failure must never take down a tool call that otherwise succeeded, so
+    `finish` is best-effort; `begin` is not, because a missing intent row would make
+    the audit trail silently incomplete, which is worse than a failed run.
     """
     cfg = _tool_config(config, node_key)
 
-    if cfg["tool_type"] == "http_request":
-        result = _run_http_request(
-            cfg,
-            state,
-            node_key,
-            client_factory=client_factory,
-            max_attempts=max_attempts,
-            retry_base_delay=retry_base_delay,
-        )
-    else:
-        result = _run_erp_connector(cfg, state, node_key)
+    execution_id = None
+    if tool_log is not None and tool_id is not None:
+        execution_id = tool_log.begin(tool_id, _audit_input(cfg))
+
+    started = time.monotonic()
+    try:
+        if cfg["tool_type"] == "http_request":
+            result = _run_http_request(
+                cfg,
+                state,
+                node_key,
+                client_factory=client_factory,
+                max_attempts=max_attempts,
+                retry_base_delay=retry_base_delay,
+            )
+        else:
+            result = _run_erp_connector(cfg, state, node_key)
+    except Exception:
+        _finish_quietly(tool_log, execution_id, node_key, status="failed", output=None, started=started)
+        raise
+
+    _finish_quietly(tool_log, execution_id, node_key, status="succeeded", output=result, started=started)
 
     # Copy-then-merge: node_outputs has no reducer, so LangGraph replaces the whole
     # dict on write (same pattern as agent_handler / human_approval_handler).
-    return {"node_outputs": {**state.get("node_outputs", {}), node_key: result}}
+    update: dict[str, Any] = {"node_outputs": {**state.get("node_outputs", {}), node_key: result}}
+    if execution_id is not None:
+        update["node_tool_calls"] = {**state.get("node_tool_calls", {}), node_key: [str(execution_id)]}
+    return update
+
+
+def _finish_quietly(
+    tool_log: Any | None,
+    execution_id: Any,
+    node_key: str,
+    *,
+    status: str,
+    output: dict[str, Any] | None,
+    started: float,
+) -> None:
+    if tool_log is None or execution_id is None:
+        return
+    try:
+        tool_log.finish(execution_id, status=status, output=output, latency_ms=int((time.monotonic() - started) * 1000))
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("Failed to finalize tool_executions row for node '%s'", node_key)
 
 
 def subgraph_handler(_state: dict[str, Any], *, node_key: str, node_type: str = "subgraph") -> dict[str, Any]:
