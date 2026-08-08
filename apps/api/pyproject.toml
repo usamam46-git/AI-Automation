@@ -15,6 +15,11 @@ uvicorn = { version = "^0.30.0", extras = ["standard"] }
 
 # Database — SQLAlchemy async + Postgres driver
 sqlalchemy = { version = "^2.0.30", extras = ["asyncio"] }
+# Direct (not just transitive via sqlalchemy[asyncio]) because SQLAlchemy's own
+# marker for this requirement lists platform_machine == "aarch64" but not "arm64"
+# — the exact string Apple Silicon reports — so it silently doesn't install on
+# any M-series Mac. Pinning it here as a plain dependency drops that marker.
+greenlet = "^3.5.4"
 asyncpg = "^0.29.0"          # async PostgreSQL driver
 alembic = "^1.13.1"
 

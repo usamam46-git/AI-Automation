@@ -182,6 +182,52 @@ verified via a full read-only orientation pass — see note below.)
   unregistered SQLAlchemy mappers (new `src/db/all_models.py`), and a stale asyncpg
   connection pool across per-task event loops (new `_run_async` in `graph_tasks.py`).
   Details in apps/api/CLAUDE.md — do not undo any of the three.
+- **Local environment stood up on a Mac for the first time 2026-08-08** (previous
+  work was on Windows). Four real gaps found and fixed, none of them OS-specific
+  quirks — all four were present in the repo as committed:
+  - `apps/api/Dockerfile` was **0 bytes** since the initial commit — `docker compose
+    up` could never have built the `api`/`worker_*`/`beat` services. Written per the
+    exact contract in Vol. 2 §16 (`python:3.12-slim`, `poetry install --no-root
+    --only main`, `POETRY_VIRTUALENVS_CREATE=false` so the blueprint's bare `CMD
+    ["uvicorn", ...]` resolves without a `poetry run` wrapper).
+  - `poetry.lock`'s `greenlet` entry carries SQLAlchemy's own upstream marker —
+    `platform_machine == "aarch64" | "ppc64le" | "x86_64" | "amd64" | "AMD64" |
+    "win32" | "WIN32"` — which omits `"arm64"`, the exact string Apple Silicon
+    reports. `poetry lock` regenerates this identically (it's not a stale-lock
+    issue), so **every M-series Mac silently loses greenlet** and SQLAlchemy's
+    async bridge breaks at runtime. Fixed at the source: `greenlet = "^3.5.4"`
+    added as a direct dependency in `pyproject.toml`, which drops the inherited
+    marker. Verified with a from-scratch `poetry install` (no manual `pip install`
+    patch) plus a full 188-test pass.
+  - `infra/docker-compose.yml`'s `api`/`worker_*`/`beat` services never set
+    `JWT_SECRET_KEY` or `INTEGRATION_ENCRYPTION_KEY` (both `Field(...)` — required,
+    no default in `core/config.py`) — every container would have crashed on boot
+    with a pydantic `ValidationError`. `worker_documents` was also missing
+    `CELERY_BROKER_URL`, defaulting to `redis://localhost:6379/1` inside its own
+    container instead of the `redis` service. All five services now set all
+    three, with the same dev-only-default convention already used for
+    `SECRET_KEY` (`${VAR:-dev-default}` — override via `infra/.env` or the shell
+    env for anything beyond a solo local machine). `api`'s `command:` also now
+    passes `--reload` explicitly — the Dockerfile's `CMD` intentionally doesn't
+    (matches the prod-facing Vol. 2 §16 excerpt verbatim), but this dev compose
+    file bind-mounts `src/` specifically for hot-reload, so without the override
+    the mount was silently inert.
+  - Full stack (`docker compose up -d --build`, all 8 services) proven end-to-end:
+    `api` container boots, migrates-and-seeds itself via `lifespan`, and answers
+    `GET /api/docs` with 200 over the mapped port.
+  - **Found but not fixed — needs a design decision, flagging per root CLAUDE.md's
+    own review-first rule rather than guessing:** `apps/api/tests/conftest.py` has
+    no test-database isolation (`setup_services` flushes Redis db0 for cache
+    isolation, but nothing touches Postgres or Celery's broker db, and there's no
+    transaction-rollback fixture). Several tests hit real endpoints that call
+    `execute_workflow.delay(...)`. Running `poetry run pytest` against a
+    Docker-Compose-managed dev stack **writes real fixture rows and dispatches
+    real Celery tasks into it** — caught this via a live worker container churning
+    through ~58 leftover `execute_workflow` tasks and 130 fixture orgs/users sitting
+    in `aap_db` after a routine test run. CI is unaffected (fresh Postgres per run).
+    Vol. 7 §"Testing" gestures at `testcontainers-python` for integration tests but
+    it isn't wired up. Documented as a `⚠️` warning in the README's Run Tests
+    section for now.
 - Next: `subgraph` handler, real `tools` module (CRUD + `tool_executions` rows written
   *before* mutating calls, per Vol. 4 §4.3), Dashboard home stat cards / "Recent
   Executions" (Vol. 3 §5), and a Settings UI page for the BYOK endpoints above.

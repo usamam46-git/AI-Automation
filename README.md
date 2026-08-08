@@ -119,16 +119,39 @@ We have completed the foundational **Database Schema and Migration Layer** (Volu
 
 ## 🛠️ Local Setup Instructions
 
-Want to spin this up on your local machine? You'll need Docker, [Poetry](https://python-poetry.org/) **2.x** (the lock file is `lock-version 2.1`, which Poetry 1.x cannot read), and Node 22.
+Want to spin this up on your local machine? You'll need Docker, [Poetry](https://python-poetry.org/) **2.x** (the lock file is `lock-version 2.1`, which Poetry 1.x cannot read), Python **3.12**, and Node 22.
 
-### 1. Start the Infrastructure
+There are two ways to run the backend: the full Docker stack (fastest to get going, closest to prod), or a hybrid setup where Postgres/Redis/MinIO run in Docker but the API and worker run directly via `poetry run` (better for backend development — native debugger, faster reload). Both are documented below; pick one.
+
+### Option A — Full Docker stack
+
+```bash
+cd infra
+docker compose up -d --build
+```
+
+This builds `apps/api/Dockerfile` once and starts all 8 services: `postgres`, `redis`, `minio`, `api`, `worker_workflow`, `worker_documents`, `worker_notifications`, `beat`. The `api`/worker services ship with **dev-only default secrets baked into `docker-compose.yml`** (`SECRET_KEY`/`JWT_SECRET_KEY`/`INTEGRATION_ENCRYPTION_KEY`) so this comes up with zero configuration — fine for a solo local machine, **never for anything shared or internet-reachable**. Override them by exporting the same-named env vars (or an `infra/.env` file) before running `docker compose up`.
+
+Migrations and the RBAC role seed run automatically on every `api` container boot (see `lifespan` in `src/main.py`) — nothing else to run manually. API docs at <http://localhost:8000/api/docs>. Then:
+
+```bash
+cd apps/web && npm install && npm run dev
+```
+
+Open <http://localhost:3000>, register an account, and build a workflow.
+
+`infra/docker-compose.prod.yml` is a placeholder (0 bytes) — production topology (Nginx, TLS, image registry, secrets) described in Volume 6 §1 isn't implemented yet.
+
+### Option B — Hybrid (Docker infra + local API/worker)
+
+#### 1. Start the Infrastructure
 Postgres **and Redis are both required** — Redis backs the permission cache, the rate limiter, and the Celery broker.
 ```bash
 cd infra
-docker compose up -d postgres redis
+docker compose up -d postgres redis minio
 ```
 
-### 2. Configure Environment
+#### 2. Configure Environment
 Create `apps/api/.env`. Three variables are **required and have no defaults** — the app refuses to start without them:
 
 ```dotenv
@@ -146,7 +169,7 @@ CELERY_BROKER_URL=redis://localhost:6379/1
 OPENAI_API_KEY=
 ```
 
-### 3. Install Dependencies & Migrate
+#### 3. Install Dependencies & Migrate
 ```bash
 cd apps/api
 poetry install
@@ -154,7 +177,7 @@ poetry run alembic upgrade head
 poetry run python src/db/seed_roles.py   # seeds the 5 system RBAC roles
 ```
 
-### 4. Run the Stack
+#### 4. Run the Stack
 Three processes. **The Celery worker is not optional** — without it a triggered run is created and then sits at `pending` forever, which looks like a frontend bug but isn't.
 
 ```bash
@@ -175,6 +198,8 @@ Then open <http://localhost:3000>, register an account, and build a workflow.
 cd apps/api && poetry run pytest            # 188 backend tests
 cd apps/web && npm test                     # 65 frontend tests (pure lib/ modules)
 ```
+
+⚠️ **`tests/conftest.py` has no test-database isolation** — it runs straight against whatever `DATABASE_URL` resolves to, no transaction rollback, and several tests trigger real `execute_workflow.delay(...)` Celery dispatches against the real broker. Running `pytest` against the same Postgres/Redis your dev stack uses (Option A or B above) **will leave fixture rows behind** (fake orgs/users/workflow runs) and can queue tasks a live worker will then try to process. If that happens, the clean recovery is to drop and recreate the `public` schema and rerun migrations — there's no real data to lose in local dev, but don't assume `pytest` is side-effect-free against a shared or seeded database. CI is unaffected — it provisions a throwaway Postgres per run.
 
 CI runs the same commands plus `ruff check`, `ruff format --check`, `eslint`, `tsc --noEmit`, and `next build` — see `.github/workflows/ci.yml`.
 
