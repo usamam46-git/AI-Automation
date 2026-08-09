@@ -11,10 +11,12 @@ from collections.abc import Sequence
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dependencies import get_current_org, get_current_user, require_permission
+from src.core.dependencies import get_audit_context, get_current_org, get_current_user, require_permission
 from src.db.database import get_db_session
+from src.modules.audit_logs.schemas import AuditContext
 from src.modules.auth.models import User
 from src.modules.workflows.schemas import (
+    WebhookSecretResponse,
     WorkflowCreate,
     WorkflowResponse,
     WorkflowUpdate,
@@ -94,6 +96,31 @@ async def update_workflow(
     return await service.update_workflow(organization_id, workflow_id, data)
 
 
+@router.post(
+    "/{workflow_id}/webhook-secret",
+    response_model=WebhookSecretResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission("workflow:publish")],
+    summary="Generate or rotate the inbound webhook signing secret",
+)
+async def rotate_webhook_secret(
+    workflow_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_current_org),
+    audit: AuditContext = Depends(get_audit_context),
+    service: WorkflowService = Depends(get_workflow_service),
+) -> WebhookSecretResponse:
+    """
+    Gated on `workflow:publish`, not `workflow:write`. Handing out this secret
+    grants a bearer the ability to start production runs of this workflow from
+    outside the platform with no login — that is closer to publishing than to
+    editing, and `workflow:publish` is already the narrower grant (Editor has
+    write but not publish, per seed_roles.py).
+
+    The plaintext appears in this response and nowhere else, ever.
+    """
+    return await service.rotate_webhook_secret(organization_id, workflow_id, context=audit)
+
+
 @router.delete(
     "/{workflow_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -102,9 +129,10 @@ async def update_workflow(
 async def delete_workflow(
     workflow_id: uuid.UUID,
     organization_id: uuid.UUID = Depends(get_current_org),
+    audit: AuditContext = Depends(get_audit_context),
     service: WorkflowService = Depends(get_workflow_service),
 ) -> None:
-    await service.delete_workflow(organization_id, workflow_id)
+    await service.delete_workflow(organization_id, workflow_id, context=audit)
 
 
 @router.post(
@@ -160,6 +188,7 @@ async def publish_workflow_version(
     version_id: uuid.UUID,
     organization_id: uuid.UUID = Depends(get_current_org),
     user: User = Depends(get_current_user),
+    audit: AuditContext = Depends(get_audit_context),
     service: WorkflowService = Depends(get_workflow_service),
 ) -> WorkflowVersionResponse:
-    return await service.publish_version(organization_id, workflow_id, version_id, user.id)
+    return await service.publish_version(organization_id, workflow_id, version_id, user.id, context=audit)

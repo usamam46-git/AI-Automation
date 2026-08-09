@@ -115,6 +115,28 @@ async def get_redis() -> aioredis.Redis:
     return redis_client
 
 
+async def get_redis_client() -> aioredis.Redis:
+    """
+    Redis client for callers that may run OUTSIDE the FastAPI lifespan.
+
+    `get_redis()` above raises if `init_redis()` has not run, which is correct
+    for a request handler — a request reaching a router without startup having
+    completed is a real bug. But Celery workers never execute the lifespan, so
+    `redis_client` is None in every worker process, and any shared service code
+    reached from both an HTTP route and a task needs an accessor that works in
+    both. `ExecutionService._claim_run_quota` and the schedule tick's quota
+    claim are exactly that.
+
+    Initializes on first use, then returns the same shared client — so inside
+    the API process this is `get_redis()` with a lazy fallback, not a second
+    connection pool.
+    """
+    if redis_client is None:
+        await init_redis()
+    assert redis_client is not None  # init_redis raises rather than leaving it None
+    return redis_client
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

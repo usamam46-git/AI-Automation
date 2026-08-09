@@ -89,6 +89,9 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-jwt}
       INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-7XWWZGvXxliGesghj6biPRpjyjNr7lwfWMlf2jbtxQI=}
+      # Vol. 2 §667 daily per-org run cap. Enforced before the Celery enqueue on
+      # all three trigger paths. Set to 0 to disable; see core/cache.py.
+      DAILY_RUN_QUOTA_PER_ORG: ${DAILY_RUN_QUOTA_PER_ORG:-1000}
       CELERY_BROKER_URL: redis://redis:6379/1
       APP_ENV: development
       DEBUG: "true"
@@ -125,6 +128,9 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-jwt}
       INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-7XWWZGvXxliGesghj6biPRpjyjNr7lwfWMlf2jbtxQI=}
+      # Vol. 2 §667 daily per-org run cap. Enforced before the Celery enqueue on
+      # all three trigger paths. Set to 0 to disable; see core/cache.py.
+      DAILY_RUN_QUOTA_PER_ORG: ${DAILY_RUN_QUOTA_PER_ORG:-1000}
 
   # ─── Celery worker — document processing queue ────────────────────────────
   worker_documents:
@@ -149,6 +155,9 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-jwt}
       INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-7XWWZGvXxliGesghj6biPRpjyjNr7lwfWMlf2jbtxQI=}
+      # Vol. 2 §667 daily per-org run cap. Enforced before the Celery enqueue on
+      # all three trigger paths. Set to 0 to disable; see core/cache.py.
+      DAILY_RUN_QUOTA_PER_ORG: ${DAILY_RUN_QUOTA_PER_ORG:-1000}
 
   # ─── Celery worker — notifications queue ─────────────────────────────────
   worker_notifications:
@@ -170,6 +179,9 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-jwt}
       INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-7XWWZGvXxliGesghj6biPRpjyjNr7lwfWMlf2jbtxQI=}
+      # Vol. 2 §667 daily per-org run cap. Enforced before the Celery enqueue on
+      # all three trigger paths. Set to 0 to disable; see core/cache.py.
+      DAILY_RUN_QUOTA_PER_ORG: ${DAILY_RUN_QUOTA_PER_ORG:-1000}
 
   # ─── Celery Beat scheduler ─────────────────────────────────────────────────
   beat:
@@ -187,6 +199,9 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-jwt}
       INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-7XWWZGvXxliGesghj6biPRpjyjNr7lwfWMlf2jbtxQI=}
+      # Vol. 2 §667 daily per-org run cap. Enforced before the Celery enqueue on
+      # all three trigger paths. Set to 0 to disable; see core/cache.py.
+      DAILY_RUN_QUOTA_PER_ORG: ${DAILY_RUN_QUOTA_PER_ORG:-1000}
 
 
 volumes:

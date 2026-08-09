@@ -78,6 +78,21 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Quotas
+    # ------------------------------------------------------------------
+    DAILY_RUN_QUOTA_PER_ORG: int = Field(
+        default=1000,
+        description=(
+            "Max workflow runs an organization may start per UTC day, enforced before "
+            "the Celery enqueue (Vol. 2 §667). The default matches §667's own Pro-plan "
+            "example. Vol. 2 calls this 'plan-dependent', but the billing module is "
+            "models-only, so there is no plan to look up yet — this flat setting is the "
+            "placeholder, and consume_run_quota() is the single call site to change "
+            "when plans become real. Set to 0 to disable enforcement entirely."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # MinIO / S3-compatible object storage
     # ------------------------------------------------------------------
     MINIO_ENDPOINT: str = Field(default="localhost:9000")

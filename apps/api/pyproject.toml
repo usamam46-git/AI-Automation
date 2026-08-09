@@ -43,6 +43,7 @@ cryptography = "^42.0.0"
 # Background jobs
 celery = { version = "^5.4.0", extras = ["redis"] }
 redis = { version = "^5.0.4", extras = ["hiredis"] }
+croniter = "^3.0.3"          # cron parsing for schedule triggers (workers/trigger_tasks.py)
 
 # AI / LLM
 langchain = "^0.2.0"

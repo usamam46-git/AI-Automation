@@ -7,7 +7,11 @@ Queue topology (Vol. 2 §5.1):
 
 Only the workflow_execution queue is implemented this phase.
 document_processing and notifications queues are deferred until their
-respective modules exist.
+respective modules exist — the containers for both boot with empty task
+registries, which is why the beat tick is routed to workflow_execution.
+
+Beat: one periodic entry, `dispatch-due-schedules` (added 2026-08-09), which
+drives cron-triggered workflows. See workers/trigger_tasks.py.
 """
 
 from celery import Celery
@@ -27,7 +31,7 @@ celery_app = Celery(
     # of type ...". The test suite cannot catch that — it bypasses the broker
     # and awaits _stream_graph() directly — so this is only ever visible when a
     # run triggered from the UI sits at `pending` forever.
-    include=["src.workers.graph_tasks"],
+    include=["src.workers.graph_tasks", "src.workers.trigger_tasks"],
 )
 
 celery_app.conf.update(
@@ -63,5 +67,28 @@ celery_app.conf.update(
     task_routes={
         "src.workers.graph_tasks.execute_workflow": {"queue": "workflow_execution"},
         "src.workers.graph_tasks.resume_workflow": {"queue": "workflow_execution"},
+        # Routed to workflow_execution because worker_workflow is the only
+        # container with a non-empty task registry — worker_documents and
+        # worker_notifications still boot with nothing registered. The tick is
+        # a short DB query, so it does not meaningfully occupy an LLM slot.
+        "src.workers.trigger_tasks.dispatch_due_schedules": {"queue": "workflow_execution"},
+    },
+    # ---------------------------------------------------------------------
+    # Beat schedule (Vol. 2 §5 — "Celery Beat / scheduled triggers")
+    #
+    # Exactly one entry, deliberately. The per-workflow cron lives in
+    # `workflows.next_run_at`, and this tick polls for what is due; beat never
+    # learns about individual workflows. See workers/trigger_tasks.py for why
+    # that beats registering a beat entry per workflow.
+    #
+    # One minute is also the floor enforced on user-supplied crons
+    # (MIN_SCHEDULE_INTERVAL_SECONDS) — a finer cron could not be honoured.
+    # ---------------------------------------------------------------------
+    beat_schedule={
+        "dispatch-due-schedules": {
+            "task": "src.workers.trigger_tasks.dispatch_due_schedules",
+            "schedule": 60.0,
+            "options": {"queue": "workflow_execution", "expires": 55},
+        },
     },
 )

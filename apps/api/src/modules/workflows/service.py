@@ -14,13 +14,18 @@ Critical business rules:
    unfinished graph; a published version is not.
 """
 
+import secrets
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from croniter import croniter
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.encryption import encrypt_secret
 from src.core.events import (
     WorkflowArchivedEvent,
     WorkflowCreatedEvent,
@@ -31,6 +36,8 @@ from src.core.events import (
 )
 from src.core.redis import redis_client
 from src.graphs.cache import invalidate_cached_graph
+from src.modules.audit_logs.schemas import AuditContext
+from src.modules.audit_logs.service import AuditAction, AuditService
 from src.modules.workflows.models import Workflow, WorkflowVersion
 from src.modules.workflows.repository import WorkflowRepository
 from src.modules.workflows.schemas import (
@@ -39,6 +46,7 @@ from src.modules.workflows.schemas import (
     NodeInput,
     NodeResponse,
     NodeType,
+    WebhookSecretResponse,
     WorkflowCreate,
     WorkflowUpdate,
     WorkflowVersionCreate,
@@ -54,6 +62,108 @@ class GraphValidationError(Exception):
     def __init__(self, detail: str | dict):
         self.detail = detail
         super().__init__(str(detail))
+
+
+# ---------------------------------------------------------------------------
+# Trigger configuration (landed 2026-08-09)
+#
+# These live here, next to the graph validators, rather than in a new
+# modules/workflows/triggers.py — the root CLAUDE.md's directory rule puts new
+# functionality for an existing domain in that domain's existing files, and
+# service.py is already where this module keeps its pure module-level
+# validators. workers/trigger_tasks.py imports compute_next_run_at from here.
+# ---------------------------------------------------------------------------
+
+#: Trigger types with an actual dispatch path behind them. `email` needs the
+#: Vol. 2 §646 OAuth integration flow and `event` needs an event-bus binding;
+#: neither exists, so both are rejected at write time instead of being stored as
+#: a workflow that silently never fires. See TriggerType's docstring.
+IMPLEMENTED_TRIGGER_TYPES = frozenset({"manual", "schedule", "webhook"})
+
+#: Rejects cron expressions that fire more often than this. A `* * * * *` cron on
+#: an LLM-backed graph is a runaway cost bug, and the tick only runs once a
+#: minute anyway, so anything finer cannot be honoured faithfully.
+MIN_SCHEDULE_INTERVAL_SECONDS = 60
+
+
+def validate_trigger_config(trigger_type: str, trigger_config: dict | None) -> None:
+    """
+    Validate a trigger_type/trigger_config pair at write time.
+
+    Raises GraphValidationError (→ 422 via _raise_validation_error) so trigger
+    errors surface through the same path the graph validators already use.
+    """
+    if trigger_type not in IMPLEMENTED_TRIGGER_TYPES:
+        raise GraphValidationError(
+            f"Trigger type '{trigger_type}' is not implemented yet. " f"Supported: {', '.join(sorted(IMPLEMENTED_TRIGGER_TYPES))}."
+        )
+
+    if trigger_type != "schedule":
+        return
+
+    config = trigger_config or {}
+    cron = config.get("cron")
+    if not cron or not isinstance(cron, str):
+        raise GraphValidationError("A schedule trigger requires trigger_config.cron (a 5-field cron expression).")
+
+    timezone_name = config.get("timezone", "UTC")
+    if not isinstance(timezone_name, str):
+        raise GraphValidationError("trigger_config.timezone must be a string IANA timezone name (e.g. 'Asia/Karachi').")
+    try:
+        ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise GraphValidationError(f"Unknown timezone '{timezone_name}'. Use an IANA name such as 'Asia/Karachi'.") from exc
+
+    if not croniter.is_valid(cron):
+        raise GraphValidationError(f"Invalid cron expression: {cron!r}. Expected 5 fields, e.g. '0 9 * * 1-5'.")
+
+    # Reject sub-minute schedules by measuring the actual gap between the next
+    # two fire times rather than pattern-matching the string — croniter accepts
+    # 6-field expressions with a seconds column, which is_valid() alone lets past.
+    probe = croniter(cron, datetime(2026, 1, 1, tzinfo=UTC))
+    first: datetime = probe.get_next(datetime)
+    second: datetime = probe.get_next(datetime)
+    if (second - first).total_seconds() < MIN_SCHEDULE_INTERVAL_SECONDS:
+        raise GraphValidationError(
+            f"Schedule fires more often than once per minute, which the dispatcher cannot honour. "
+            f"Minimum interval is {MIN_SCHEDULE_INTERVAL_SECONDS}s."
+        )
+
+
+def compute_next_run_at(trigger_type: str, trigger_config: dict | None, *, after: datetime | None = None) -> datetime | None:
+    """
+    Next due fire time for a schedule trigger, or None for every other type.
+
+    Always returns an aware UTC datetime. The cron is evaluated in the org's
+    configured timezone and converted back — "0 9 * * 1-5" means 9am local,
+    which is a different UTC instant in summer than in winter, and evaluating
+    it in UTC would silently drift an hour twice a year.
+
+    Assumes validate_trigger_config has already passed; callers in this module
+    always validate first.
+    """
+    if trigger_type != "schedule":
+        return None
+
+    config = trigger_config or {}
+    cron = config.get("cron")
+    if not cron:
+        return None
+
+    tz = ZoneInfo(config.get("timezone", "UTC"))
+    base = (after or datetime.now(UTC)).astimezone(tz)
+    return croniter(cron, base).get_next(datetime).astimezone(UTC)
+
+
+def generate_webhook_secret() -> str:
+    """
+    A fresh inbound-webhook signing secret.
+
+    32 bytes from `secrets` (CSPRNG), urlsafe-base64'd. Prefixed `whsec_` so a
+    leaked value is greppable in logs and recognisable in a support ticket —
+    the same reason Stripe prefixes theirs.
+    """
+    return f"whsec_{secrets.token_urlsafe(32)}"
 
 
 def validate_draft_structure(nodes: list[NodeInput], edges: list[EdgeInput]) -> None:
@@ -346,6 +456,7 @@ class WorkflowService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repository = WorkflowRepository(db)
+        self._audit = AuditService(db)
 
     async def _verify_workspace_belongs_to_org(self, organization_id: uuid.UUID, workspace_id: uuid.UUID) -> None:
         """
@@ -379,6 +490,17 @@ class WorkflowService:
         )
         create_data["status"] = "draft"
 
+        try:
+            validate_trigger_config(create_data["trigger_type"], create_data.get("trigger_config"))
+        except GraphValidationError as exc:
+            self._raise_validation_error(exc)
+
+        # A schedule is armed from creation, but the tick also requires
+        # status='published' AND current_version_id — so a draft with a cron
+        # accumulates a due next_run_at that simply never matches. See
+        # dispatch_due_schedules' WHERE clause.
+        create_data["next_run_at"] = compute_next_run_at(create_data["trigger_type"], create_data.get("trigger_config"))
+
         workflow = await self.repository.create(organization_id, create_data)
 
         await event_bus.publish(WorkflowCreatedEvent(workflow_id=str(workflow.id), organization_id=str(organization_id)))
@@ -408,7 +530,7 @@ class WorkflowService:
 
     async def update_workflow(self, organization_id: uuid.UUID, workflow_id: uuid.UUID, data: WorkflowUpdate) -> Workflow:
         # Ensure it exists and belongs to this org
-        await self.get_workflow(organization_id, workflow_id)
+        existing = await self.get_workflow(organization_id, workflow_id)
 
         update_data = data.model_dump(exclude_unset=True)
         if not update_data:
@@ -419,6 +541,22 @@ class WorkflowService:
             update_data["trigger_type"] = update_data["trigger_type"].value
         if "status" in update_data and hasattr(update_data["status"], "value"):
             update_data["status"] = update_data["status"].value
+
+        # Trigger fields are independently PATCHable, so validate the MERGED pair,
+        # not just what arrived. Sending {"trigger_type": "schedule"} alone against
+        # a row whose trigger_config already holds a cron must pass; sending
+        # {"trigger_config": {...}} alone must be checked against the stored type.
+        if "trigger_type" in update_data or "trigger_config" in update_data:
+            merged_type = update_data.get("trigger_type", existing.trigger_type)
+            merged_config = update_data.get("trigger_config", existing.trigger_config)
+            try:
+                validate_trigger_config(merged_type, merged_config)
+            except GraphValidationError as exc:
+                self._raise_validation_error(exc)
+            # Recompute unconditionally: switching away from `schedule` must clear
+            # a stale next_run_at, or the tick keeps firing a workflow that is no
+            # longer scheduled.
+            update_data["next_run_at"] = compute_next_run_at(merged_type, merged_config)
 
         if update_data.get("status") == "published":
             raise HTTPException(
@@ -431,9 +569,72 @@ class WorkflowService:
         await event_bus.publish(WorkflowUpdatedEvent(workflow_id=str(workflow.id), organization_id=str(organization_id)))
         return workflow
 
-    async def delete_workflow(self, organization_id: uuid.UUID, workflow_id: uuid.UUID) -> None:
-        await self.get_workflow(organization_id, workflow_id)
+    async def rotate_webhook_secret(
+        self, organization_id: uuid.UUID, workflow_id: uuid.UUID, context: AuditContext | None = None
+    ) -> WebhookSecretResponse:
+        """
+        Generate (or replace) the workflow's inbound webhook signing secret and
+        return the plaintext — the only time it is ever returned.
+
+        Rotation is immediate and has no grace window: the moment this commits,
+        signatures made with the previous secret stop verifying. That's a
+        deliberate simplification over dual-secret rotation (which needs a
+        second column and an expiry sweep) and is safe because the caller
+        receives the replacement synchronously in this response.
+        """
+        workflow = await self.get_workflow(organization_id, workflow_id)
+
+        if workflow.trigger_type != "webhook":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Workflow trigger_type is '{workflow.trigger_type}', not 'webhook'. "
+                    "Set trigger_type='webhook' before generating a signing secret."
+                ),
+            )
+
+        # Read BEFORE the update. `repository.update()` uses UPDATE ... RETURNING,
+        # which refreshes this already-identity-mapped instance in place — so
+        # reading the attribute afterwards yields the NEW ciphertext and
+        # "replaced_existing" would be True even on a first mint. Same trap as
+        # IntegrationRepository.exists_by_type documents.
+        replaced_existing = workflow.webhook_secret_encrypted is not None
+
+        plaintext = generate_webhook_secret()
+        await self.repository.update(
+            organization_id,
+            workflow_id,
+            {"webhook_secret_encrypted": encrypt_secret(plaintext)},
+        )
+        # Material: the holder of this secret can start production runs of this
+        # workflow from outside the platform, with no login. The row records the
+        # rotation, never the secret — not even a prefix.
+        await self._audit.record(
+            organization_id=organization_id,
+            context=context or AuditContext.system(),
+            action=AuditAction.WEBHOOK_SECRET_ROTATED,
+            resource_type="workflow",
+            resource_id=workflow_id,
+            metadata={"replaced_existing": replaced_existing},
+        )
+
+        return WebhookSecretResponse(
+            workflow_id=workflow_id,
+            secret=plaintext,
+            endpoint_path=f"/api/v1/triggers/workflows/{workflow_id}",
+        )
+
+    async def delete_workflow(self, organization_id: uuid.UUID, workflow_id: uuid.UUID, context: AuditContext | None = None) -> None:
+        workflow = await self.get_workflow(organization_id, workflow_id)
         await self.repository.soft_delete(organization_id, workflow_id)
+        await self._audit.record(
+            organization_id=organization_id,
+            context=context or AuditContext.system(),
+            action=AuditAction.WORKFLOW_ARCHIVED,
+            resource_type="workflow",
+            resource_id=workflow_id,
+            metadata={"name": workflow.name, "previous_status": workflow.status},
+        )
 
         await event_bus.publish(WorkflowArchivedEvent(workflow_id=str(workflow_id), organization_id=str(organization_id)))
 
@@ -548,6 +749,7 @@ class WorkflowService:
         workflow_id: uuid.UUID,
         version_id: uuid.UUID,
         user_id: uuid.UUID,
+        context: AuditContext | None = None,
     ) -> WorkflowVersionResponse:
         await self.get_workflow(organization_id, workflow_id)
         version = await self.repository.get_version_by_id_and_workflow(organization_id, workflow_id, version_id)
@@ -571,6 +773,22 @@ class WorkflowService:
             self._raise_validation_error(exc)
 
         version = await self.repository.mark_published(version_id, workflow_id, user_id)
+        # `user_id` is already an explicit parameter here (it populates
+        # published_by), so this call site does not need an AuditContext to know
+        # the actor — but it takes one anyway when the router supplies it, so the
+        # IP is recorded too.
+        await self._audit.record(
+            organization_id=organization_id,
+            context=context or AuditContext.for_user(user_id),
+            action=AuditAction.WORKFLOW_PUBLISHED,
+            resource_type="workflow_version",
+            resource_id=version_id,
+            metadata={
+                "workflow_id": str(workflow_id),
+                "version_number": version.version_number,
+                "node_count": len(nodes),
+            },
+        )
 
         await event_bus.publish(
             WorkflowVersionPublishedEvent(

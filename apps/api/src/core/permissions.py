@@ -42,6 +42,27 @@ MEMBER_REMOVE = "member:remove"
 INTEGRATION_READ = "integration:read"
 INTEGRATION_WRITE = "integration:write"
 
+# Audit permissions — read-only by design. There is deliberately no
+# AUDIT_WRITE: audit_logs is append-only, rows are written by services as a
+# side effect of the action they record, and no route may create, edit or
+# delete one. See modules/audit_logs/service.py.
+AUDIT_READ = "audit:read"
+
+#: Read permissions that the `*:read` wildcard must NOT satisfy.
+#:
+#: Added 2026-08-09 to close a real hole. The Viewer system role holds
+#: `"*:read"`, and the wildcard branch below granted it EVERY `:read`
+#: permission — including `integration:read` and `billing:read`, both of which
+#: this file and apps/api/CLAUDE.md document as Owner-only. A Viewer could read
+#: the org's BYOK integration status (`last_four`) despite that.
+#:
+#: `audit:read` would have inherited the same hole, and it is the more sensitive
+#: of the three: audit rows carry actor identity and client IP addresses.
+#:
+#: `"*"` (Owner) still grants these — this narrows only the read wildcard, which
+#: seed_roles.py already flags as provisional.
+WILDCARD_READ_EXEMPT = frozenset({INTEGRATION_READ, BILLING_READ, AUDIT_READ})
+
 
 def permission_granted(permissions: list[str], required: str) -> bool:
     """Return True if the role's permission list grants the required permission."""
@@ -49,6 +70,6 @@ def permission_granted(permissions: list[str], required: str) -> bool:
         return True
     if required in permissions:
         return True
-    if required.endswith(":read") and "*:read" in permissions:
+    if required.endswith(":read") and "*:read" in permissions and required not in WILDCARD_READ_EXEMPT:
         return True
     return False

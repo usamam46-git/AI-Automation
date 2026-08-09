@@ -23,7 +23,11 @@ resolution + `tool_executions`, see the tools section below), `agents` (stub),
 `prompts` (stub), `knowledge_base` (stub), `chat` (stub), `notifications`,
 `audit_logs`, `billing` (stub), `integrations` (real for one type — BYOK
 `openai_api_key`, see security section below; other integration types remain
-stub), `webhooks` (stub), `settings` (stub).
+stub), `webhooks` (stub — OUTBOUND delivery only; the INBOUND webhook trigger
+endpoint lives in `executions`, see the triggers section), `settings` (stub).
+
+`audit_logs` became real on 2026-08-09 (both §700 halves — see its own section
+below).
 
 `src/graphs/` is separate from `src/modules/workflows/` on purpose — it
 holds the LangGraph compiler (`compiler.py`), per-node-type handlers
@@ -33,10 +37,12 @@ holds the LangGraph compiler (`compiler.py`), per-node-type handlers
 *metadata*.
 
 `src/workers/` holds Celery app config (`celery_app.py`), the LangGraph
-execution tasks (`graph_tasks.py`), and the PostgreSQL checkpoint saver
+execution tasks (`graph_tasks.py`), the scheduled-trigger beat tick
+(`trigger_tasks.py`), and the PostgreSQL checkpoint saver
 (`postgres_saver.py`). The `executions` module (`src/modules/executions/`)
 owns `WorkflowRun` and `NodeExecution` models, schemas, repository, service,
-and router.
+and router — plus the inbound webhook ingress endpoint (see the triggers
+section below for why it lives there and not in `webhooks/`).
 
 ## Testing conventions
 
@@ -296,6 +302,179 @@ models-only agents module owns; and **the guardrail hole is a design question,
 not an implementation detail** — tool calls emitted by an agent have no node in
 the graph, so `validate_mutating_approval` structurally cannot see them, and
 that needs a *runtime* refusal rather than an extension of the publish-time walk.
+
+## Workflow triggers (landed 2026-08-09)
+
+`trigger_type` was decorative until this release — the column shipped in the
+initial schema, the Builder offered all five values, and no code read it. Now
+three of the five work; `email` and `event` are **rejected at write time** with
+a 422 (`IMPLEMENTED_TRIGGER_TYPES` in `modules/workflows/service.py`) rather
+than stored as a workflow that can never fire.
+
+New columns on `workflows` (migration `20260809_workflow_triggers`):
+`next_run_at`, `last_triggered_at`, `webhook_secret_encrypted`.
+
+Six contracts to know before touching any of it:
+
+- **The database is the schedule, not beat.** One beat entry
+  (`dispatch-due-schedules`, 60s) enqueues a tick that polls for due workflows.
+  Do NOT "improve" this into one beat entry per workflow: beat's schedule is
+  process-local, so that needs a live reconfiguration channel into a running
+  container and loses every entry on restart. The poll has neither problem.
+- **The tick runs on `worker_workflow`, not on beat.** Beat only publishes; the
+  `beat` container has no `DATABASE_URL` and must not need one. The task is
+  routed to `workflow_execution` because that is the only queue with a live
+  consumer — `worker_documents`/`worker_notifications` still boot with empty
+  registries.
+- **Three guard conditions are cost-safety, not tidiness.** Each scheduled run
+  can spend LLM money unattended. (a) Only `status='published'` AND
+  `current_version_id IS NOT NULL` are picked up — a draft carrying a cron
+  never fires. (b) `next_run_at` advances in the SAME transaction as the run
+  insert, and the select is `FOR UPDATE SKIP LOCKED`, so overlapping ticks can't
+  double-fire. (c) **Catch-up is suppressed** (`_advance_from`) — a workflow six
+  hours overdue fires once and re-arms from *now*, never replaying the backlog.
+- **Crons are evaluated in the config's IANA timezone, then converted to UTC.**
+  `0 9 * * 1-5` means 9am local; evaluating it in UTC would shift every run by
+  the offset and drift an hour twice a year in DST zones. Sub-minute crons are
+  rejected by measuring the actual gap between the next two fire times —
+  `croniter.is_valid()` alone accepts a 6-field seconds expression.
+- **The webhook secret is ENCRYPTED, not hashed** — `models.py` used to document
+  `{"secret": "<hashed_secret>"}` and that was never implementable. HMAC is
+  symmetric: verification needs the same plaintext the caller signed with. It
+  reuses `core/encryption.py` and lives in its own column rather than in
+  `trigger_config`, because `trigger_config` is echoed verbatim by
+  `WorkflowResponse`. Returned exactly once, at generation;
+  `has_webhook_secret` is a bare bool because no prefix of an HMAC key is safe
+  to publish. Gated on `workflow:publish`, not `workflow:write` — the secret
+  lets a bearer start production runs with no login.
+- **`POST /api/v1/triggers/workflows/{id}` is the only unauthenticated route,
+  and its uniform 401 is load-bearing.** Unknown workflow, wrong trigger type,
+  no secret, forged signature and stale timestamp must stay byte-identical in
+  the response, or the endpoint becomes an oracle for enumerating workflow
+  UUIDs across every tenant with no credentials. `verify_webhook_signature`
+  therefore returns a bare bool and runs a dummy HMAC on the missing-secret
+  path so the miss costs the same wall-clock time. It signs
+  `"{timestamp}.{raw_body}"` — the timestamp is inside the signed material, or
+  the 5-minute freshness window would be advisory and any captured request
+  would replay forever — over `await request.body()`, never re-serialized JSON.
+
+`WorkflowRepository.get_by_id_unscoped` / `mark_triggered` are the one
+deliberate exception to tenant scoping, for that endpoint alone. The invariant
+still holds: `organization_id` is read off the workflow row, never from the
+request. Don't reach for them anywhere else.
+
+The ingress endpoint lives in `modules/executions/` rather than `modules/
+webhooks/` because its job is to create a `WorkflowRun` and it reuses that
+module's repository and enqueue path. The `webhooks` model is for OUTBOUND
+delivery registrations — a different concern, still a stub.
+
+## Audit trail (landed 2026-08-09)
+
+Vol. 2 §13 §700 asks for two independent controls. Until this release **neither
+existed**, and `models.py` asserted that one of them did ("a Postgres trigger
+created in the initial migration") — there was no `CREATE TRIGGER` anywhere and
+nothing had ever written a row.
+
+`/api/v1/audit-logs` — **GET only, forever.** §700: "no UPDATE/DELETE route
+exists". `test_no_mutating_route_on_audit_logs` asserts 405 on POST/PATCH/PUT/
+DELETE, so adding one fails the suite. Gated on `audit:read` (Owner/Admin).
+
+Five things to know:
+
+- **Writes are inline and transactional, NOT via the event bus.** `AuditService.
+  record()` adds the row to the caller's session so the action and its audit row
+  commit or roll back together. Subscribing to `core/events.py` looks tempting
+  and is wrong: `EventBus.publish` dispatches with a bare
+  `asyncio.create_task(...)` it never awaits or stores, so a failing handler
+  loses its exception, the request's session can close first, and nothing orders
+  the write against the action's commit. Best-effort audit is not audit.
+  `test_audit_write_rolls_back_with_its_action` pins the atomicity.
+- **The DB trigger blocks hard-deleting an organization.** `audit_logs.
+  organization_id` is `ON DELETE CASCADE` and a cascade is a DELETE, so it hits
+  `reject_audit_log_mutation()`. No code path hard-deletes an org, and "an
+  org's trail can't be erased by deleting the org" is the property §700 wants —
+  this is correct, not a bug. A GDPR-erasure path must be a reviewed migration
+  that drops, purges and recreates the trigger. **Verified live**: `DELETE FROM
+  organizations` now errors.
+- **TRUNCATE is deliberately still allowed.** Postgres fires TRUNCATE triggers,
+  not row-level UPDATE/DELETE ones, on a TRUNCATE — which is the only reason
+  `conftest.py::_clean_database` still works. Do not "harden" this with a
+  TRUNCATE trigger; every test in the repo would fail at teardown, and §700
+  names UPDATE and DELETE only. Pinned by `test_truncate_still_works`.
+- **Actor context is an explicit parameter, never a contextvar.**
+  `AuditContext` comes from `Depends(get_audit_context)` in a router, or
+  `AuditContext.system()` in a worker. Half the call sites are Celery tasks with
+  no request, where a contextvar would silently attribute a scheduled run to
+  whichever user last made an HTTP call in that process.
+- **`ip_address` is caller-controlled and must never gate anything.**
+  `client_ip()` prefers the leftmost `X-Forwarded-For` hop, which any client can
+  forge — there is no trusted-proxy validation. It is a forensic hint only.
+
+`metadata` must never carry a secret. The credential actions record
+`integration_type` + `last_four`; the webhook rotation records only
+`replaced_existing`. Two tests grep the whole response for the real value.
+
+**Two ORM identity-map traps were found writing this** — both produced a
+*stale* read, and both will recur if you reach for the same shape:
+`.returning(Model)` resolves to an instance already in the session's identity
+map rather than refreshing it from the RETURNING row. So `get_by_type()` before
+`upsert()` makes the upsert hand back the OLD `last_four`
+(`IntegrationRepository.exists_by_type` exists solely to avoid this — it selects
+a scalar column, which does not populate the identity map), and reading
+`workflow.webhook_secret_encrypted` *after* `repository.update()` yields the new
+value. Capture before-state before the write.
+
+## Per-org daily run quota (landed 2026-08-09)
+
+Vol. 2 §667: "Per organization, workflow triggers | Plan-dependent (e.g. 1,000
+runs/day on Pro) | Redis counter, resets daily; enforced before Celery enqueue."
+`core/cache.py`'s `rate_limit_*` primitives had been written and entirely unused
+since the initial commit; `consume_run_quota()` at the bottom of that module is
+the first caller.
+
+- **Enforced on all three trigger paths.** Manual and webhook raise 429 with
+  `Retry-After` (via `ExecutionService._claim_run_quota`); the schedule tick
+  can't raise HTTP, so it skips the workflow, logs, and writes a
+  `workflow.run.quota_exceeded` audit row — a silently skipped cron run would be
+  indistinguishable from a bug.
+- **Claimed before `create_run`**, so an over-quota request leaves no `pending`
+  run. One that nothing will ever execute looks exactly like the three worker
+  bugs fixed on 2026-08-07 and would be misdiagnosed as one.
+- **NOT claimed on resume.** Approving a waiting run continues a run counted at
+  trigger time; charging twice would make every Vol. 5 reference workflow
+  (they all have approval gates) cost double its quota.
+- **On the webhook path, claimed only AFTER the signature verifies.** Claiming
+  first would let anyone who knows a workflow UUID exhaust a tenant's entire
+  daily allowance with forged requests — a credential-free remote DoS.
+  `test_forged_webhook_requests_cannot_burn_the_quota` pins the ordering.
+- **Fixed UTC-day window, not rolling** (§667 says "resets daily"): the date is
+  part of the Redis key and the TTL runs to the next midnight, so the whole
+  allowance returns at once. No reset job to forget.
+- **INCR-then-compare**, matching the existing `RateLimiter`. Check-then-INCR
+  races and lets concurrent triggers overshoot. The tradeoff is that rejected
+  attempts also increment, so `used` can exceed `limit` — that is visible in the
+  counter and harmless, since the TTL clears it either way.
+- `DAILY_RUN_QUOTA_PER_ORG` (default 1000, §667's own Pro example; `0` disables)
+  is the placeholder for the plan lookup §667 actually wants — the billing
+  module is models-only, so there is no plan to read. `consume_run_quota` is the
+  single call site to change when plans become real. It is set on all five app
+  services in `infra/docker-compose.yml`.
+- `tests/conftest.py::_clear_run_quota_keys` drops `rate_limit:org_runs:*` around
+  each test. Scoped, **not `flushdb`** — the same Redis holds the JWT blocklist
+  and permission cache, and a blanket flush during a test run would log out a
+  developer's live session.
+
+## `*:read` no longer grants every read permission
+
+Fixed 2026-08-09 while adding `audit:read`. The Viewer system role holds
+`"*:read"`, and `permission_granted`'s wildcard branch satisfied **every**
+`:read` from it — including `integration:read` and `billing:read`, which this
+codebase documents in two places as Owner-only. A Viewer could read the org's
+BYOK integration status. `WILDCARD_READ_EXEMPT` in `core/permissions.py` now
+excludes those two plus `audit:read` (the most sensitive of the three — actor
+identity and client IPs). Owner's `"*"` is unaffected. If you add a sensitive
+read permission, add it to that set; `test_read_wildcard_does_not_grant_sensitive_read_permissions`
+is the regression guard.
 
 ## Deliberate design decisions (not bugs)
 

@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTriggerRun } from "@/components/workflows/use-trigger-run";
+import { WebhookSecretCard } from "@/components/workflows/webhook-secret-card";
 import { type Workflow } from "@/lib/api";
 
 export function WorkflowDetailDialog({ workflow, open, onOpenChange, workspaceName }: { workflow: Workflow | null; open: boolean; onOpenChange: (open: boolean) => void; workspaceName?: string }) {
@@ -27,8 +28,26 @@ export function WorkflowDetailDialog({ workflow, open, onOpenChange, workspaceNa
           <div className="flex items-center justify-between"><span className="text-muted-foreground">Status</span><Badge variant={workflow.status}>{workflow.status}</Badge></div>
           <div className="flex items-center justify-between"><span className="text-muted-foreground">Workspace</span><span>{workspaceName ?? workflow.workspace_id.slice(0, 8)}</span></div>
           <div className="flex items-center justify-between"><span className="text-muted-foreground">Trigger</span><span className="capitalize">{workflow.trigger_type}</span></div>
+          {workflow.trigger_type === "schedule" ? (
+            <>
+              <div className="flex items-center justify-between"><span className="text-muted-foreground">Schedule</span><span className="font-mono text-xs">{String(workflow.trigger_config?.cron ?? "—")}</span></div>
+              {/*
+                A schedule only fires once the workflow is published — the beat
+                tick filters on status='published' AND current_version_id. Saying
+                "Next run" for a draft would promise a run that never comes.
+              */}
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Next run</span>
+                <span>{canRun ? (workflow.next_run_at ? new Date(workflow.next_run_at).toLocaleString() : "—") : "Not until published"}</span>
+              </div>
+            </>
+          ) : null}
+          {workflow.last_triggered_at ? (
+            <div className="flex items-center justify-between"><span className="text-muted-foreground">Last triggered</span><span>{new Date(workflow.last_triggered_at).toLocaleString()}</span></div>
+          ) : null}
           <div className="flex items-center justify-between"><span className="text-muted-foreground">Created</span><span>{new Date(workflow.created_at).toLocaleString()}</span></div>
           <div className="flex items-center justify-between"><span className="text-muted-foreground">Version</span><span>{workflow.current_version_id ?? "Not compiled"}</span></div>
+          {workflow.trigger_type === "webhook" ? <WebhookSecretCard workflow={workflow} /> : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => router.push(`/workflows/${workflow.id}/builder`)}>Open Builder</Button>

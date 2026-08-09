@@ -3,9 +3,10 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dependencies import get_current_org, require_permission
+from src.core.dependencies import get_audit_context, get_current_org, require_permission
 from src.core.permissions import INTEGRATION_READ, INTEGRATION_WRITE
 from src.db.database import get_db_session
+from src.modules.audit_logs.schemas import AuditContext
 from src.modules.integrations.schemas import IntegrationSetRequest, IntegrationStatusResponse
 from src.modules.integrations.service import IntegrationService
 
@@ -34,10 +35,11 @@ async def set_integration_key(
     integration_type: str,
     data: IntegrationSetRequest,
     organization_id: uuid.UUID = Depends(get_current_org),
+    audit: AuditContext = Depends(get_audit_context),
     service: IntegrationService = Depends(get_integration_service),
 ) -> IntegrationStatusResponse:
     _validate_type(integration_type)
-    return await service.set_key(organization_id, integration_type, data.api_key)
+    return await service.set_key(organization_id, integration_type, data.api_key, context=audit)
 
 
 @router.get(
@@ -62,7 +64,8 @@ async def get_integration_status(
 async def delete_integration_key(
     integration_type: str,
     organization_id: uuid.UUID = Depends(get_current_org),
+    audit: AuditContext = Depends(get_audit_context),
     service: IntegrationService = Depends(get_integration_service),
 ) -> None:
     _validate_type(integration_type)
-    await service.delete_key(organization_id, integration_type)
+    await service.delete_key(organization_id, integration_type, context=audit)

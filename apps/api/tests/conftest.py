@@ -88,6 +88,7 @@ async def _clean_database() -> AsyncGenerator[None, None]:
     pre-test truncate must not wipe the roles that fixture seeds.
     """
     await _truncate_all_tables()
+    await _clear_run_quota_keys()
     try:
         yield
     finally:
@@ -96,6 +97,28 @@ async def _clean_database() -> AsyncGenerator[None, None]:
         # is holding a lock on a table we're about to TRUNCATE.
         dispose_sync_engine()
         await _truncate_all_tables()
+        await _clear_run_quota_keys()
+
+
+async def _clear_run_quota_keys() -> None:
+    """
+    Drop the per-org daily run-quota counters (Vol. 2 §667) from Redis.
+
+    Truncating Postgres is not enough: the quota lives in Redis, so without this
+    a test that exhausts an allowance leaves the counter behind and `pytest`
+    stops being idempotent against a dev stack sharing that Redis.
+
+    Scoped to `rate_limit:org_runs:*` on purpose — NOT `flushdb`. The same Redis
+    holds the JWT blocklist, the permission cache and the compiled-graph cache
+    for whatever else is pointed at it, and a blanket flush during a test run
+    would log out a developer's live session.
+    """
+    from src.core.redis import get_redis_client
+
+    redis = await get_redis_client()
+    keys = [key async for key in redis.scan_iter(match="rate_limit:org_runs:*")]
+    if keys:
+        await redis.delete(*keys)
 
 
 @pytest.fixture
@@ -119,6 +142,7 @@ def _stub_celery_dispatch(celery_calls: list[tuple[str, tuple, dict]]):
     graph compiler — no reason to make every test session pay that at collection.
     """
     from src.workers.graph_tasks import execute_workflow, resume_workflow
+    from src.workers.trigger_tasks import dispatch_due_schedules
 
     def _recorder(name: str):
         def _delay(*args, **kwargs):
@@ -130,6 +154,10 @@ def _stub_celery_dispatch(celery_calls: list[tuple[str, tuple, dict]]):
     with (
         patch.object(execute_workflow, "delay", _recorder("execute_workflow")),
         patch.object(resume_workflow, "delay", _recorder("resume_workflow")),
+        # The beat tick is never dispatched by application code (only by beat
+        # itself), but stub it anyway so the "a test run sends the worker zero
+        # jobs" invariant holds even if a future test reaches for it.
+        patch.object(dispatch_due_schedules, "delay", _recorder("dispatch_due_schedules")),
     ):
         yield
 

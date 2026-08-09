@@ -21,7 +21,7 @@ Design notes:
 
 import uuid
 
-from sqlalchemy import Float, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Integer, LargeBinary, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,9 +35,18 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
     status lifecycle: draft → published → archived
     current_version_id points to the live WorkflowVersion (null while draft).
     trigger_config is a JSONB dict whose shape depends on trigger_type, e.g.:
-      - schedule: {"cron": "0 9 * * 1-5"}
-      - webhook:  {"secret": "<hashed_secret>"}
-      - email:    {"inbox": "invoices@acme.aap.io"}
+      - schedule: {"cron": "0 9 * * 1-5", "timezone": "UTC"}
+      - webhook:  {}  (see webhook_secret_encrypted below — NOT stored here)
+      - email:    {"inbox": "invoices@acme.aap.io"}   [not implemented]
+
+    Webhook secret storage — corrected 2026-08-09. This docstring previously
+    specified `webhook: {"secret": "<hashed_secret>"}`. That is not implementable:
+    inbound webhook auth is an HMAC signature (Vol. 2 §9.1 conventions), and HMAC
+    is symmetric — verifying a caller's signature requires the server to hold the
+    same *plaintext* the caller signed with. A one-way hash cannot be used. The
+    secret is therefore stored reversibly encrypted in its own column, exactly
+    like `integrations.credentials`, and never in trigger_config (which is
+    returned verbatim by WorkflowResponse).
     """
 
     __tablename__ = "workflows"
@@ -71,7 +80,37 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
     trigger_config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
-        comment="Type-specific trigger configuration (cron, webhook secret, etc.).",
+        comment="Type-specific trigger configuration (cron expression, email inbox, etc.). Never secrets.",
+    )
+    next_run_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        # NOT index=True. The supporting index is the hand-written PARTIAL index
+        # ix_workflows_next_run_at_due (migration 20260809_workflow_triggers),
+        # scoped to trigger_type='schedule' so it stays off the manual/webhook
+        # majority of the table. Declaring index=True here too would make
+        # autogenerate propose a second, redundant full index — same convention
+        # as the other hand-written indexes in 20260724_062650_manual_indexes.
+        comment=(
+            "Next due fire time for trigger_type='schedule'. The beat tick "
+            "(workers/trigger_tasks.dispatch_due_schedules) selects on this column. "
+            "Null for every other trigger type."
+        ),
+    )
+    last_triggered_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment="Last time a trigger (schedule or webhook) enqueued a run for this workflow.",
+    )
+    webhook_secret_encrypted: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+        comment=(
+            "AES-256-GCM ciphertext of the inbound webhook signing secret "
+            "(src/core/encryption.py). Reversible by necessity — HMAC verification "
+            "needs the plaintext. Never serialized into any response schema; the "
+            "plaintext is shown exactly once, at generation time."
+        ),
     )
 
     # Relationships
@@ -83,6 +122,16 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
         back_populates="workflow",
         foreign_keys="WorkflowVersion.workflow_id",
     )
+
+    @property
+    def has_webhook_secret(self) -> bool:
+        """
+        Feeds WorkflowResponse.has_webhook_secret. A bool, never a masked
+        fragment: unlike an API key's last_four, no prefix of an HMAC secret is
+        safe to publish — every leaked byte shortens a brute-force. Same
+        @property-for-a-derived-response-field pattern as WorkflowRun.workflow_name.
+        """
+        return self.webhook_secret_encrypted is not None
 
 
 class WorkflowVersion(UUIDMixin, TimestampMixin, Base):

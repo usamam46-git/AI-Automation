@@ -7,6 +7,7 @@ import src.db.models  # noqa: F401 — register full ORM graph before queries
 from src.core.permissions import (
     AGENT_READ,
     AGENT_WRITE,
+    AUDIT_READ,
     EXECUTION_APPROVE,
     EXECUTION_READ,
     PROMPT_READ,
@@ -52,6 +53,10 @@ async def seed_system_roles(db: AsyncSession) -> None:
                 TOOL_WRITE,
                 EXECUTION_READ,
                 EXECUTION_APPROVE,
+                # Admin, not Editor/Viewer: audit rows carry actor identity and
+                # client IPs. Explicit because AUDIT_READ is in
+                # WILDCARD_READ_EXEMPT, so Viewer's "*:read" does not reach it.
+                AUDIT_READ,
                 "member:invite",
                 "member:remove",
             ],

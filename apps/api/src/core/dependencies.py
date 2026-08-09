@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import redis.asyncio as aioredis
 from fastapi import Depends, HTTPException, Request, status
@@ -14,6 +14,9 @@ from src.core.redis import get_redis
 from src.core.security import decode_access_token
 from src.db.database import get_db_session
 from src.modules.auth.models import OrgMembership, Role, User
+
+if TYPE_CHECKING:
+    from src.modules.audit_logs.schemas import AuditContext
 
 # OAuth2 scheme for Swagger UI auth
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -81,6 +84,42 @@ async def get_current_org(
 
     request.state.org_id = org_id
     return org_id
+
+
+def client_ip(request: Request) -> str | None:
+    """
+    Best-effort client IP for the audit trail.
+
+    Prefers the leftmost `X-Forwarded-For` hop, since every deployment topology
+    in Vol. 6 §1 puts a reverse proxy in front of the app and `request.client`
+    would otherwise record the proxy on every row.
+
+    **This value is caller-controlled and must never be used for authorization.**
+    `X-Forwarded-For` is a request header any client can set, and nothing here
+    validates it against a trusted-proxy list. It is recorded as a forensic hint
+    only. No code path branches on it, and none should.
+    """
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        first_hop = forwarded.split(",")[0].strip()
+        if first_hop:
+            return first_hop
+    return request.client.host if request.client else None
+
+
+async def get_audit_context(
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+) -> "AuditContext":
+    """
+    Who is acting, for the audit trail. Depend on this in any router whose
+    service records an audit row.
+
+    Imported lazily to keep `core` free of a hard import edge into `modules`.
+    """
+    from src.modules.audit_logs.schemas import AuditContext
+
+    return AuditContext.for_user(user.id, ip_address=client_ip(request))
 
 
 def require_permission(required_permission: str) -> Any:

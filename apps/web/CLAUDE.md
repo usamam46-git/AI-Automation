@@ -215,6 +215,37 @@ Built 2026-08-07 (Vol. 3 §6). `app/(dashboard)/executions/page.tsx` (list) and
 - No "View raw trace in LangSmith" link from the §6.1 wireframe: the LangSmith
   hook in `LLMClient` is a no-op, so the link would be dead.
 
+## Workflow triggers (2026-08-09)
+
+`components/workflows/workflow-dialog.tsx` (cron input) and
+`components/workflows/webhook-secret-card.tsx`, surfaced from the workflow
+detail dialog.
+
+- **`triggerTypes` is deliberately shorter than the `TriggerType` union.**
+  `email` and `event` stay in the type (the DB and API still know those values)
+  but are no longer offered, because the backend now 422s them
+  (`IMPLEMENTED_TRIGGER_TYPES` in `modules/workflows/service.py`). Keep the two
+  lists in sync — offering a rejected value produces a dialog that fails on
+  submit, and before 2026-08-09 they were offered AND accepted, which produced
+  a workflow that silently never ran.
+- **A `schedule` workflow must be created WITH a cron.** `trigger_config: null`
+  is a 422 for that type, which is why the dialog collects the expression
+  inline instead of deferring it to a later edit.
+- **The webhook secret is shown exactly once.** No read endpoint can recover it
+  — `Workflow.has_webhook_secret` is a bare bool, not a masked fragment, because
+  no prefix of an HMAC key is safe to expose. So the revealed value lives in
+  component state, is gone on dialog close, and the copy affordance has to be
+  present while it's visible. Don't add a "view secret" action; there is
+  nothing behind it.
+- **Rotation has no grace window** — the old secret dies immediately. The button
+  says "Rotate" and warns for that reason; don't relabel it as idempotent.
+- 403 on minting is a permanent explained state (it's `workflow:publish`-gated,
+  which Editor does not hold), not a retryable error — same treatment as the
+  Owner-only OpenAI key card.
+- "Next run" renders "Not until published" for a draft. The beat tick filters on
+  `status='published'`, so showing a timestamp there would promise a run that
+  never comes.
+
 ## Settings page (2026-08-08)
 
 `app/(dashboard)/settings/page.tsx` + `components/settings/openai-key-card.tsx`,

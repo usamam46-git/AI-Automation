@@ -24,12 +24,17 @@ Future use cases wired up here (implementations stub-ready):
   §4 Permission cache     → permissions_*
   §4 Workflow def cache   → workflow_version_*
   §11 Rate limiting       → rate_limit_*  (sliding-window helpers)
+
+In use as of 2026-08-09: the per-org daily run quota (§667) at the bottom of
+this module, built on the rate_limit_* primitives that had been written and
+entirely unused until then.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -317,3 +322,83 @@ async def get_rate_count(
     key = CacheKey.rate_limit(scope, identifier)
     value = await r.get(key)
     return int(value) if value else 0
+
+
+# ---------------------------------------------------------------------------
+# Per-organization daily run quota (Vol. 2 §667)
+# ---------------------------------------------------------------------------
+
+
+class RunQuotaExceeded(Exception):
+    """
+    Raised when an org has used its daily workflow-run allowance.
+
+    Deliberately a plain exception, not an HTTPException: two of the three
+    callers are Celery tasks and worker code must not raise HTTP errors. The
+    HTTP paths translate it to a 429 at the service boundary.
+    """
+
+    def __init__(self, limit: int, used: int, retry_after_seconds: int) -> None:
+        self.limit = limit
+        self.used = used
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"Daily workflow-run quota of {limit} exhausted for this organization ({used} used).")
+
+
+def _seconds_until_utc_midnight(now: datetime) -> int:
+    """TTL for the counter — §667 says the quota 'resets daily', not rolling."""
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((tomorrow - now).total_seconds()))
+
+
+async def consume_run_quota(r: aioredis.Redis, organization_id: str, *, limit: int | None = None) -> int:
+    """
+    Claim one workflow run against the org's daily allowance.
+
+    Returns the number used after claiming. Raises RunQuotaExceeded if the org
+    is already at its limit. `limit=0` (or the setting at 0) disables the check.
+
+    Three properties that are decisions, not accidents:
+
+    - **A fixed UTC-day window, not a rolling one.** §667 says "resets daily".
+      The date is folded into the Redis key and the TTL runs to the next UTC
+      midnight, so the whole allowance returns at once rather than trickling
+      back hour by hour. That is what makes "1,000 runs/day" mean what a
+      customer reads it to mean.
+    - **INCR first, then compare** — the same order as the existing
+      `RateLimiter`. Check-then-increment has a race that lets concurrent
+      triggers overshoot the cap. The cost is that rejected attempts also
+      increment, so a client hammering a exhausted quota pushes the counter
+      past the limit; `used` is reported raw for that reason, and the TTL
+      resets it at midnight regardless.
+    - **The claim is not released if the caller later fails.** A run that is
+      counted and then fails to insert has still consumed allowance. Refunding
+      it would need a compensating decrement on every error path, and a
+      decrement that runs twice hands out free quota — worse than the
+      occasional lost unit.
+    """
+    if limit is None:
+        from src.core.config import settings
+
+        limit = settings.DAILY_RUN_QUOTA_PER_ORG
+
+    if limit <= 0:
+        return 0
+
+    now = datetime.now(UTC)
+    # The UTC date is part of the identifier, so a new day is a new key and the
+    # old one expires on its own — no reset job to run or forget.
+    identifier = f"{organization_id}:{now.strftime('%Y-%m-%d')}"
+    ttl = _seconds_until_utc_midnight(now)
+
+    used = await increment_rate_counter(r, "org_runs", identifier, ttl)
+
+    if used > limit:
+        raise RunQuotaExceeded(limit=limit, used=used, retry_after_seconds=ttl)
+    return used
+
+
+async def get_run_quota_usage(r: aioredis.Redis, organization_id: str) -> int:
+    """Runs claimed by this org so far today. Read-only — does not consume."""
+    identifier = f"{organization_id}:{datetime.now(UTC).strftime('%Y-%m-%d')}"
+    return await get_rate_count(r, "org_runs", identifier)

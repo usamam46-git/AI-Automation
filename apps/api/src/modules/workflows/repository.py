@@ -46,6 +46,43 @@ class WorkflowRepository:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_id_unscoped(self, workflow_id: uuid.UUID) -> Workflow | None:
+        """
+        Fetch a workflow WITHOUT an organization_id filter.
+
+        This is the one deliberate exception to the tenant-scoping rule in the
+        root CLAUDE.md, and it exists for exactly one caller: the unauthenticated
+        inbound webhook endpoint (POST /api/v1/triggers/workflows/{id}). That
+        request carries no JWT, so there is no authenticated org to scope by —
+        the caller proves authorization by HMAC instead, and the org identity is
+        then READ OFF this row (`workflow.organization_id`) rather than supplied.
+        That preserves the actual invariant: organization_id is never taken from
+        client input.
+
+        Do not reach for this anywhere else. Every authenticated path has an org
+        in context and must use get_by_id(). Note also that ExecutionService
+        verifies the HMAC before this row's contents influence anything, and
+        returns an identical 401 for "no such workflow" so the endpoint cannot
+        be used to enumerate workflow IDs across tenants.
+        """
+        stmt = select(Workflow).where(
+            Workflow.id == workflow_id,
+            Workflow.status != "archived",
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def mark_triggered(self, workflow_id: uuid.UUID, *, next_run_at: datetime | None) -> None:
+        """
+        Record that a trigger just enqueued a run, and arm the next occurrence.
+
+        Unscoped by org for the same reason as get_by_id_unscoped — both trigger
+        paths (the beat tick and the webhook) have already established authority
+        by other means.
+        """
+        stmt = update(Workflow).where(Workflow.id == workflow_id).values(last_triggered_at=datetime.now(UTC), next_run_at=next_run_at)
+        await self.db.execute(stmt)
+
     async def list_by_org(
         self,
         organization_id: uuid.UUID,

@@ -5,8 +5,16 @@ Vol. 2 §3.5 — Chat, Notifications, Audit
 Vol. 2 §13 — Security
 
 audit_logs is APPEND-ONLY.  There must be no UPDATE or DELETE routes for this
-table at the application layer, and a Postgres trigger (created in the initial
-migration) rejects any UPDATE/DELETE attempt at the database layer as well.
+table at the application layer, and a Postgres trigger rejects any UPDATE/DELETE
+attempt at the database layer as well.
+
+The trigger lives in migration `20260809_audit_log_immutability`, NOT in the
+initial migration — this docstring claimed the latter from the initial commit
+until 2026-08-09, when it turned out no CREATE TRIGGER existed anywhere and
+nothing had ever written a row to this table either. Both were fixed in that
+release. Two consequences are documented on the migration: hard-deleting an
+organization now fails (the FK cascade is a DELETE), and TRUNCATE is
+deliberately still permitted so the test suite's isolation fixture works.
 
 actor_type and actor_id identify who performed the action:
   - user   : a human user (actor_id = users.id)

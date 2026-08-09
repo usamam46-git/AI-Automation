@@ -46,6 +46,16 @@ export type Workflow = {
   trigger_type: TriggerType;
   trigger_config: Record<string, unknown> | null;
   current_version_id: string | null;
+  /** Next due fire time (schedule triggers only); null for every other type. */
+  next_run_at: string | null;
+  last_triggered_at: string | null;
+  /**
+   * Whether an inbound webhook signing secret exists. A bare bool by design —
+   * unlike an API key's last_four, no prefix of an HMAC secret is safe to
+   * expose, so there is nothing to mask and show. The plaintext is returned
+   * exactly once, by rotateWebhookSecret below.
+   */
+  has_webhook_secret: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -56,6 +66,18 @@ export type WorkflowPayload = {
   workspace_id: string;
   trigger_type: TriggerType;
   trigger_config?: Record<string, unknown> | null;
+};
+
+/**
+ * The one-shot reveal from POST /workflows/{id}/webhook-secret. Not recoverable
+ * afterwards — a lost secret must be rotated, not looked up.
+ */
+export type WebhookSecret = {
+  workflow_id: string;
+  secret: string;
+  endpoint_path: string;
+  signature_header: string;
+  timestamp_header: string;
 };
 
 // --- Workflow graph (versions / nodes / edges) ---------------------------
@@ -241,6 +263,15 @@ export const workflowsApi = {
   },
   async create(payload: WorkflowPayload) {
     const { data } = await apiClient.post<Workflow>("/workflows", payload);
+    return data;
+  },
+  async update(workflowId: string, payload: Partial<Pick<WorkflowPayload, "name" | "description" | "trigger_type" | "trigger_config">>) {
+    const { data } = await apiClient.patch<Workflow>(`/workflows/${workflowId}`, payload);
+    return data;
+  },
+  /** Generates or ROTATES the signing secret. Rotation invalidates the old one immediately. */
+  async rotateWebhookSecret(workflowId: string) {
+    const { data } = await apiClient.post<WebhookSecret>(`/workflows/${workflowId}/webhook-secret`);
     return data;
   },
   async archive(workflowId: string) {

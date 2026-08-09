@@ -81,9 +81,11 @@ verified via a full read-only orientation pass — see note below.)
   canvas work — see the bullet below.
   Tools registry + `tool_executions` audit trail landed 2026-08-08 — see the
   bullet below.
-  **250 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
-  2026-08-08: 188 + 31 tools CRUD + 12 registry resolution + 8 tool_executions
-  + 11 publish-gate cases added to the existing version suite).
+  Schedule + webhook triggers, the audit trail and the per-org run quota all
+  landed 2026-08-09 (Vol. 2 §5, §667, §700) — see the bullets below.
+  **325 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
+  2026-08-09: 250 + 24 schedule-trigger + 22 webhook-trigger + 16 audit-log
+  + 13 run-quota).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -248,13 +250,68 @@ verified via a full read-only orientation pass — see note below.)
   endpoints that had been complete and unused since 2026-08-06. Set/replace/remove
   with a masked `last_four`, 404 rendered as the empty state, 403 as an Owner-only
   locked card. **65 frontend tests still pass**; `npm run build`, `tsc --noEmit`
-  and `eslint` clean.
+  and `eslint` clean (all four re-verified 2026-08-09 after the trigger UI
+  landed — the new surfaces are `lib/`-free, so the vitest count is unchanged
+  by design, not by omission).
+- **Schedule + webhook triggers landed 2026-08-09** (Vol. 2 §5) — `trigger_type`
+  went from decorative to real. Until this, the column shipped in the initial
+  schema, the create dialog offered all five values, and **no code read it**;
+  only `manual` did anything and the `beat` container booted with an empty
+  schedule. Now: one beat entry (`dispatch-due-schedules`, 60s) enqueues
+  `src/workers/trigger_tasks.py`'s tick, which polls `workflows.next_run_at` —
+  the DB is the schedule, beat never learns about individual workflows. Webhooks
+  arrive at `POST /api/v1/triggers/workflows/{id}`, the only unauthenticated
+  route, authorized by HMAC-SHA256 over `"{timestamp}.{raw body}"`. Migration:
+  `alembic/versions/20260809_workflow_triggers.py` (`next_run_at`,
+  `last_triggered_at`, `webhook_secret_encrypted` + a partial index).
+  Frontend: cron input in `workflow-dialog.tsx`, new
+  `components/workflows/webhook-secret-card.tsx`, `email`/`event` removed from
+  the dropdown (the API now 422s them).
+  Proven end to end against the live Docker stack: beat fired the tick, the
+  real worker ran a cron-triggered workflow to `completed` and re-armed
+  `next_run_at` to the next boundary; a signed webhook returned 202 and
+  completed with the right payload, while forged / unknown-workflow / stale
+  requests all returned one byte-identical 401 and the secret sat encrypted in
+  the column.
+  Six contracts in apps/api/CLAUDE.md's triggers section; the three most
+  load-bearing: **catch-up is deliberately suppressed** (an overdue workflow
+  fires once, never replays the backlog), the **uniform 401 is anti-enumeration**
+  and must not be made more helpful, and the webhook secret is **encrypted, not
+  hashed** — the old `models.py` docstring specifying a hash was never
+  implementable, since HMAC verification is symmetric.
+- **Audit trail + per-org run quota landed 2026-08-09** (Vol. 2 §667, §700),
+  closing the two gaps found earlier the same day. Both were "documented but
+  absent": `audit_logs` had never been written to and its docstring falsely
+  claimed a Postgres immutability trigger existed "in the initial migration"
+  (there was no `CREATE TRIGGER` anywhere), and §667's run quota had no code
+  despite `core/cache.py`'s `rate_limit_*` helpers being written and unused.
+  - `audit_logs` module went models-only → real: `{schemas,repository,service,
+    router}.py`, `GET /api/v1/audit-logs` (**read-only forever** — a test
+    asserts 405 on POST/PATCH/PUT/DELETE), and migration
+    `20260809_audit_log_immutability` adding `reject_audit_log_mutation()` plus
+    BEFORE UPDATE/DELETE triggers. Eight material actions now write rows:
+    publish, archive, run-started (×3 trigger paths), approve, reject, BYOK
+    credential set/delete, webhook-secret rotation, quota-exceeded.
+  - Quota: `consume_run_quota()` in `core/cache.py`, `DAILY_RUN_QUOTA_PER_ORG`
+    (default 1000), 429 on the HTTP paths, skip-and-audit on the schedule tick.
+    Added to all five app services in `infra/docker-compose.yml`.
+  - **Also fixed a real pre-existing permission hole**: Viewer's `"*:read"`
+    granted *every* `:read`, including the Owner-only `integration:read` and
+    `billing:read`. `WILDCARD_READ_EXEMPT` in `core/permissions.py` closes it.
+  - Proven live: raw `UPDATE`/`DELETE` on `audit_logs` both rejected by Postgres
+    (and org hard-delete now fails, the documented cascade consequence), the
+    trail rendered actor + IP + `last_four` with no full key anywhere, and a
+    quota of 2 gave 201, 201, 429, 429 with exactly 2 runs created.
+  - Full detail — including two ORM identity-map traps found writing it — is in
+    apps/api/CLAUDE.md's audit-trail and quota sections.
 - Next: `subgraph` handler, agent function-calling/ReAct (see the deferral note in
   apps/api/CLAUDE.md), Dashboard home stat cards / "Recent Executions" (Vol. 3 §5),
+  an audit-log viewer UI (the endpoint exists and nothing consumes it — same shape
+  as the integrations endpoints before the Settings page), and
   a tool-registry picker in the Builder's tool config form (which would also close
-  the `graph-validation.ts` under-reporting divergence noted in apps/web/CLAUDE.md),
-  and real triggers (celery beat schedules nothing today; the `beat` and
-  `worker_documents` containers both boot with empty registries).
+  the `graph-validation.ts` under-reporting divergence noted in apps/web/CLAUDE.md).
+  Still empty registries: the `worker_documents` and `worker_notifications`
+  containers (nothing routes to their queues yet).
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list), the builder canvas, and the Execution Viewer
   (see above). `app/(marketing)/` referenced in apps/web/CLAUDE.md does not
