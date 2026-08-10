@@ -83,9 +83,10 @@ verified via a full read-only orientation pass — see note below.)
   bullet below.
   Schedule + webhook triggers, the audit trail and the per-org run quota all
   landed 2026-08-09 (Vol. 2 §5, §667, §700) — see the bullets below.
-  **325 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
-  2026-08-09: 250 + 24 schedule-trigger + 22 webhook-trigger + 16 audit-log
-  + 13 run-quota).
+  The home dashboard + `analytics` module landed 2026-08-10 — see the bullet below.
+  **336 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
+  2026-08-10: 250 + 24 schedule-trigger + 22 webhook-trigger + 16 audit-log
+  + 13 run-quota + 11 analytics).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -304,8 +305,33 @@ verified via a full read-only orientation pass — see note below.)
     quota of 2 gave 201, 201, 429, 429 with exactly 2 runs created.
   - Full detail — including two ORM identity-map traps found writing it — is in
     apps/api/CLAUDE.md's audit-trail and quota sections.
+- **Home dashboard + `analytics` module landed 2026-08-10** (Vol. 3 §5.1, the
+  last missing core product surface). Backend: `analytics` went from an empty
+  `.gitkeep` stub to real — `{schemas,repository,service,router}.py` and
+  `GET /api/v1/analytics/dashboard`, returning the four stat cards from ONE query
+  with five `COUNT(*) FILTER` aggregates. No migration and **no `models.py`** (it
+  owns no tables — the one deliberate break from the five-file convention).
+  Gated on `execution:read`, not a new permission: every figure is a roll-up of
+  data that permission already exposes per-run.
+  Frontend: `app/(dashboard)/dashboard/page.tsx`, `components/dashboard/
+  {stat-card,recent-executions,workflow-tiles}.tsx`, pure `lib/dashboard-stats.ts`.
+  The page lives at `/dashboard`, **not** `/` — Vol. 3 §1.1 gives `/` to the
+  marketing landing and Next.js errors on two route groups claiming one path, so
+  `app/page.tsx` stays a redirect placeholder for tomorrow's marketing work.
+  Login and register now land on `/dashboard` instead of `/workflows`.
+  Two decisions worth not re-litigating, both in apps/api/CLAUDE.md's analytics
+  section: the success-rate denominator **excludes `rejected`/`cancelled`** (a
+  rejected run is the Vol. 4 §4.3 gate working, and counting it as failure would
+  punish orgs for reviewing carefully), and `success_rate` is **null, never 0.0**,
+  when nothing has finished.
+  Proven end to end against the live Docker stack: three runs triggered through
+  the real Celery worker to `waiting_approval`, then one approved + one rejected
+  gave `success_rate: 1.0` with `sample_size: 1` — the rejected run excluded.
+  Verified in a browser in **both themes**, plus the fresh-org empty state
+  rendering "—" rather than "0%".
+  **336 backend tests** (325 + 11) and **87 frontend tests** (65 + 22).
 - Next: `subgraph` handler, agent function-calling/ReAct (see the deferral note in
-  apps/api/CLAUDE.md), Dashboard home stat cards / "Recent Executions" (Vol. 3 §5),
+  apps/api/CLAUDE.md),
   an audit-log viewer UI (the endpoint exists and nothing consumes it — same shape
   as the integrations endpoints before the Settings page), and
   a tool-registry picker in the Builder's tool config form (which would also close
@@ -313,10 +339,12 @@ verified via a full read-only orientation pass — see note below.)
   Still empty registries: the `worker_documents` and `worker_notifications`
   containers (nothing routes to their queues yet).
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
-  workspaces, workflows list), the builder canvas, and the Execution Viewer
-  (see above). `app/(marketing)/` referenced in apps/web/CLAUDE.md does not
-  exist yet. `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, 65 tests over the pure `lib/` modules only (no React harness;
+  workspaces, workflows list), the builder canvas, the Execution Viewer, and the
+  home dashboard (see above). `app/(marketing)/` referenced in apps/web/CLAUDE.md
+  does not exist yet — `app/page.tsx` is the placeholder that redirects to
+  `/dashboard`, and is the file the marketing landing will replace.
+  `apps/web` DOES have test infrastructure — `vitest.config.mts`,
+  `npm test`, 87 tests over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

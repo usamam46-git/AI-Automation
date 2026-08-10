@@ -36,7 +36,9 @@ export default function LoginPage() {
     try {
       const response = await authApi.login({ email, password });
       setAccessToken(response.access_token);
-      router.replace("/workflows");
+      // The home dashboard (Vol. 3 §5), not the workflows list — this landed
+      // on /workflows only because no home page existed before 2026-08-10.
+      router.replace("/dashboard");
     } catch (error) {
       setServerError(getApiErrorMessage(error, "Invalid email or password"));
     } finally {

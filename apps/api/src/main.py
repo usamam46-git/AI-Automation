@@ -103,6 +103,7 @@ app.add_middleware(
 # Health check (infrastructure smoke test)
 # ---------------------------------------------------------------------------
 
+from src.modules.analytics.router import router as analytics_router
 from src.modules.audit_logs.router import router as audit_logs_router
 from src.modules.auth.router import router as auth_router
 from src.modules.executions.router import router as executions_router
@@ -125,6 +126,8 @@ app.include_router(tools_router, prefix="/api/v1/tools", tags=["tools"])
 # Read-only by construction — see the module docstring. Vol. 2 §700 requires
 # that no UPDATE/DELETE route exists for audit_logs.
 app.include_router(audit_logs_router, prefix="/api/v1/audit-logs", tags=["audit-logs"])
+# Read-only aggregates over workflow_runs — owns no tables, gated on execution:read.
+app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["analytics"])
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

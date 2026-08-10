@@ -215,6 +215,41 @@ Built 2026-08-07 (Vol. 3 §6). `app/(dashboard)/executions/page.tsx` (list) and
 - No "View raw trace in LangSmith" link from the §6.1 wireframe: the LangSmith
   hook in `LLMClient` is a no-op, so the link would be dead.
 
+## Home dashboard (2026-08-10)
+
+Vol. 3 §5.1. `app/(dashboard)/dashboard/page.tsx`,
+`components/dashboard/{stat-card,recent-executions,workflow-tiles}.tsx`, and the
+pure `lib/dashboard-stats.ts` (vitest-covered).
+
+- **It lives at `/dashboard`, not `/`.** Vol. 3 §1.1 gives `/` to
+  `(marketing)/page.tsx`, and Next.js errors when two route groups resolve to
+  the same path — so a `(dashboard)/page.tsx` could never coexist with the
+  marketing landing. `app/page.tsx` is a placeholder that redirects to
+  `/dashboard`; it is the file the marketing landing replaces.
+- **Login and register both land here**, changed from `/workflows` at the same
+  time. That was only ever the target because no home page existed.
+- **`success_rate: null` must render as "—", never "0%".** Null means nothing
+  has finished in the window, not that everything failed. `formatSuccessRate`
+  is a separate function precisely so that decision has one home.
+- **The three queries reuse the Executions and Workflows pages' exact query
+  keys** (`['executions', orgId, 'all', 'all']`,
+  `['workflows', orgId, workspaceId, 'all']`). That shared cache is the point —
+  navigating to either list is instant. Do NOT add a `limit` to those calls: it
+  would fork the key and double the fetching. The trim is client-side in
+  `recentRuns`/`workflowTiles`.
+- **Stat cards are org-wide, workflow tiles are workspace-scoped.** Deliberate,
+  and it matches the wireframe's own header (org AND workspace switcher): Cost
+  MTD is a billing figure and billing is per-org, while "Your Workflows" is the
+  set you're working in. The backend has no workspace filter on the stats.
+- `formatMonthlyCost` **hardcodes `$` and the thousands separator** rather than
+  using `toLocaleString(undefined, {style: "currency"})`, which renders
+  "USD 842.10" under some locales while `lib/run-status.ts`'s `formatCost`
+  hardcodes `$` — the two would disagree on the same page. It is also distinct
+  from `formatCost` on purpose: 2dp for a monthly total, 4dp for a per-run cost.
+- Stat-card accents are Tailwind palette classes mirroring `badge.tsx`'s run
+  statuses (sky/amber/emerald), not `--color-status-*` tokens — that token set
+  does not exist here, as the Execution Viewer section above already notes.
+
 ## Workflow triggers (2026-08-09)
 
 `components/workflows/workflow-dialog.tsx` (cron input) and

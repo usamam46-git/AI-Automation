@@ -40,7 +40,9 @@ export default function RegisterPage() {
     try {
       const response = await authApi.register({ full_name: fullName.trim(), email, password, organization_name: organizationName.trim() });
       setAccessToken(response.access_token);
-      router.replace("/workflows");
+      // Matches the login redirect — a new org lands on the dashboard, whose
+      // empty states point at creating a first workflow.
+      router.replace("/dashboard");
     } catch (error) {
       setServerError(getApiErrorMessage(error, "Registration failed"));
     } finally {

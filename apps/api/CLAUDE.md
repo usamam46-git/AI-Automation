@@ -21,7 +21,8 @@ Each domain module (`src/modules/<name>/`) has exactly: `models.py`,
 versions/nodes/edges), `tools` (real as of 2026-08-08 — CRUD + registry
 resolution + `tool_executions`, see the tools section below), `agents` (stub),
 `prompts` (stub), `knowledge_base` (stub), `chat` (stub), `notifications`,
-`audit_logs`, `billing` (stub), `integrations` (real for one type — BYOK
+`audit_logs`, `analytics` (real as of 2026-08-10 — one read-only endpoint, see
+the analytics section below), `billing` (stub), `integrations` (real for one type — BYOK
 `openai_api_key`, see security section below; other integration types remain
 stub), `webhooks` (stub — OUTBOUND delivery only; the INBOUND webhook trigger
 endpoint lives in `executions`, see the triggers section), `settings` (stub).
@@ -423,6 +424,44 @@ map rather than refreshing it from the RETURNING row. So `get_by_type()` before
 a scalar column, which does not populate the identity map), and reading
 `workflow.webhook_secret_encrypted` *after* `repository.update()` yields the new
 value. Capture before-state before the write.
+
+## Analytics module (landed 2026-08-10)
+
+`GET /api/v1/analytics/dashboard` — the four Vol. 3 §5.1 stat cards (Active
+Runs, Needs Approval, Cost MTD, Success Rate). Read-only, one verb, no
+migration. `test_no_mutating_route_on_the_dashboard` asserts 405 on
+POST/PATCH/PUT/DELETE, same guard as audit_logs.
+
+- **It has no `models.py`, deliberately.** This is the one module that breaks
+  the "exactly five files" convention above: analytics owns no tables and
+  defines no entities, it aggregates `workflow_runs`. An empty `models.py`
+  would imply a schema that does not exist and would need adding to
+  `src/db/all_models.py` for nothing.
+- **Gated on `execution:read`, NOT a new `analytics:read`.** Every figure is a
+  roll-up of data that permission already exposes per-run (`total_cost_usd` is
+  on `WorkflowRunResponse`), so a separate grant would add a seeding concern
+  while protecting nothing, and would lock Viewer out of the product's home page.
+- **One query, five FILTER aggregates.** `workflow_runs` is the highest-volume
+  table and this endpoint runs on every dashboard load; don't split it back into
+  five round-trips.
+- **The success-rate denominator excludes `rejected` and `cancelled`, and that
+  is a product decision.** A rejected run is the Vol. 4 §4.3 approval gate
+  working correctly — counting it as a failure means an org's success rate falls
+  the more carefully it reviews mutating actions, inverting the incentive the
+  gate exists to create. Widening the denominator is not a bug fix.
+  `test_rejected_and_cancelled_runs_are_excluded_from_the_success_rate` pins it.
+- **`success_rate` is `None`, never `0.0`, when nothing has finished.** Zero
+  finished runs means the rate is undefined; `0.0` renders as "0%" and tells a
+  new org its automation is broken. The frontend renders null as an em dash.
+- **The two in-flight cards are all-time; cost and success rate are windowed**
+  (current UTC month, trailing 30 days). A run blocked on an approval for months
+  is exactly what the card exists to surface, so it must not age out.
+- The month boundary is **UTC**, because there is no per-org timezone column to
+  use. Revisit when billing becomes real — an invoice period and this figure
+  should agree.
+- Recent Executions and Your Workflows are NOT served from here; the frontend
+  calls the existing executions/workflows list endpoints so it shares a React
+  Query cache with those pages.
 
 ## Per-org daily run quota (landed 2026-08-09)
 

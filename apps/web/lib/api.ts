@@ -370,3 +370,39 @@ export const integrationsApi = {
     await apiClient.delete(`/integrations/${type}`);
   },
 };
+
+// ---------------------------------------------------------------------------
+// Analytics — the home dashboard's stat cards (Vol. 3 §5.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Aggregates over the org's workflow_runs. Gated on `execution:read`, the same
+ * permission the executions list uses — every figure here is a roll-up of rows
+ * that endpoint already returns.
+ *
+ * The window fields are not decoration: the cards render their subtitles from
+ * them, so the labels stay true if the backend constants change.
+ */
+export type DashboardStats = {
+  /** pending + running. Deliberately excludes waiting_approval, which has its own card. */
+  active_runs: number;
+  needs_approval: number;
+  cost_mtd_usd: number;
+  /**
+   * completed / (completed + failed) as a fraction in [0, 1], or **null** when
+   * nothing has finished in the window. Null is not zero — render it as "—",
+   * never as "0%".
+   */
+  success_rate: number | null;
+  cost_period_start: string;
+  success_rate_window_days: number;
+  /** The denominator. Small samples make a headline percentage misleading. */
+  success_rate_sample_size: number;
+};
+
+export const analyticsApi = {
+  async dashboard() {
+    const { data } = await apiClient.get<DashboardStats>("/analytics/dashboard");
+    return data;
+  },
+};
