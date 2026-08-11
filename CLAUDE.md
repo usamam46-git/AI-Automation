@@ -330,6 +330,39 @@ verified via a full read-only orientation pass — see note below.)
   Verified in a browser in **both themes**, plus the fresh-org empty state
   rendering "—" rather than "0%".
   **336 backend tests** (325 + 11) and **87 frontend tests** (65 + 22).
+- **Marketing landing page landed 2026-08-11** (Vol. 3 §1.1, the last placeholder
+  route). `app/(marketing)/{layout,page}.tsx` + `components/marketing/*` (16
+  components), `app/api/contact/route.ts`, and two pure vitest-covered modules
+  `lib/{run-film,contact-form}.ts`. **`app/page.tsx` was deleted** — it was the
+  placeholder redirect its own docstring said the landing would replace, and
+  Next errors when two route groups claim `/`. `/dashboard` is unchanged.
+  New deps: `gsap` (+ScrollTrigger), `@number-flow/react`, `canvas-confetti`;
+  new `components/ui/{interactive-hover-button,accordion}.tsx`.
+  Design: macOS-light, sky-gradient hero with a floating card collage, lime CTA,
+  locked to light via a `.mk-root` token override (the app keeps both themes).
+  The hero backdrop carries a **neon aurora rendered as a raw WebGL fragment
+  shader** (`components/marketing/aurora-canvas.tsx`) — deliberately not
+  three.js/R3F, which are installed but would add ~160KB gzipped to LCP for one
+  quad. It is additive light under white text, so its envelopes are a contrast
+  constraint: measured composite is 5.76 / 4.97 / 4.66:1 for eyebrow / headline
+  / subhead. Re-measure if you retune it; the method is in apps/web/CLAUDE.md.
+  It degrades to the plain CSS sky on no-WebGL, lost context or compile failure.
+  The signature element is a **scroll-scrubbed run film** that plays one real
+  execution — webhook → agent → condition → `human_approval` → tool → completed —
+  and holds on the approval gate, because `validate_mutating_approval` is the
+  product's actual differentiator and the page is built entirely around it.
+  Verified in a browser section by section on desktop; **mobile is explicitly
+  unverified** (Chrome zoomed instead of reflowing under automation, so no
+  breakpoint was exercised).
+  Three traps worth not rediscovering, all detailed in apps/web/CLAUDE.md: every
+  `gsap.from(opacity: 0)` MUST be guarded by `runWhenVisible` (rAF is dead in a
+  background tab, so the page blanked itself and froze — observed live, not
+  theorised); Tailwind's `scale-*`/`translate-*` are `transform` and GSAP
+  overwrites them; and NumberFlow's `style: "currency"` renders "US$49", the
+  same locale trap already documented for `formatMonthlyCost`.
+  The contact endpoint returns 503 until `CONTACT_WEBHOOK_URL` is set —
+  deliberately loud, so submissions are never silently dropped.
+  **114 frontend tests** (87 + 14 run-film + 13 contact-form).
 - Next: `subgraph` handler, agent function-calling/ReAct (see the deferral note in
   apps/api/CLAUDE.md),
   an audit-log viewer UI (the endpoint exists and nothing consumes it — same shape
@@ -339,12 +372,11 @@ verified via a full read-only orientation pass — see note below.)
   Still empty registries: the `worker_documents` and `worker_notifications`
   containers (nothing routes to their queues yet).
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
-  workspaces, workflows list), the builder canvas, the Execution Viewer, and the
-  home dashboard (see above). `app/(marketing)/` referenced in apps/web/CLAUDE.md
-  does not exist yet — `app/page.tsx` is the placeholder that redirects to
-  `/dashboard`, and is the file the marketing landing will replace.
+  workspaces, workflows list), the builder canvas, the Execution Viewer, the
+  home dashboard, and the marketing landing page (see above). `app/(marketing)/`
+  now exists and owns `/`; `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, 87 tests over the pure `lib/` modules only (no React harness;
+  `npm test`, 114 tests over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

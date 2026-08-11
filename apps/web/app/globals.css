@@ -46,10 +46,30 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Marketing palette (`mk-` namespace so it can never collide with
+     Tailwind's own `sky`/`lime` scales). Only `app/(marketing)/` uses these. */
+  --color-mk-sky-deep: var(--mk-sky-deep);
+  --color-mk-sky: var(--mk-sky);
+  --color-mk-sky-pale: var(--mk-sky-pale);
+  --color-mk-sky-mist: var(--mk-sky-mist);
+  --color-mk-lime: var(--mk-lime);
+  --color-mk-lime-deep: var(--mk-lime-deep);
+  --color-mk-ink: var(--mk-ink);
+  --color-mk-ink-soft: var(--mk-ink-soft);
+  --color-mk-paper: var(--mk-paper);
+  --color-mk-mist: var(--mk-mist);
+  --color-mk-hairline: var(--mk-hairline);
+  --font-display: var(--font-instrument-sans), var(--font-sans);
 }
 
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+
+  /* Document scrollbar. Silver on light surfaces. */
+  --scrollbar-thumb: #c3c7cf;
+  --scrollbar-thumb-hover: #a7acb8;
+  --scrollbar-thumb-active: #8d94a2;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -85,6 +105,12 @@
 }
 
 .dark {
+  /* Neutral white at low alpha, not the silver — a light thumb on the true
+     black background would glare. */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
+  --scrollbar-thumb-active: rgba(255, 255, 255, 0.38);
+
   --background: oklch(0.085 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.145 0 0);
@@ -118,6 +144,141 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* ---------------------------------------------------------------------------
+   Marketing palette. Declared on :root (not inside `.mk-root`) so the values
+   resolve for both themes — the marketing route group locks itself to light
+   below, but these five hues are theme-independent brand constants.
+--------------------------------------------------------------------------- */
+:root {
+  --mk-sky-deep: #0e6dc2;
+  --mk-sky: #3e9bee;
+  --mk-sky-pale: #a8dbff;
+  --mk-sky-mist: #e8f4ff;
+  --mk-lime: #c8f536;
+  --mk-lime-deep: #a9d617;
+  --mk-ink: #141414;
+  --mk-ink-soft: #5c5f66;
+  --mk-paper: #fafafa;
+  --mk-mist: #f0f1f3;
+  --mk-hairline: rgba(20, 20, 20, 0.08);
+}
+
+/* ---------------------------------------------------------------------------
+   Light-lock for `app/(marketing)/`.
+
+   `next-themes` puts `.dark` on <html>, so a marketing page nested under a
+   dark <html> would inherit the true-black app tokens and destroy the sky
+   hero. Re-declaring the full light token set on `.mk-root` wins by
+   specificity over `.dark` (0,1,0 vs 0,1,0 but later in the cascade), so the
+   shadcn primitives used inside — Button, Select, Accordion — render light
+   regardless of the visitor's system theme. The app routes are untouched.
+--------------------------------------------------------------------------- */
+.mk-root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+
+  color-scheme: light;
+  background-color: var(--mk-paper);
+  color: var(--mk-ink);
+}
+
+/* ---------------------------------------------------------------------------
+   Document scrollbar.
+
+   Scoped to `html` on purpose — a bare `::-webkit-scrollbar` rule would also
+   restyle every inner scroller, including the ScrollArea primitive and the
+   builder canvas, which have their own treatments.
+
+   The thumb is drawn with a transparent border plus `background-clip:
+   content-box`, which is what insets it from the track edge and gives the
+   floating macOS look instead of a bar wedged against the window edge.
+
+   The two mechanisms are mutually exclusive and must be kept that way.
+   `scrollbar-width`/`scrollbar-color` are the standard properties; Chromium
+   **ignores `::-webkit-scrollbar` entirely whenever either is set to a
+   non-initial value**, so declaring both unconditionally silently threw away
+   the rounded inset thumb and left the browser's stock thin bar. Firefox is
+   the reverse — it supports only the standard properties.
+
+   So: the standard properties are the Firefox baseline, and the `@supports
+   selector(::-webkit-scrollbar)` block resets them to their initial `auto`
+   for Chromium/Safari to hand control back to the pseudo-elements.
+
+   To check which path is live, measure the gutter
+   (`innerWidth - documentElement.clientWidth`): the pseudo-element path is
+   12px, the standard `thin` path is 11px.
+--------------------------------------------------------------------------- */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  html {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  html::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  html::-webkit-scrollbar-track,
+  html::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  html::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    transition: background-color 200ms ease-out;
+  }
+
+  html::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  html::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-active);
+  }
+}
+
+/*
+  The marketing pages are light-locked inside a `<html class="dark">` when the
+  visitor's system is dark (see `.mk-root` above). The document scrollbar sits
+  on that <html>, outside the wrapper, so without this it would render dark
+  against a white page. `:has()` takes the specificity of its argument, making
+  this (0,1,1) — it beats `.dark` at (0,1,0) regardless of source order.
+
+  `color-scheme` is set too, so even a browser that ignores the custom rules
+  still draws a light native scrollbar here.
+*/
+html:has(.mk-root) {
+  color-scheme: light;
+  --scrollbar-thumb: #c3c7cf;
+  --scrollbar-thumb-hover: #a7acb8;
+  --scrollbar-thumb-active: #8d94a2;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -127,5 +288,62 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+@layer components {
+  /* Display type. Instrument Sans at marketing scale needs optical tracking
+     correction — it sets loose by default at 60px+. */
+  .mk-display {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 0.98;
+    text-wrap: balance;
+  }
+
+  .mk-eyebrow {
+    font-family: var(--font-display);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  /* The floating macOS-style nav pill and the glass chips in the hero. */
+  .mk-glass {
+    background-color: rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+  }
+
+  /* Soft, layered, low-opacity — never a single hard drop shadow.
+     Matches the shadow rule in apps/web/CLAUDE.md's design system. */
+  .mk-lift {
+    box-shadow:
+      0 1px 2px rgba(20, 20, 20, 0.04),
+      0 8px 24px -6px rgba(20, 20, 20, 0.08),
+      0 24px 48px -16px rgba(20, 20, 20, 0.08);
+  }
+
+  .mk-lift-sky {
+    box-shadow:
+      0 1px 2px rgba(14, 60, 110, 0.06),
+      0 12px 32px -8px rgba(14, 60, 110, 0.18),
+      0 32px 64px -24px rgba(14, 60, 110, 0.22);
+  }
+}
+
+/* The scroll film pins a section and scrubs a timeline. With reduced motion
+   the pin is never created (see use-run-film.ts) and the final frame is shown
+   statically, so these transforms must not linger. */
+@media (prefers-reduced-motion: reduce) {
+  .mk-root *,
+  .mk-root *::before,
+  .mk-root *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

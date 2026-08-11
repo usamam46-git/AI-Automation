@@ -35,11 +35,30 @@ The product uses an iOS/macOS-inspired visual language. Full detail in
   shadcn's untouched dark defaults.
 - **Density**: compact, macOS System Settings / Linear-level density, not
   marketing-page whitespace.
+- **Document scrollbar** (`globals.css`, added 2026-08-11): thin silver
+  (`#c3c7cf`) floating pill in light, `white/18` in dark, driven by
+  `--scrollbar-thumb*` tokens. Two things to know before touching it.
+  **(1) The standard and `-webkit-` mechanisms are mutually exclusive.**
+  Chromium ignores `::-webkit-scrollbar` completely whenever `scrollbar-width`
+  or `scrollbar-color` is set to a non-initial value — declaring both at once
+  silently discards the rounded thumb and leaves the stock bar. The standard
+  properties are therefore the Firefox baseline, and an
+  `@supports selector(::-webkit-scrollbar)` block resets them to `auto` so
+  Chromium/Safari use the pseudo-elements. To tell which path is live, measure
+  `innerWidth - documentElement.clientWidth`: 12px is the pseudo-element path,
+  11px is the standard `thin` path.
+  **(2) `html:has(.mk-root)` forces the light thumb on marketing routes.** The
+  scrollbar lives on `<html>`, which carries `.dark`, but the marketing page is
+  light-locked inside it — without the override a dark-system visitor gets a
+  dark scrollbar on a white page. `:has()` takes its argument's specificity, so
+  that rule is (0,1,1) and beats `.dark` at (0,1,0) regardless of order.
+  Rules are scoped to `html`, never bare `::-webkit-scrollbar`, so the
+  ScrollArea primitive and the builder canvas keep their own treatments.
 - **Motion**: subtle only, 150–250ms ease-out, no springy overshoot.
-- This will apply to the marketing site too, once it's built — it should
-  not become a visually separate "brochure site." Note: `app/(marketing)/`
-  does not exist yet as of the last verification pass; don't assume it's
-  scaffolded.
+- This will apply to the marketing site too — it should not become a
+  visually separate "brochure site." `app/(marketing)/` was built on
+  2026-08-11; see its own section below for the one deliberate divergence
+  (a committed light-only palette with its own `mk-` token namespace).
 
 ## API integration
 
@@ -280,6 +299,126 @@ detail dialog.
 - "Next run" renders "Not until published" for a draft. The beat tick filters on
   `status='published'`, so showing a timestamp there would promise a run that
   never comes.
+
+## Marketing landing page (2026-08-11)
+
+Vol. 3 §1.1. `app/(marketing)/{layout,page}.tsx`, `components/marketing/*`,
+`app/api/contact/route.ts`, and two pure vitest-covered modules
+`lib/{run-film,contact-form}.ts`. **`app/page.tsx` was deleted** — it was the
+placeholder redirect its own docstring said the landing would replace, and two
+route groups cannot both resolve to `/`. The dashboard still lives at
+`/dashboard`; login/register still land there.
+
+New deps: `gsap` (with ScrollTrigger), `@number-flow/react`, `canvas-confetti`.
+New `components/ui/`: `interactive-hover-button.tsx`, `accordion.tsx`. New
+hooks: `use-media-query.ts`, `use-gsap-reveal.ts`.
+
+- **It is light-only, on purpose, and that is enforced by `.mk-root`.**
+  `next-themes` puts `.dark` on `<html>`, so the marketing layout re-declares
+  the full light token set on a wrapper class in `globals.css`. That is what
+  makes the shadcn primitives inside (Button, Select, Switch, Accordion) render
+  light under a dark system theme. The sky hero, near-white body and lime CTA
+  are a single committed design — a dark variant would not be a variant, it
+  would be a different page. App routes are untouched and keep both themes.
+- **The `mk-` colour namespace is deliberate.** `--color-mk-sky`, `--color-mk-lime`
+  etc. exist so marketing hues can never collide with Tailwind's own `sky`/`lime`
+  scales, and so nothing on the marketing page can drift the product's neutral
+  tokens.
+- **The hero gradient's stops are a contrast contract, not a look.** The text
+  block sits in the top ~15–50% of `SkyBackdrop`, where the sky stays at or
+  below `#1878CC` — 4.46:1 against white, which carries the 17–18px subhead.
+  The reference image's own `#4AA8F5` is **2.55:1 and fails even large text**;
+  that is why the palette is deepened. Lighten stops below 50% only.
+- **The aurora is additive light over that gradient, and its envelopes exist
+  for legibility, not looks.** `aurora-canvas.tsx` is a raw WebGL fragment
+  shader — deliberately not three.js/R3F, which are installed but would cost
+  ~160KB gzipped on the landing page's LCP to draw one quad. Because it blends
+  with `mix-blend-mode: screen` *underneath* white text, every unit of glow it
+  adds costs contrast. Three things keep that safe, and all three are load-bearing:
+  a cubed vertical falloff that puts nearly all energy above the headline, a
+  centre-column dim over the text, and a top rolloff (`smoothstep(0.0, 0.11, st.y)`)
+  that keeps the peak from landing under the floating nav — without it the glow
+  blew out to white and took the wordmark with it.
+  **Measured composite worst case: eyebrow 5.76:1, headline 4.97:1, subhead
+  4.66:1.** If you touch `MAX_INTENSITY` or either envelope, re-measure —
+  sample the canvas pixels, screen-blend against the analytic gradient colour
+  at that y, and check against white. Do not eyeball it.
+- **The shader lives in a JS template literal, so its GLSL must contain no
+  backticks.** A backtick in a GLSL comment silently ends the string and the
+  route 500s with a parse error. This happened.
+- **The aurora paints one frame synchronously before any rAF.** Same reasoning
+  as `runWhenVisible` below: a background tab never runs rAF, so a canvas that
+  only draws from the animation loop would show an empty hero until
+  foregrounded. It also gives reduced-motion users a real, still aurora rather
+  than nothing. Everything is additive over a gradient that is complete on its
+  own, so no WebGL, a lost context, or a shader compile failure all degrade to
+  exactly the sky that shipped before — never to a blank hero.
+- **Every `gsap.from(..., {opacity: 0})` is guarded by `runWhenVisible`.** This
+  is the single most important rule here. Such a tween blanks its targets the
+  moment it is built and relies on the ticker to bring them back — but
+  `requestAnimationFrame` does not run in a background tab, so a page opened via
+  cmd-click built every tween, blanked every section, and froze there. This was
+  observed live, not theorised. `useGsapReveal` (scroll reveals) and the two
+  inline guards in `hero.tsx` / `hero-collage.tsx` all defer setup until
+  `document.visibilityState === "visible"`, and clear inline props on complete
+  so a finished section is styled only by its classes. **Do not add a new GSAP
+  entrance without this guard.**
+- **Tailwind's `scale-*` / `translate-*` compile to `transform`, which GSAP
+  overwrites.** The hero collage sets depth scale and the focal card's centring
+  through the standalone CSS `scale` / `translate` properties instead, because
+  the pointer parallax writes `x`/`y` to `transform` continuously. A card that
+  silently snaps to full size on first mouse move is this bug.
+- **The run film's beat state is React; its progress bar is not.** One
+  ScrollTrigger scrubs 0→1; `onUpdate` writes the continuous progress straight
+  to the DOM and only calls `setState` when the discrete beat index actually
+  changes. Putting the float into state re-renders the tree every scroll frame.
+- **The film pins on desktop only.** Below `lg` the same trigger runs unpinned,
+  because a pin fights a phone's collapsing address bar — every collapse is a
+  resize, every resize re-measures the pin. With `prefers-reduced-motion` no
+  trigger is created at all and the stepper buttons are the only control, which
+  is why they are real `<button>`s.
+- **The film is fiction that must stay technically true.** `lib/run-film.ts`
+  uses real `WorkflowRun` statuses and its tests pin the load-bearing invariant:
+  on the approval beat `approval_1` is `waiting` while `post_to_erp` is still
+  `pending`. If that ever flips, the film is claiming the ERP was written to
+  before a human approved — the exact opposite of the page's argument.
+- **No invented social proof.** The reference layout's star rating is replaced
+  by capability facts, because the product has not shipped and any rating would
+  be fabricated. Keep it that way.
+- **`system-marquee.tsx` names real vendors but shows no vendor logos, and the
+  heading says "connect to" — not "trusted by".** Both halves are deliberate.
+  Reproducing the marks would mean shipping trademarked assets or redrawing
+  them from memory, and a subtly wrong Workday logo is worse than none. And a
+  logo wall under a hero reads as customers-or-integrations, neither of which
+  is true yet: the FAQ on this same page says purpose-built ERP connectors are
+  roadmap, and that an integration today is an HTTP tool you configure. The
+  claim made here is compatibility (every system listed has an HTTP API, which
+  the tool registry speaks), and the strip's closing line repeats the FAQ's
+  wording so the two cannot drift.
+  If real logos are ever added, the heading and the FAQ must change together.
+  **Coloured monogram tiles were tried and removed** — standing in for a mark
+  you cannot ship reads as an impression of a logo wall, which is worse than
+  either real logos or plain names. Names in the display face are honest about
+  being names. Don't reintroduce the tiles.
+  Renamed from `capability-marquee.tsx` — it previously listed the platform's
+  own feature vocabulary, which asked the reader to parse feature names two
+  seconds after the headline.
+- The marquee uses a real `mask-image` alpha fade, not a paper-coloured overlay,
+  so the edges cannot show a seam. It pauses on hover **and on focus-within**,
+  the latter so a keyboard user tabbing past is not chasing a moving target.
+- **NumberFlow prints a literal `$` with `style: "decimal"`, not
+  `style: "currency"`.** It shipped as "US$49" on first render under a non-US
+  locale. Same trap and same fix as `formatMonthlyCost` in `lib/dashboard-stats.ts`.
+- **The contact endpoint fails loudly rather than silently.** With no
+  `CONTACT_WEBHOOK_URL` set it returns 503 and the form shows an email address.
+  A form that says "thanks, we'll be in touch" while dropping the submission
+  loses real leads and nobody notices. Set that env var (server-side only —
+  never `NEXT_PUBLIC_`) to a Slack/Zapier/internal hook to turn it on.
+- **Not verified: any real mobile viewport.** Chrome zooms rather than reflows
+  when resized under automation here, so the layout viewport stayed pinned at
+  1440 and no breakpoint was ever exercised. Desktop was verified in a browser
+  across every section. The responsive classes and the `lg`-gated pin are
+  reasoned, not observed — check them on a real device before launch.
 
 ## Settings page (2026-08-08)
 
