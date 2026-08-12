@@ -391,22 +391,49 @@ verified via a full read-only orientation pass — see note below.)
   **required** `model` with no settings default, because embedding a query with a
   different model than its corpus produces plausible numbers and meaningless
   rankings without raising anywhere.
+- **Tools registry UI + Builder registry picker landed 2026-08-12** — frontend
+  only, **no backend change**: `/api/v1/tools` had been complete since
+  2026-08-08 with *zero* consumers in `apps/web`. New
+  `app/(dashboard)/tools/page.tsx`, `components/tools/{tool-dialog,
+  delete-tool-dialog}.tsx`, `toolsApi` in `lib/api.ts`, a Tools nav entry and a
+  `mutating` badge variant. The dialog deliberately edits only the fields a node
+  cannot override, and offers no `input_schema` editor (function-calling is
+  still deferred, so nothing would read it).
+  The Builder's `tool-config-form.tsx` gained a **Registry / Inline source
+  selector**. The two are mutually exclusive because inline `tool_type` always
+  wins over `tool_id` at the backend, so switching clears the other path's keys;
+  in registry mode only `NODE_OVERRIDABLE_KEYS` are editable and the rest render
+  read-only off the registry row.
+  This **closed the documented `graph-validation.ts` under-reporting
+  divergence**: `validateGraph` now takes an optional `ToolRegistry`, the
+  mutating walk ORs the registry flag in (upgrade-only, never downgrade), and a
+  new eighth rule `unknown_tool` mirrors `_resolve_registry_tools`' FK check.
+  Passing `undefined` (not loaded) vs an empty Map (nothing resolves) is
+  load-bearing — see apps/web/CLAUDE.md.
+  Verified in a browser in **both themes** against the live Docker stack:
+  registering a mutating tool and selecting it on a node raised the approval
+  warning on the canvas *with the node's own `is_mutating` unset* — the exact
+  case that used to validate clean and then 422 at publish — and soft-deleting
+  that tool turned the node's error into `unknown_tool`. One real bug was found
+  that way and fixed: `sourceOf` tested `tool_id` for truthiness, so switching to
+  registry mode (which writes `tool_id: ""`) re-rendered the inline fields under
+  a registry toggle.
+  **123 frontend tests** (114 + 9); `npm run build`, `tsc --noEmit` and `eslint`
+  clean.
 - Next: wire `embed()` into a real ingestion pipeline (the `knowledge_base`
   module is still models-only — chunking, OCR, and hybrid search are all unbuilt),
   `subgraph` handler, agent function-calling/ReAct (see the deferral note in
-  apps/api/CLAUDE.md),
+  apps/api/CLAUDE.md), and
   an audit-log viewer UI (the endpoint exists and nothing consumes it — same shape
-  as the integrations endpoints before the Settings page), and
-  a tool-registry picker in the Builder's tool config form (which would also close
-  the `graph-validation.ts` under-reporting divergence noted in apps/web/CLAUDE.md).
+  as the integrations endpoints before the Settings page).
   Still empty registries: the `worker_documents` and `worker_notifications`
   containers (nothing routes to their queues yet).
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list), the builder canvas, the Execution Viewer, the
-  home dashboard, and the marketing landing page (see above). `app/(marketing)/`
-  now exists and owns `/`; `app/page.tsx` is gone.
+  home dashboard, the tools registry, and the marketing landing page (see
+  above). `app/(marketing)/` now exists and owns `/`; `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, 114 tests over the pure `lib/` modules only (no React harness;
+  `npm test`, 123 tests over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

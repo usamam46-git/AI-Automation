@@ -406,3 +406,93 @@ export const analyticsApi = {
     return data;
   },
 };
+
+// ---------------------------------------------------------------------------
+// Tools registry — Vol. 2 §3.3/§7.2, Vol. 4 §4.1/§4.3
+// ---------------------------------------------------------------------------
+
+/**
+ * Vol. 2 §7.2 names four tool types; only these two are implemented, and the
+ * backend rejects `python_function`/`mcp` by name at **create**, not at run
+ * time. Same list as the builder's inline form — keep the two in sync.
+ */
+export type ToolType = "http_request" | "erp_connector";
+
+/** OpenAI's function-name grammar, mirrored from `TOOL_NAME_PATTERN` in the API's schemas.py. */
+export const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+export type Tool = {
+  id: string;
+  organization_id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  tool_type: ToolType;
+  /**
+   * The JSON Schema handed to a model as the function's parameters. There is no
+   * editor for it yet — agent function-calling is deferred (see the deferral
+   * note in apps/api/CLAUDE.md), so nothing reads this field. It round-trips
+   * untouched on PATCH rather than being cleared.
+   */
+  input_schema: Record<string, unknown> | null;
+  /** Type-specific settings: url/method/headers for http_request, action for erp_connector. */
+  config: Record<string, unknown> | null;
+  is_mutating: boolean;
+  /** Soft-delete flag. The list endpoint already excludes inactive rows. */
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ToolPayload = {
+  workspace_id: string;
+  name: string;
+  tool_type: ToolType;
+  description?: string | null;
+  config?: Record<string, unknown> | null;
+  is_mutating?: boolean;
+};
+
+/**
+ * `tool_type` and `workspace_id` are absent on purpose — `ToolUpdate` sets
+ * `extra="forbid"`, so sending either is a 422 rather than a silent no-op.
+ * Changing the type would orphan the type-specific config; changing the
+ * workspace would move the row's tenancy anchor.
+ */
+export type ToolUpdatePayload = Partial<Pick<ToolPayload, "name" | "description" | "config" | "is_mutating">>;
+
+export const toolsApi = {
+  // Bare array, cursor-paginated on `created_at` — the same convention as the
+  // workflows and executions lists.
+  async list(params: { workspaceId?: string | null; toolType?: ToolType | "all"; cursor?: string | null; limit?: number } = {}) {
+    const { data } = await apiClient.get<Tool[]>("/tools", {
+      params: {
+        workspace_id: params.workspaceId || undefined,
+        tool_type: params.toolType && params.toolType !== "all" ? params.toolType : undefined,
+        cursor: params.cursor || undefined,
+        limit: params.limit || undefined,
+      },
+    });
+    return data;
+  },
+  // 422 when the config fails `validate_tool_config` — the registry is validated
+  // by the same code that executes it, so a row that saves is a row that runs.
+  async create(payload: ToolPayload) {
+    const { data } = await apiClient.post<Tool>("/tools", payload);
+    return data;
+  },
+  async get(toolId: string) {
+    const { data } = await apiClient.get<Tool>(`/tools/${toolId}`);
+    return data;
+  },
+  async update(toolId: string, payload: ToolUpdatePayload) {
+    const { data } = await apiClient.patch<Tool>(`/tools/${toolId}`, payload);
+    return data;
+  },
+  // Soft delete. **409 while a published version still references the tool** —
+  // `tool_executions.tool_id` cascades, so a hard delete would erase the audit
+  // trail. Draft references do not block.
+  async remove(toolId: string) {
+    await apiClient.delete(`/tools/${toolId}`);
+  },
+};

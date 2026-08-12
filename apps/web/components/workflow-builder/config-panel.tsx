@@ -10,6 +10,7 @@ import { ConfigNote } from "@/components/workflow-builder/config-field";
 import { EdgeConditionForm } from "@/components/workflow-builder/edge-condition-form";
 import { SubgraphConfigForm } from "@/components/workflow-builder/subgraph-config-form";
 import { ToolConfigForm } from "@/components/workflow-builder/tool-config-form";
+import type { Tool } from "@/lib/api";
 import type { BuilderGraph } from "@/lib/graph-mapping";
 import type { GraphIssue } from "@/lib/graph-validation";
 import { NODE_CATALOG } from "@/lib/node-catalog";
@@ -20,11 +21,14 @@ export function ConfigPanel({
   graph,
   setGraph,
   issuesByNode,
+  tools,
   readOnly = false,
 }: {
   graph: BuilderGraph;
   setGraph: (updater: (graph: BuilderGraph) => BuilderGraph) => void;
   issuesByNode: Map<string, GraphIssue[]>;
+  /** The workspace's registry tools, for the tool node's picker. Undefined while loading. */
+  tools?: Tool[];
   readOnly?: boolean;
 }) {
   const selectedNodeKey = useWorkflowBuilderStore((state) => state.selectedNodeKey);
@@ -109,6 +113,7 @@ export function ConfigPanel({
               key={node.id}
               nodeType={node.data.nodeType}
               config={node.data.config ?? {}}
+              tools={tools}
               onChange={(config) => updateNodeConfig(node.id, config)}
             />
           ) : edge ? (
@@ -145,17 +150,19 @@ export function ConfigPanel({
 function NodeConfig({
   nodeType,
   config,
+  tools,
   onChange,
 }: {
   nodeType: keyof typeof NODE_CATALOG;
   config: Record<string, unknown>;
+  tools?: Tool[];
   onChange: (next: Record<string, unknown>) => void;
 }) {
   switch (nodeType) {
     case "agent":
       return <AgentConfigForm config={config} onChange={onChange} />;
     case "tool":
-      return <ToolConfigForm config={config} onChange={onChange} />;
+      return <ToolConfigForm config={config} onChange={onChange} tools={tools} />;
     case "subgraph":
       return <SubgraphConfigForm config={config} onChange={onChange} />;
     case "condition":

@@ -24,6 +24,10 @@ const badgeVariants = cva("inline-flex items-center rounded-lg border px-2 py-0.
       failed: "border-red-200 bg-red-50 text-red-700 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-300",
       rejected: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-300",
       cancelled: "border-zinc-200 bg-zinc-100 text-zinc-600 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300",
+      // A tool that writes to an external system (Vol. 4 §4.3). Amber, not red:
+      // a mutating tool is a normal thing to register, not an error — what it
+      // signals is that publishing needs an upstream approval node.
+      mutating: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-300",
     },
   },
   defaultVariants: { variant: "default" },

@@ -128,7 +128,7 @@ jobs:
 
       # vitest over the pure lib/ modules (graph-validation, graph-mapping,
       # output-schema, run-status, run-timeline). graph-validation duplicates the
-      # backend's seven rules in TypeScript, so this suite is the only thing
+      # backend's eight rules in TypeScript, so this suite is the only thing
       # guarding that drift — it must run in CI, not just locally.
       - name: Run unit tests
         run: npm test

@@ -196,7 +196,9 @@ while the UI looks like the bug.
   below. What remains a gap: only *registry-backed* nodes log, because
   `tool_executions.tool_id` is NOT NULL and an inline-config node has no row to
   point at. That is inherent, and the concrete incentive to move nodes onto
-  registry tools.
+  registry tools — which authors can now actually do from the UI: the Builder's
+  tool config form grew a registry picker on 2026-08-12, alongside a
+  `/tools` management page. Both are frontend-only; nothing here changed.
 - `agent` nodes carry their model/prompt/schema **inline** in node `config`
   (`system_prompt`, `output_schema`, `input_fields`, `model`, `temperature`,
   `max_tokens`) rather than resolving `agent_id` against `agents`/

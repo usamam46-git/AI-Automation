@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BuilderGraph, BuilderNode } from "@/lib/graph-mapping";
 import { edgeId } from "@/lib/graph-mapping";
-import { parseValidationDetail, validateDraft, validateGraph, type ValidationRule } from "@/lib/graph-validation";
+import { parseValidationDetail, validateDraft, validateGraph, type ToolRegistry, type ValidationRule } from "@/lib/graph-validation";
 import type { NodeType } from "@/lib/api";
 
 function node(key: string, nodeType: NodeType, config: Record<string, unknown> = {}): BuilderNode {
@@ -157,6 +157,100 @@ describe("validateGraph", () => {
       ],
     );
     expect(rules(validateGraph(stringFlag))).toEqual([]);
+  });
+});
+
+describe("validateGraph with the tool registry", () => {
+  const MUTATING_TOOL = "11111111-1111-4111-8111-111111111111";
+  const READ_ONLY_TOOL = "22222222-2222-4222-8222-222222222222";
+  const registry: ToolRegistry = new Map([
+    [MUTATING_TOOL, true],
+    [READ_ONLY_TOOL, false],
+  ]);
+
+  /** start → tool → end, with the tool node carrying whatever config a case needs. */
+  function withToolNode(config: Record<string, unknown>): BuilderGraph {
+    return graph(
+      [node("start_1", "start"), node("post_je", "tool", config), node("end_1", "end")],
+      [
+        ["start_1", "post_je"],
+        ["post_je", "end_1"],
+      ],
+    );
+  }
+
+  it("flags a node whose registry tool is mutating, even though the node itself is not", () => {
+    // THE under-reporting bug this parameter exists to fix: before the registry
+    // was threaded in, this graph validated clean on the canvas and then 422'd
+    // at publish.
+    const viaRegistry = withToolNode({ tool_id: MUTATING_TOOL });
+    expect(rules(validateGraph(viaRegistry))).toEqual([]);
+    expect(validateGraph(viaRegistry, registry).find((issue) => issue.rule === "unguarded_mutating")?.nodeKeys).toEqual(["post_je"]);
+  });
+
+  it("lets a node upgrade the flag but never downgrade it", () => {
+    // `is_mutating: false` beside a mutating tool_id must not switch the gate
+    // off — matching validate_mutating_approval's OR, not an override.
+    const downgradeAttempt = withToolNode({ tool_id: MUTATING_TOOL, is_mutating: false });
+    expect(rules(validateGraph(downgradeAttempt, registry))).toEqual(["unguarded_mutating"]);
+
+    const upgrade = withToolNode({ tool_id: READ_ONLY_TOOL, is_mutating: true });
+    expect(rules(validateGraph(upgrade, registry))).toEqual(["unguarded_mutating"]);
+  });
+
+  it("passes a registry-mutating node with an approval upstream", () => {
+    const guarded = graph(
+      [node("start_1", "start"), node("approval_1", "human_approval"), node("post_je", "tool", { tool_id: MUTATING_TOOL }), node("end_1", "end")],
+      [
+        ["start_1", "approval_1"],
+        ["approval_1", "post_je"],
+        ["post_je", "end_1"],
+      ],
+    );
+    expect(rules(validateGraph(guarded, registry))).toEqual([]);
+  });
+
+  it("leaves a read-only registry tool alone", () => {
+    expect(rules(validateGraph(withToolNode({ tool_id: READ_ONLY_TOOL }), registry))).toEqual([]);
+  });
+
+  it("ignores a tool_id on a node that is not a tool node", () => {
+    // Mirrors `_referenced_tool_ids`, which filters on node_type first. An agent
+    // node's stray tool_id is not a registry reference on either side.
+    const agentWithToolId = graph(
+      [node("start_1", "start"), node("agent_1", "agent", { tool_id: MUTATING_TOOL }), node("end_1", "end")],
+      [
+        ["start_1", "agent_1"],
+        ["agent_1", "end_1"],
+      ],
+    );
+    expect(rules(validateGraph(agentWithToolId, registry))).toEqual([]);
+  });
+
+  it("flags a tool_id that resolves to nothing", () => {
+    const dangling = withToolNode({ tool_id: "33333333-3333-4333-8333-333333333333" });
+    // Silent without the registry — there is nothing to resolve against.
+    expect(rules(validateGraph(dangling))).toEqual([]);
+    expect(validateGraph(dangling, registry).find((issue) => issue.rule === "unknown_tool")?.nodeKeys).toEqual(["post_je"]);
+  });
+
+  it("exempts a node carrying inline tool_type from the resolution check", () => {
+    // Inline config is the supported non-registry path and always wins, so a
+    // stray tool_id beside it is a documented no-op, not a broken reference.
+    const inline = withToolNode({ tool_type: "http_request", url: "https://erp.internal/x", tool_id: "44444444-4444-4444-8444-444444444444" });
+    expect(rules(validateGraph(inline, registry))).toEqual([]);
+  });
+
+  it("still treats an inline node as mutating when its tool_id is a mutating registry row", () => {
+    // The exemption above covers resolution only. validate_mutating_approval
+    // does not exempt inline nodes, so neither does this.
+    const inlineMutating = withToolNode({ tool_type: "http_request", url: "https://erp.internal/x", tool_id: MUTATING_TOOL });
+    expect(rules(validateGraph(inlineMutating, registry))).toEqual(["unguarded_mutating"]);
+  });
+
+  it("treats an empty registry as 'nothing resolves', not as 'not loaded'", () => {
+    const dangling = withToolNode({ tool_id: MUTATING_TOOL });
+    expect(rules(validateGraph(dangling, new Map()))).toEqual(["unknown_tool"]);
   });
 });
 

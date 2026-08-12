@@ -4,11 +4,15 @@ import type { BuilderGraph } from "@/lib/graph-mapping";
  * TypeScript mirror of the backend's graph validation, so the canvas can show
  * precise per-node errors instantly instead of parsing a 422 after the fact.
  *
- * DRIFT RISK — READ BEFORE EDITING. These seven rules are duplicated from
+ * DRIFT RISK — READ BEFORE EDITING. These eight rules are duplicated from
  * apps/api/src/modules/workflows/service.py (`validate_draft_structure`,
- * `validate_graph_structure`, `validate_mutating_approval`). Change one side and
- * you must change the other. The server's 422 remains the authority; this exists
- * for feedback before publish is ever attempted, never to replace the gate.
+ * `validate_graph_structure`, `validate_mutating_approval`,
+ * `_resolve_registry_tools`). Change one side and you must change the other. The
+ * server's 422 remains the authority; this exists for feedback before publish is
+ * ever attempted, never to replace the gate.
+ *
+ * Two of the rules need the workspace's registry tools, which the caller passes
+ * in — see `ToolRegistry` below for what omitting them costs.
  *
  * One deliberate divergence: the backend raises on the *first* failing rule,
  * while this reports every failure at once. That is a superset, so nothing the
@@ -22,7 +26,34 @@ export type ValidationRule =
   | "missing_end"
   | "orphan"
   | "cycle"
-  | "unguarded_mutating";
+  | "unguarded_mutating"
+  | "unknown_tool";
+
+/**
+ * The workspace's registry tools, keyed by id, with each row's `is_mutating`.
+ *
+ * `undefined` means "not loaded" and is not the same as an empty registry:
+ * without it, the two registry-aware rules are skipped entirely and this module
+ * behaves exactly as it did before the tools module existed. An *empty* map, by
+ * contrast, means every `tool_id` on the graph resolves to nothing.
+ */
+export type ToolRegistry = ReadonlyMap<string, boolean>;
+
+/**
+ * node_key -> tool_id for every **tool** node referencing the registry, mirroring
+ * `_referenced_tool_ids`. Node type matters: an `agent` node carrying a stray
+ * `tool_id` is not a registry reference on either side.
+ */
+function referencedToolIds(graph: BuilderGraph): Map<string, string> {
+  const referenced = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.data.nodeType !== "tool") continue;
+    const raw = node.data.config?.tool_id;
+    if (typeof raw !== "string" || !raw) continue;
+    referenced.set(node.id, raw);
+  }
+  return referenced;
+}
 
 export type GraphIssue = {
   rule: ValidationRule;
@@ -62,7 +93,7 @@ export function validateDraft(graph: BuilderGraph): GraphIssue[] {
 }
 
 /** Every rule `publish_version` enforces: the draft rules plus shape and safety. */
-export function validateGraph(graph: BuilderGraph): GraphIssue[] {
+export function validateGraph(graph: BuilderGraph, tools?: ToolRegistry): GraphIssue[] {
   const issues = validateDraft(graph);
 
   const nodeKeys = new Set(graph.nodes.map((node) => node.id));
@@ -117,7 +148,16 @@ export function validateGraph(graph: BuilderGraph): GraphIssue[] {
     });
   }
 
-  const unguarded = findUnguardedMutatingNodes(graph);
+  const unresolved = findUnresolvedToolNodes(graph, tools);
+  if (unresolved.length > 0) {
+    issues.push({
+      rule: "unknown_tool",
+      message: `${unresolved.join(", ")} point${unresolved.length === 1 ? "s" : ""} at a tool that is no longer in the registry. Pick another tool, or switch the node to inline configuration.`,
+      nodeKeys: unresolved,
+    });
+  }
+
+  const unguarded = findUnguardedMutatingNodes(graph, tools);
   if (unguarded.length > 0) {
     issues.push({
       rule: "unguarded_mutating",
@@ -127,6 +167,34 @@ export function validateGraph(graph: BuilderGraph): GraphIssue[] {
   }
 
   return issues;
+}
+
+/**
+ * Mirrors the FK-validation half of `_resolve_registry_tools`: a `tool_id` that
+ * resolves to nothing — deleted, another org's, or never existed — fails the
+ * publish with a 422 naming the node.
+ *
+ * Nodes carrying inline `tool_type` are exempt, exactly as on the server: inline
+ * config is the supported non-registry path, and a stray forward-compat
+ * `tool_id` beside it is a documented no-op rather than a broken reference.
+ *
+ * One knowing divergence: the server's `_referenced_tool_ids` silently drops a
+ * `tool_id` that is not a well-formed UUID, so a malformed one is not reported
+ * at publish. It is reported here, because a lookup miss and a malformed id
+ * leave the node equally broken — `_tool_config` raises on both at invoke time —
+ * and the picker cannot produce either, so this only ever fires on hand-edited
+ * or stale config.
+ */
+function findUnresolvedToolNodes(graph: BuilderGraph, tools?: ToolRegistry): string[] {
+  if (!tools) return [];
+
+  const unresolved: string[] = [];
+  for (const [nodeKey, toolId] of referencedToolIds(graph)) {
+    const node = graph.nodes.find((item) => item.id === nodeKey);
+    if (node?.data.config?.tool_type) continue;
+    if (!tools.has(toolId)) unresolved.push(nodeKey);
+  }
+  return unresolved.sort();
 }
 
 function findCycle(nodeKeys: Set<string>, edges: BuilderGraph["edges"]): string[] | null {
@@ -172,9 +240,25 @@ function findCycle(nodeKeys: Set<string>, edges: BuilderGraph["edges"]): string[
  * blueprint's own Vol. 5 §1 and §5 workflows, which both route straight to the
  * journal-entry write on their clean branch. Do not "tighten" this to ∀ without
  * changing the backend first.
+ *
+ * A node counts as mutating if EITHER source says so — its own literal
+ * `is_mutating: true`, or a registry tool it references whose row is mutating.
+ * A node may **upgrade** but never **downgrade**: `is_mutating: false` on a node
+ * pointing at a mutating registry tool is still mutating, or the gate would be
+ * one keystroke away from being switched off. Note this half applies even to a
+ * node that also carries inline `tool_type` — unlike the FK check above, the
+ * server does not exempt those, and the conservative reading is the safe one.
+ *
+ * Until the registry was threaded in (2026-08-12) this read `is_mutating` only
+ * and therefore **under-reported** every registry-backed mutating node, leaving
+ * them to surface as a 422 at publish.
  */
-function findUnguardedMutatingNodes(graph: BuilderGraph): string[] {
-  const mutatingKeys = graph.nodes.filter((node) => node.data.config?.is_mutating === true).map((node) => node.id);
+function findUnguardedMutatingNodes(graph: BuilderGraph, tools?: ToolRegistry): string[] {
+  const mutatingToolNodes = tools ? new Set(Array.from(referencedToolIds(graph)).filter(([, toolId]) => tools.get(toolId) === true).map(([nodeKey]) => nodeKey)) : new Set<string>();
+
+  const mutatingKeys = graph.nodes
+    .filter((node) => node.data.config?.is_mutating === true || mutatingToolNodes.has(node.id))
+    .map((node) => node.id);
   if (mutatingKeys.length === 0) return [];
 
   const approvalKeys = new Set(graph.nodes.filter((node) => node.data.nodeType === "human_approval").map((node) => node.id));
@@ -239,6 +323,7 @@ function ruleFromMessage(message: string): ValidationRule {
   if (message.startsWith("Orphan nodes")) return "orphan";
   if (message.startsWith("Cycle detected")) return "cycle";
   if (message.startsWith("Mutating nodes")) return "unguarded_mutating";
+  if (message.startsWith("Tool nodes reference tools that do not exist")) return "unknown_tool";
   if (message.includes("start node")) return "missing_start";
   if (message.includes("end node")) return "missing_end";
   return "dangling_edge";

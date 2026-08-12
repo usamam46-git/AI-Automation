@@ -13,10 +13,11 @@ import { BuilderToolbar } from "@/components/workflow-builder/builder-toolbar";
 import { ConfigPanel } from "@/components/workflow-builder/config-panel";
 import { groupIssuesByNode, IssueProvider } from "@/components/workflow-builder/issue-context";
 import { useWorkflowAutosave } from "@/hooks/use-workflow-autosave";
-import { executionsApi, workflowsApi, type WorkflowVersion } from "@/lib/api";
+import { executionsApi, toolsApi, workflowsApi, type WorkflowVersion } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/api-client";
 import { EMPTY_GRAPH, flowToVersion, graphSignature, versionToFlow, type BuilderGraph } from "@/lib/graph-mapping";
-import { parseValidationDetail, validateGraph } from "@/lib/graph-validation";
+import { parseValidationDetail, validateGraph, type ToolRegistry } from "@/lib/graph-validation";
+import { useAuthStore } from "@/stores/auth-store";
 import { useWorkflowBuilderStore } from "@/stores/workflow-builder-store";
 
 /**
@@ -69,6 +70,7 @@ function BuilderSkeleton() {
 export default function WorkflowBuilderPage({ params }: { params: Promise<{ workflowId: string }> }) {
   const { workflowId } = use(params);
   const queryClient = useQueryClient();
+  const orgId = useAuthStore((state) => state.orgId);
   const resetBuilder = useWorkflowBuilderStore((state) => state.reset);
   const serverIssue = useWorkflowBuilderStore((state) => state.serverIssue);
   const setServerIssue = useWorkflowBuilderStore((state) => state.setServerIssue);
@@ -79,6 +81,25 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
     queryKey: ["workflow", workflowId],
     queryFn: () => workflowsApi.get(workflowId),
   });
+
+  // The workspace's registry tools, for the tool node's picker AND for the two
+  // validation rules that need to resolve a `tool_id`. Same query key shape as
+  // the Tools page so the two share a cache. It waits on the workflow because
+  // the workspace id comes off that row — a tool's name is unique per workspace,
+  // and a node can only reference tools in its own.
+  const toolsQuery = useQuery({
+    queryKey: ["tools", orgId, workflowQuery.data?.workspace_id ?? null, "all"],
+    queryFn: () => toolsApi.list({ workspaceId: workflowQuery.data!.workspace_id }),
+    enabled: Boolean(workflowQuery.data?.workspace_id),
+  });
+
+  // Deliberately `undefined` until the fetch resolves, never `[]`: an empty map
+  // means "every tool_id on this graph is dead", which would flash a wrong
+  // unknown_tool error on every registry-backed node while the list loads.
+  const toolRegistry = React.useMemo<ToolRegistry | undefined>(
+    () => (toolsQuery.data ? new Map(toolsQuery.data.map((tool) => [tool.id, tool.is_mutating])) : undefined),
+    [toolsQuery.data],
+  );
 
   const builderKey = React.useMemo(() => ["workflow-builder", workflowId], [workflowId]);
 
@@ -197,9 +218,9 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
   // source of per-node errors. The server's 422 stays the authority and is
   // merged in on top.
   const issues = React.useMemo(() => {
-    const clientIssues = validateGraph(graph);
+    const clientIssues = validateGraph(graph, toolRegistry);
     return serverIssue ? [...clientIssues, serverIssue] : clientIssues;
-  }, [graph, serverIssue]);
+  }, [graph, serverIssue, toolRegistry]);
 
   const issuesByNode = React.useMemo(() => groupIssuesByNode(issues), [issues]);
   const bannerIssues = React.useMemo(() => issues.filter((issue) => issue.nodeKeys.length === 0), [issues]);
@@ -250,7 +271,7 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
             <ReactFlowProvider>
               <div className="flex h-full min-h-0">
                 <BuilderCanvas graph={graph} setGraph={setGraph} />
-                <ConfigPanel graph={graph} setGraph={setGraph} issuesByNode={issuesByNode} />
+                <ConfigPanel graph={graph} setGraph={setGraph} issuesByNode={issuesByNode} tools={toolsQuery.data} />
               </div>
             </ReactFlowProvider>
           </IssueProvider>

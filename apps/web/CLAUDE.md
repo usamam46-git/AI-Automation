@@ -103,8 +103,9 @@ Built as of 2026-08-06 (canvas, config panel, validation, autosave/publish).
 
 ### Node config panel — the config shapes are a contract
 
-`agent` and `tool` nodes carry their settings **inline** in node `config`,
-because the agents and tools modules are models-only. The forms in
+`agent` nodes carry their settings **inline** in node `config`, because the
+agents module is models-only. `tool` nodes have **two** sources as of
+2026-08-12 — see the next subsection. The forms in
 `components/workflow-builder/{agent,tool}-config-form.tsx` construct exactly
 the shapes `_agent_config` / `_tool_config` in
 `apps/api/src/graphs/node_handlers.py` accept. Changing either side means
@@ -128,23 +129,69 @@ Three rules that are easy to break and expensive to debug:
 `python_function` and `mcp` are rejected by name at the backend and must not
 appear in the tool-type dropdown.
 
+### Tool nodes: Registry vs Inline (2026-08-12)
+
+`tool-config-form.tsx` offers a **Source** selector, and the two paths are
+mutually exclusive because they are not symmetric on the server: `_tool_config`
+reads `tool_type` first, so **inline always wins** and a node carrying both is
+an inline node with a dead `tool_id`. Showing both at once would let someone
+edit a picker that has no effect, so switching source *clears the other path's
+keys* rather than layering them.
+
+- **Registry mode** writes `tool_id` only. Just it and the four
+  `NODE_OVERRIDABLE_KEYS` (`body`/`body_fields`/`payload`/`payload_fields`) are
+  editable; `url`/`method`/`headers`/`action`/`timeout_seconds`/`is_mutating`
+  render read-only off the registry row. That split is not cosmetic — a node
+  that could re-point a reviewed tool would leave the publish gate reading
+  `is_mutating` off a row that no longer describes the call.
+- **Inline mode** is unchanged and stays supported forever. It is still the
+  default for a freshly dropped node, because `node-catalog.ts`'s blank config
+  is a shape apps/api/CLAUDE.md pins as one the backend must keep accepting.
+
+**`sourceOf()` tests `"tool_id" in config`, not its truthiness.** Switching to
+registry writes `tool_id: ""` before a tool is picked; reading that as "no
+tool_id" bounced the panel straight back to the inline fields while the toggle
+showed registry. Observed in a browser, not theorised.
+
+Switching to registry also drops a node-level `is_mutating`, so a node cannot
+carry a stale upgrade past a tool it no longer references.
+
 ### Validation is duplicated in two languages — keep them in sync
 
-`lib/graph-validation.ts` mirrors all seven backend rules from
+`lib/graph-validation.ts` mirrors all eight backend rules from
 `apps/api/src/modules/workflows/service.py`. This is a real drift risk and
 the reason the vitest suite exists. In particular the mutating-approval walk
 is **∃-semantics** (flag only when *zero* `human_approval` nodes exist
 upstream); tightening it to ∀ would reject the blueprint's own Vol. 5 §1 and
 §5 workflows and diverge from the server.
 
-**Known divergence, deliberate (2026-08-08):** the mutating-approval walk reads
-`config.is_mutating === true` only. Since the tools module landed, a node may
-also be mutating because the registry `tools` row its `tool_id` points at has
-`is_mutating = true` — and the builder never fetches tools, so it **under-reports**
-for registry-backed nodes. The backend 422 catches them at publish. Closing this
-properly means loading the workspace's tools into the builder (and would also let
-the tool config form offer a registry picker instead of only inline config); until
-then, do not "fix" it by guessing.
+**The 2026-08-08 under-reporting divergence was closed on 2026-08-12.** The walk
+used to read `config.is_mutating === true` only, so a node that was mutating
+*because its registry `tool_id` points at a mutating row* validated clean on the
+canvas and then 422'd at publish. `validateGraph` now takes an optional
+`ToolRegistry` (`ReadonlyMap<toolId, isMutating>`), which the builder page
+supplies from its own tools fetch, and two rules read it:
+
+- the mutating walk ORs the registry flag in — a node may **upgrade** but never
+  **downgrade**, so `is_mutating: false` beside a mutating `tool_id` is still
+  mutating. This half applies even to a node also carrying inline `tool_type`,
+  because `validate_mutating_approval` does not exempt those either.
+- the new `unknown_tool` rule mirrors `_resolve_registry_tools`' FK check: a
+  `tool_id` resolving to nothing is flagged, *unless* the node carries inline
+  `tool_type` (inline is the supported non-registry path, and a stray
+  forward-compat `tool_id` beside it is a documented no-op).
+
+**`undefined` and an empty Map are not the same thing** and the distinction is
+load-bearing: `undefined` means "not loaded" and skips both rules, while an empty
+Map means every `tool_id` on the graph is dead. The builder passes `undefined`
+until the fetch resolves, or every registry-backed node would flash a wrong
+`unknown_tool` error on each load.
+
+One knowing divergence remains, in the safe direction: the server's
+`_referenced_tool_ids` silently drops a `tool_id` that is not a well-formed UUID,
+so a malformed one is never reported at publish. This reports it, because the
+node is equally broken either way (`_tool_config` raises on both at invoke time)
+and the picker cannot produce either.
 
 The server's 422 stays the authority. `parseValidationDetail()` recovers node
 keys from its mostly-unstructured `detail` strings; anything unattributable
@@ -419,6 +466,41 @@ hooks: `use-media-query.ts`, `use-gsap-reveal.ts`.
   1440 and no breakpoint was ever exercised. Desktop was verified in a browser
   across every section. The responsive classes and the `lg`-gated pin are
   reasoned, not observed — check them on a real device before launch.
+
+## Tools registry page (2026-08-12)
+
+`app/(dashboard)/tools/page.tsx` + `components/tools/{tool-dialog,delete-tool-dialog}.tsx`,
+consuming the `/api/v1/tools` CRUD that had been complete on the backend since
+2026-08-08 and entirely unconsumed — the same shape as the integrations
+endpoints before the Settings page. `toolsApi` is the sixth client in
+`lib/api.ts`. No backend change was needed.
+
+- **The dialog edits exactly the fields a node cannot override.** The registry
+  owns the shape of the call (`url`/`method`/`headers`/`timeout_seconds`, or
+  `action`) and the node owns the payload, so there is deliberately **no body
+  editor here** — anything collected would be silently replaced by the first
+  node that wired one up. That mirrors `ToolService.NODE_OVERRIDABLE_KEYS`
+  exactly; if that set changes, this dialog changes with it.
+- **`tool_type` is create-only.** `ToolUpdate` sets `extra="forbid"`, so sending
+  it (or `workspace_id`) is a 422, not a silent no-op. The Select is disabled on
+  edit and says why.
+- **`input_schema` has no editor and PATCH omits the field.** Agent
+  function-calling is deferred, so nothing reads it — and because the API uses
+  `exclude_unset`, an existing value survives an edit here untouched. Add the
+  editor when the ReAct loop lands, not before.
+- **409 on delete is a permanent explained state**, rendered in the dialog
+  rather than as a toast: the tool is referenced by a *published* version and
+  retrying cannot change that. (Draft references deliberately do not block.)
+  Delete is soft on the server — a hard delete would cascade to
+  `tool_executions` and destroy the Vol. 4 §4.3 audit trail.
+- **Workspace-scoped, like the Workflows list.** A tool's name is unique per
+  workspace and a node can only reference tools in its own, so browsing across
+  workspaces would show tools the workflow being built cannot use. The page and
+  the builder share the query key `['tools', orgId, workspaceId, 'all']`.
+- The `mutating` badge variant was added to `components/ui/badge.tsx` rather
+  than forked — that cva is the status vocabulary. Amber, not red: registering a
+  mutating tool is normal, and what the badge signals is that publishing will
+  need an upstream approval node.
 
 ## Settings page (2026-08-08)
 
