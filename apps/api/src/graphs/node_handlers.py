@@ -182,7 +182,7 @@ def agent_handler(
         result.cost_usd,
     )
 
-    # Copy-then-merge: node_outputs/node_usage have no reducer, so LangGraph 
+    # Copy-then-merge: node_outputs/node_usage have no reducer, so LangGraph
     # replaces the whole dict on write (same pattern as human_approval_handler).
     return {
         "node_outputs": {**state.get("node_outputs", {}), node_key: result.parsed},
