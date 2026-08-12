@@ -515,6 +515,75 @@ identity and client IPs). Owner's `"*"` is unaffected. If you add a sensitive
 read permission, add it to that set; `test_read_wildcard_does_not_grant_sensitive_read_permissions`
 is the regression guard.
 
+## Embeddings (landed 2026-08-12, ahead of the RAG pipeline)
+
+`LLMClient.embed()` plus `_EMBEDDING_MODELS` in `src/core/llm_client.py`. **No
+migration, no new module, and nothing calls it yet** — `knowledge_base` is still
+models-only. This exists so that the ingestion pipeline, when it is written, has
+exactly one place to get a vector from and cannot choose its own dimension count.
+
+It was prompted by a real discrepancy in the schema: `knowledge_bases.
+embedding_model` defaults to `text-embedding-3-large`, whose native output is
+**3072** dimensions, while `document_chunks.embedding` is `Vector(1536)` and
+`agent_memory.embedding` likewise. Two docstrings asserted 1536 *was* -large's
+native width. It is not. All three comments are now corrected.
+
+Six things to know:
+
+- **The mismatch is resolved by requesting 1536, not by switching to
+  `-small`.** The 3-series is Matryoshka-trained, so -large's leading 1536
+  dimensions are a well-formed embedding that still retrieves better than -small
+  at the same width. The platform gets -large's quality at -small's storage,
+  HNSW index size and query latency, with no migration. The only thing it costs
+  is the API rate (~$0.13/M vs ~$0.02/M) — a rounding error at any corpus size
+  this product will see before billing is real.
+- **`dimensions` is never a call-site argument.** It is resolved from
+  `_EMBEDDING_MODELS` inside `embed()`. One forgetful caller passing nothing
+  would get 3072 back, and the failure mode is not always loud — if a wrong-width
+  vector ever *does* fit the column, it lands in the same HNSW index as
+  everything else and every later cosine search is quietly wrong.
+- **`embedding_spec_for()` fails CLOSED — the opposite of `_pricing_for()`, on
+  purpose.** An unknown chat model warns and bills at the most expensive known
+  rate, because a wrong price is reconcilable later. An unknown *embedding* model
+  raises, because there is no safe default dimension to guess and a wrong guess
+  corrupts an index rather than a report. Don't "make it consistent" with the
+  pricing helper.
+- **`EMBEDDING_COLUMN_DIMENSIONS = 1536` is checked at import.** Adding a model
+  to `_EMBEDDING_MODELS` that requests a different width raises
+  `LLMConfigurationError` before the app boots. That is deliberate: it catches
+  the mistake at deploy rather than at the first ingestion run in production.
+  Changing the constant means an Alembic migration that alters BOTH vector
+  columns and **re-embeds every existing row** — stored vectors cannot be
+  converted, only regenerated.
+- **`model` is a required argument on `embed()`, with no settings fallback**,
+  unlike `parse()`'s `OPENAI_DEFAULT_MODEL`. The authority is the owning
+  `knowledge_bases.embedding_model` row. A default would let a query be embedded
+  with a different model than the corpus it is searched against, and cosine
+  similarity across two embedding spaces returns plausible numbers with
+  meaningless rankings — no exception anywhere. For the same reason
+  `embedding_model` is immutable in practice: changing it invalidates every chunk
+  in that KB.
+- **Results are re-sorted by the API's `index` field**, not taken in response
+  order, and the returned width is asserted per vector before anything is handed
+  back. A silent misalignment attaches each chunk's vector to a different chunk —
+  the single worst outcome available here, and completely invisible downstream.
+
+Two smaller contracts: `embed()` refuses a batch over `_MAX_EMBEDDING_BATCH`
+(2048) rather than splitting it, because a split would make one `EmbeddingResult`
+cover several HTTP calls and break the one-result-per-call shape the module keeps
+— batching belongs to the ingestion pipeline, which knows document boundaries.
+And cost is computed from the **requested** model id rather than the echoed one
+(the reverse of `_build_result`), so an unrecognized echoed variant cannot throw
+away a batch of vectors already paid for and successfully received.
+
+`SUPPORTED_EMBEDDING_MODELS` is exported for the KB-creation schema to validate
+against when that module is built — `embedding_model` should not accept free text.
+
+**Not verified against the live API.** Written with Docker down and no OpenAI key
+present; there are no tests for it yet and `embed()` has never been called. The
+rates in `_EMBEDDING_MODELS` carry the same hand-maintained staleness caveat as
+`_MODEL_PRICING`.
+
 ## Deliberate design decisions (not bugs)
 
 - `compile_graph()` bypasses the Redis compiled-graph cache entirely when

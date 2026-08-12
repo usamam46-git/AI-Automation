@@ -253,7 +253,7 @@ Beyond the operational-simplicity argument in Volume 1 §9.1, pgvector's advanta
 
 ## 9. Embedding Pipeline
 
-- **Model:** `text-embedding-3-large` (configurable per knowledge base) for a strong balance of retrieval quality vs. cost/dimensionality (1536-dim, matching the `document_chunks.embedding` column, Volume 2 §3.4).
+- **Model:** `text-embedding-3-large` (configurable per knowledge base) for a strong balance of retrieval quality vs. cost/dimensionality. Its **native output is 3072-dim**; the platform requests **1536** via the embeddings API's `dimensions` parameter to match the `document_chunks.embedding` column (Volume 2 §3.4). This is not a downgrade to `-small`: the 3-series is Matryoshka-trained, so the leading 1536 dimensions are themselves a well-formed embedding that still retrieves better than `-small` at the same width — `-large`'s quality at `-small`'s storage, HNSW index size and query latency. The dimension count is owned in one place, `_EMBEDDING_MODELS` in `src/core/llm_client.py`, and must never be passed from a call site; changing it requires altering both vector columns *and* re-embedding every stored row, since existing vectors cannot be converted.
 - **Idempotency:** each chunk's content hash is stored alongside its embedding; re-processing a document only re-embeds chunks whose content actually changed, avoiding redundant embedding cost on minor document edits.
 - **Batch embedding:** documents are embedded via the batch endpoint where latency isn't user-facing (bulk knowledge-base imports), falling back to synchronous embedding for single-document uploads where the user is waiting on an "indexed" status.
 

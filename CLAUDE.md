@@ -96,7 +96,9 @@ verified via a full read-only orientation pass — see note below.)
 - `organizations` module has DB models only (no service/router). `executions` module
   is now fully implemented.
 - LLM layer: `src/core/llm_client.py` is the single OpenAI wrapper (retries/backoff,
-  cost calculation, token counting, LangSmith hook). Its `_MODEL_PRICING` table is
+  cost calculation, token counting, LangSmith hook) for **both** completions
+  (`parse()`) and embeddings (`embed()`, added 2026-08-12 — see the bullet below).
+  Its `_MODEL_PRICING` and `_EMBEDDING_MODELS` tables are
   hand-maintained — OpenAI has no pricing API, so re-verify rates on any pricing
   change. `agent_handler` reads inline node config; `subgraph` remains a stub.
   Cost columns widened to `Numeric(12,6)` (migration `20260803_widen_cost_precision`).
@@ -363,7 +365,35 @@ verified via a full read-only orientation pass — see note below.)
   The contact endpoint returns 503 until `CONTACT_WEBHOOK_URL` is set —
   deliberately loud, so submissions are never silently dropped.
   **114 frontend tests** (87 + 14 run-film + 13 contact-form).
-- Next: `subgraph` handler, agent function-calling/ReAct (see the deferral note in
+- **Embedding client landed 2026-08-12** (Vol. 2 §3.4 / Vol. 4 §7 groundwork, the
+  first RAG-facing code). `LLMClient.embed()` + `_EMBEDDING_MODELS` +
+  `EMBEDDING_COLUMN_DIMENSIONS` in `src/core/llm_client.py`. **No migration, no
+  new module, no tests, and nothing calls it yet** — `knowledge_base` is still
+  models-only, and this was written with Docker down and no API key, so `embed()`
+  has never run against the live endpoint. Treat it as unproven.
+  It exists because the schema carried a real discrepancy:
+  `knowledge_bases.embedding_model` defaults to `text-embedding-3-large`, which
+  is natively **3072**-dimensional, while `document_chunks.embedding` and
+  `agent_memory.embedding` are both `Vector(1536)` — and two docstrings asserted
+  1536 *was* -large's native width. Resolved by requesting 1536 via the API's
+  `dimensions` parameter (Matryoshka truncation, which the 3-series supports
+  natively), keeping -large's retrieval quality at -small's storage and index
+  cost with no migration. All three misleading comments corrected in
+  `knowledge_base/models.py` and `agents/models.py` — **and in the blueprint
+  itself**, Vol. 4 §9, which is where the error originated and which every other
+  copy inherited it from. Vol. 2 §3.4's tables were already correct (they specify
+  the column width and the model separately, never claiming the two match).
+  Three contracts in apps/api/CLAUDE.md's embeddings section; the load-bearing
+  ones: **`dimensions` is resolved from the model map and is never a call-site
+  argument**, `embedding_spec_for()` **fails closed** on an unknown model (unlike
+  `_pricing_for()`, which warns and falls back — a wrong price is reconcilable, a
+  wrong dimension corrupts the shared HNSW index), and `embed()` takes a
+  **required** `model` with no settings default, because embedding a query with a
+  different model than its corpus produces plausible numbers and meaningless
+  rankings without raising anywhere.
+- Next: wire `embed()` into a real ingestion pipeline (the `knowledge_base`
+  module is still models-only — chunking, OCR, and hybrid search are all unbuilt),
+  `subgraph` handler, agent function-calling/ReAct (see the deferral note in
   apps/api/CLAUDE.md),
   an audit-log viewer UI (the endpoint exists and nothing consumes it — same shape
   as the integrations endpoints before the Settings page), and

@@ -28,6 +28,17 @@ Structured outputs (Vol. 4 §6):
   JSON-serializable dict so the value can be written straight into LangGraph
   state and addressed by the condition DSL.
 
+Embeddings (Vol. 2 §3.4, Vol. 4 §7):
+    client.embed(texts=["chunk one", "chunk two"], model=kb.embedding_model)
+
+  Same chokepoint rationale as completions, plus one specific to embeddings: the
+  `dimensions` parameter is resolved from `_EMBEDDING_MODELS` and can never be
+  supplied by a caller. `text-embedding-3-large` is native-3072 but requested at
+  1536 to match `document_chunks.embedding` (`Vector(1536)`), and a single call
+  site that forgot to truncate would either hard-fail at INSERT or poison the
+  shared HNSW index. `model` is required here — there is deliberately no
+  settings-level default; see `embed()`.
+
 Synchronous by design:
   This client uses the blocking `OpenAI` client, not `AsyncOpenAI`. Its only
   caller today is a LangGraph node handler, which must stay sync so that
@@ -181,6 +192,122 @@ def calculate_cost_usd(*, model: str, tokens_prompt: int, tokens_completion: int
 
 
 # ---------------------------------------------------------------------------
+# Embedding models
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EmbeddingModelSpec:
+    """
+    Everything the platform needs to know about one embedding model.
+
+    `dimensions` is the size we ACTUALLY REQUEST, which is not necessarily the
+    model's native output width — see `_EMBEDDING_MODELS` below. It is the single
+    authority for the `dimensions` parameter sent to OpenAI; no call site may
+    choose its own, because the value has to match the width of
+    `document_chunks.embedding` exactly.
+    """
+
+    native_dimensions: int
+    dimensions: int
+    price_per_million: float
+
+
+# The width of `document_chunks.embedding` (`Vector(1536)`) and of
+# `agent_memory.embedding`. Changing it means an Alembic migration that alters
+# the column type AND re-embeds every existing row — the stored vectors cannot
+# be converted, only regenerated.
+EMBEDDING_COLUMN_DIMENSIONS = 1536
+
+# !!! MANUAL MAINTENANCE REQUIRED !!!
+#
+# Same standing caveat as _MODEL_PRICING above: no pricing API exists, so these
+# rates are transcribed by hand and WILL go stale. USD per 1M tokens, standard
+# tier. Re-verify against https://platform.openai.com/docs/pricing.
+#
+# On the text-embedding-3-large entry: its NATIVE output is 3072 dimensions, but
+# we request 1536. That is not a downgrade to `-small` — the 3-series is
+# Matryoshka-trained, so the leading 1536 dimensions of `-large` are themselves a
+# well-formed embedding that still retrieves better than `-small` at the same
+# width. It buys `-large`'s retrieval quality at `-small`'s storage cost, HNSW
+# index size and query latency, with no migration. The ONLY cost is the API rate.
+#
+# Every `dimensions` value here MUST equal EMBEDDING_COLUMN_DIMENSIONS — the
+# check below enforces it at import rather than letting a mismatch surface as a
+# failed INSERT during ingestion.
+_EMBEDDING_MODELS: dict[str, EmbeddingModelSpec] = {
+    "text-embedding-3-large": EmbeddingModelSpec(native_dimensions=3072, dimensions=1536, price_per_million=0.13),
+    "text-embedding-3-small": EmbeddingModelSpec(native_dimensions=1536, dimensions=1536, price_per_million=0.02),
+}
+
+_MISDIMENSIONED_MODELS = {name: spec.dimensions for name, spec in _EMBEDDING_MODELS.items() if spec.dimensions != EMBEDDING_COLUMN_DIMENSIONS}
+if _MISDIMENSIONED_MODELS:
+    raise LLMConfigurationError(
+        f"_EMBEDDING_MODELS entries request dimensions that do not fit the vector columns "
+        f"(Vector({EMBEDDING_COLUMN_DIMENSIONS})): {_MISDIMENSIONED_MODELS}. Either request "
+        f"{EMBEDDING_COLUMN_DIMENSIONS} dimensions, or ship a migration that alters BOTH "
+        f"document_chunks.embedding and agent_memory.embedding and re-embeds every existing row."
+    )
+
+# OpenAI's embeddings endpoint accepts at most this many inputs per request.
+# Batching belongs to the ingestion pipeline, which knows document boundaries;
+# this client only refuses an over-sized batch rather than silently splitting one
+# (a split would make `tokens` and `cost_usd` cover several HTTP calls, breaking
+# the one-result-per-call shape the rest of this module keeps).
+_MAX_EMBEDDING_BATCH = 2048
+
+#: Model ids accepted for `knowledge_bases.embedding_model`. A KB-creation
+#: schema should validate against this rather than accepting free text — an
+#: unknown value is unusable and only discovered at first ingestion.
+SUPPORTED_EMBEDDING_MODELS: frozenset[str] = frozenset(_EMBEDDING_MODELS)
+
+
+def embedding_spec_for(model: str) -> EmbeddingModelSpec:
+    """
+    Resolve an embedding model id to its spec, or raise.
+
+    **This fails CLOSED, unlike `_pricing_for` above, and the asymmetry is
+    deliberate.** A wrong price is a reporting error someone can reconcile later;
+    a wrong dimension count is a corrupt index. Guessing 1536 for an unrecognized
+    model would either hard-fail at INSERT or — far worse, if the guess happens
+    to fit — silently write vectors from a different model into the same HNSW
+    index as everything else, making every subsequent cosine search quietly wrong
+    with no error anywhere. There is no safe default, so there is no default.
+
+    A dated deployment suffix is accepted as the base model, matching
+    `_pricing_for`'s rule.
+    """
+    spec = _EMBEDDING_MODELS.get(model)
+    if spec is not None:
+        return spec
+
+    for known in sorted(_EMBEDDING_MODELS, key=len, reverse=True):
+        if model.startswith(known + "-") and _DATED_SUFFIX.match(model[len(known) :]):
+            return _EMBEDDING_MODELS[known]
+
+    raise LLMConfigurationError(
+        f"Unknown embedding model '{model}'. Known models: {sorted(_EMBEDDING_MODELS)}. "
+        f"Add it to _EMBEDDING_MODELS in src/core/llm_client.py — including its dimension "
+        f"count, which must match document_chunks.embedding."
+    )
+
+
+def embedding_dimensions_for(model: str) -> int:
+    """Dimension count the platform requests for `model`. Raises on an unknown model."""
+    return embedding_spec_for(model).dimensions
+
+
+def calculate_embedding_cost_usd(*, model: str, tokens: int) -> float:
+    """
+    Compute the USD cost of one embedding call.
+
+    Embeddings have no output tokens and no cached-input tier, so this is a flat
+    per-token rate rather than the three-way split `calculate_cost_usd` performs.
+    """
+    return tokens * embedding_spec_for(model).price_per_million / 1_000_000
+
+
+# ---------------------------------------------------------------------------
 # Result envelope
 # ---------------------------------------------------------------------------
 
@@ -194,6 +321,23 @@ class LLMResult:
     tokens_prompt: int
     tokens_completion: int
     tokens_cached: int
+    cost_usd: float
+
+
+@dataclass(frozen=True)
+class EmbeddingResult:
+    """
+    Everything a caller needs from one embedding batch.
+
+    `vectors` is positionally aligned with the `texts` argument that produced it —
+    `vectors[i]` embeds `texts[i]`. That is guaranteed by `embed()` re-sorting on
+    the API's `index` field, not assumed from response order.
+    """
+
+    vectors: list[list[float]]
+    model: str
+    dimensions: int
+    tokens: int
     cost_usd: float
 
 
@@ -380,9 +524,84 @@ class LLMClient:
 
         return self._build_result(completion, resolved_model, parsed)
 
+    def embed(self, *, texts: list[str], model: str) -> EmbeddingResult:
+        """
+        Embed a batch of texts, returning vectors positionally aligned with `texts`.
+
+        `model` is REQUIRED — unlike `parse()`, there is no settings fallback, and
+        that is deliberate. Every embedding must be produced by the same model as
+        the corpus it will be compared against, and the authority for that is the
+        owning `knowledge_bases.embedding_model` row. A module-level default would
+        let a caller embed a QUERY with one model against a corpus built with
+        another; cosine similarity across two embedding spaces returns plausible
+        numbers and meaningless rankings, with nothing raising anywhere.
+
+        The `dimensions` sent to OpenAI comes from `_EMBEDDING_MODELS`, never from
+        the caller, so a truncated model (text-embedding-3-large at 1536) cannot
+        be requested at the wrong width from one forgetful call site.
+        """
+        spec = embedding_spec_for(model)
+
+        if not texts:
+            # No API call — an empty request is a 400, and a no-op batch is a
+            # legitimate state for a document that chunked to nothing.
+            return EmbeddingResult(vectors=[], model=model, dimensions=spec.dimensions, tokens=0, cost_usd=0.0)
+
+        if len(texts) > _MAX_EMBEDDING_BATCH:
+            raise LLMConfigurationError(
+                f"embed() received {len(texts)} texts; OpenAI accepts at most {_MAX_EMBEDDING_BATCH} inputs "
+                f"per request. Batch upstream — the ingestion pipeline owns chunk batching, not this client."
+            )
+
+        for index, text in enumerate(texts):
+            if not text or not text.strip():
+                raise LLMConfigurationError(
+                    f"embed() received an empty/whitespace-only text at index {index}. OpenAI rejects these, "
+                    f"and an empty chunk has nothing to retrieve on — drop it during chunking instead."
+                )
+
+        response = self._call_with_retry(
+            self._client.embeddings.create,
+            model=model,
+            input=texts,
+            dimensions=spec.dimensions,
+        )
+
+        # Sort by the API's own `index` rather than trusting response order. The
+        # endpoint documents that data MAY come back out of order, and a silent
+        # misalignment here attaches every chunk's vector to a different chunk.
+        items = sorted(response.data, key=lambda item: item.index)
+        if len(items) != len(texts):
+            raise LLMError(f"Embedding count mismatch: sent {len(texts)} texts, received {len(items)} vectors.")
+
+        vectors = [list(item.embedding) for item in items]
+        for position, vector in enumerate(vectors):
+            if len(vector) != spec.dimensions:
+                raise LLMError(
+                    f"Embedding at index {position} has {len(vector)} dimensions, expected {spec.dimensions}. "
+                    f"Refusing to return vectors that cannot be stored."
+                )
+
+        usage = getattr(response, "usage", None)
+        tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        billed_model = str(getattr(response, "model", "") or model)
+
+        # Cost is computed from the REQUESTED model, not the echoed one — the
+        # opposite of `_build_result` above, on purpose. `embedding_spec_for`
+        # raises on an unknown id, so pricing an unrecognized echoed variant here
+        # would discard a batch of vectors we already paid for and successfully
+        # received. The requested id is known-good by construction.
+        return EmbeddingResult(
+            vectors=vectors,
+            model=billed_model,
+            dimensions=spec.dimensions,
+            tokens=tokens,
+            cost_usd=calculate_embedding_cost_usd(model=model, tokens=tokens),
+        )
+
     # -- internals ----------------------------------------------------------
 
-    def _call_with_retry(self, api_call: Any, *, max_tokens: int | None, **kwargs: Any) -> Any:
+    def _call_with_retry(self, api_call: Any, *, max_tokens: int | None = None, **kwargs: Any) -> Any:
         """
         Invoke an OpenAI SDK method, retrying transient failures with exponential backoff.
 

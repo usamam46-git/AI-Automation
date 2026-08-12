@@ -12,6 +12,13 @@ Tables:
 Design notes (Vol. 2 §3.4 + §3.7):
 - document_chunks.embedding is NOT NULL with Vector(1536) — every chunk must
   be embedded before it is available for RAG queries.
+- 1536 is NOT text-embedding-3-large's native width (that is 3072). The model is
+  requested at 1536 via the API's `dimensions` parameter, which the 3-series
+  supports natively (Matryoshka), buying -large's retrieval quality at -small's
+  storage and index cost. `src/core/llm_client.py` owns this: its
+  `_EMBEDDING_MODELS` map is the only place the dimension count may be chosen,
+  and it is checked against EMBEDDING_COLUMN_DIMENSIONS at import. Do not pass a
+  `dimensions` argument from any call site.
 - Two indexes are created on document_chunks in the hand-written index migration:
     1. HNSW (vector_cosine_ops) on embedding  — for ANN semantic search
     2. GIN on to_tsvector('english', content) — for BM25 keyword search leg
@@ -46,7 +53,13 @@ class KnowledgeBase(UUIDMixin, TenantMixin, TimestampMixin, Base):
         Text,
         nullable=False,
         default="text-embedding-3-large",
-        comment="OpenAI embedding model used to embed chunks in this KB.",
+        comment=(
+            "OpenAI embedding model used to embed chunks in this KB. Must be a member of "
+            "SUPPORTED_EMBEDDING_MODELS in src/core/llm_client.py; validate on write rather "
+            "than accepting free text. Immutable in practice — changing it invalidates every "
+            "existing chunk vector, since cosine similarity across two embedding spaces is "
+            "meaningless without raising."
+        ),
     )
 
     # Relationships
@@ -159,7 +172,12 @@ class DocumentChunk(UUIDMixin, TimestampMixin, Base):
     embedding: Mapped[list] = mapped_column(
         Vector(1536),
         nullable=False,
-        comment="text-embedding-3-large vector (1536 dims). HNSW-indexed for ANN search.",
+        comment=(
+            "Embedding vector, 1536 dims, HNSW-indexed for ANN search. The default model "
+            "text-embedding-3-large is natively 3072-dimensional and is requested at 1536 "
+            "(Matryoshka truncation) to fit this column — see EMBEDDING_COLUMN_DIMENSIONS "
+            "and _EMBEDDING_MODELS in src/core/llm_client.py, which own that decision."
+        ),
     )
     token_count: Mapped[int] = mapped_column(
         Integer,

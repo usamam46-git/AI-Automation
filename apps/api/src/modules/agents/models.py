@@ -12,7 +12,9 @@ Tables:
 Design notes:
 - agent_memory.embedding uses pgvector's Vector(1536) type for semantic
   memory retrieval — nullable because short_term and summary entries may
-  not need an embedding.
+  not need an embedding. 1536 is a requested width, not the default model's
+  native one; EMBEDDING_COLUMN_DIMENSIONS in src/core/llm_client.py owns that
+  decision for this column and for document_chunks.embedding alike.
 - tool_ids on agent_versions is a JSONB array of Tool UUIDs — kept as JSONB
   rather than a proper join table to avoid a migration every time the
   agent builder adds/removes a tool (the tool registry validates refs at
@@ -163,7 +165,10 @@ class AgentMemory(UUIDMixin, TimestampMixin, Base):
       - long_term_fact  : durable factual memory (persists across sessions)
 
     embedding is nullable — not all memory types need semantic retrieval.
-    Vector(1536) matches the output dimension of text-embedding-3-large.
+    Vector(1536) is NOT text-embedding-3-large's native width (that is 3072); the
+    model is requested at 1536 via the API's `dimensions` parameter. See
+    EMBEDDING_COLUMN_DIMENSIONS in src/core/llm_client.py, which owns that
+    decision for this column and for document_chunks.embedding alike.
     The HNSW index on this column is created in the hand-written index migration.
     """
 
@@ -184,7 +189,7 @@ class AgentMemory(UUIDMixin, TimestampMixin, Base):
     embedding: Mapped[list | None] = mapped_column(
         Vector(1536),
         nullable=True,
-        comment="pgvector embedding for semantic memory retrieval (text-embedding-3-large).",
+        comment="pgvector embedding for semantic memory retrieval (text-embedding-3-large, requested at 1536 dims).",
     )
 
     # Relationships
