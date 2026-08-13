@@ -420,7 +420,58 @@ verified via a full read-only orientation pass — see note below.)
   a registry toggle.
   **123 frontend tests** (114 + 9); `npm run build`, `tsc --noEmit` and `eslint`
   clean.
-- Next: wire `embed()` into a real ingestion pipeline (the `knowledge_base`
+- **3D landing scene started 2026-08-13 — Phase 1 of 5 done** (Vol. 3 §1.1,
+  frontend only, no backend change). A four-scene scroll-scrubbed WebGL
+  narrative that will **replace `run-film.tsx`** as the landing page's
+  centrepiece: scattered back-office objects → the AI core connects them → one
+  real run holding at the approval gate → HR/ERP/Finance orchestrated. The live
+  landing page is **untouched so far**; everything lives in the throwaway route
+  `app/(marketing)/lab/core/page.tsx` until Phase 5.
+  **The first attempt at Phase 1 was rejected on sight and rebuilt** — worth
+  knowing before touching it. It rendered abstract octahedrons/boxes/rings in an
+  indigo-and-violet void with a glowing point-cloud core; the product owner's
+  verdict was that it looked like every other AI landing page and said nothing
+  about ERP/HR/Finance. The scene is now a **daylight room**: warm studio grey,
+  white paper, near-black ink, nothing emissive — and every object is a
+  **readable business document** (invoice, payslip, purchase order, approval
+  request) drawn to a canvas texture. `lib/document-cards.ts` + its tests pin one
+  coherent company whose finance thread reuses `run-film.ts`'s exact figures.
+  Do not reintroduce the dark palette or abstract the documents back into
+  geometry; both paths have been walked.
+  Phase 1 shipped `lib/scene-script.ts` (pure choreography — scenes, camera
+  keyframes, the room's tone, the 20-object roster from a seeded PRNG),
+  `lib/document-cards.ts`, and `components/marketing/scene/{core-scene,
+  document-field,document-texture}.tsx`. `ai-core.tsx` survives from the rejected
+  version and **needs redesign for daylight** — a glowing nucleus is wrong in a
+  lit room.
+  `three` and `@react-three/fiber` were already in the tree and unused since the
+  initial commit; they now have their first consumer. **No new dependency** —
+  notably not `@react-three/postprocessing`.
+  Two decisions worth not re-litigating, both detailed in apps/web/CLAUDE.md's
+  3D-scene section: the room stays **light** (first paint is still a CSS
+  gradient, so the section is not the LCP element), and `lib/run-film.ts` is
+  **kept, not deleted** —
+  its beat data becomes Phase 3's script, so the tested invariant that
+  `post_to_erp` is still `pending` on the approval beat carries into 3D as a
+  visual fact.
+  Two silent-failure traps found the hard way and now documented: **R3F does not
+  keep a `uniforms` object by reference** (the material holds a clone, so
+  per-frame mutation of a memoised copy renders nothing while `useFrame` happily
+  runs), and **shader `precision` must be declared in both stages** or the
+  program fails validation and draws nothing with only a console warning.
+  **158 frontend tests** (123 + 25 scene-script + 10 document-cards);
+  `tsc --noEmit` and `eslint` clean.
+  **NOT VERIFIED VISUALLY — this is the first thing to do on resuming.** The
+  rejected dark version was seen in a browser at four scrub positions; the
+  daylight rebuild that replaced it has **never been seen rendering at all**,
+  because Chrome automation froze and then lost its localhost permission
+  mid-session. Passing tests says nothing about whether it looks right. Also
+  unverified: motion in real time (automation runs in a background tab where
+  rAF never fires — see the two dev-only handles in apps/web/CLAUDE.md) and any
+  mobile viewport.
+- Next: finish the 3D scene Phases 2–5 (edges + graph formation, the run scene
+  with the approval hold, clusters + mark collapse, then integration and
+  retiring the run film), wire `embed()` into a real ingestion pipeline (the `knowledge_base`
   module is still models-only — chunking, OCR, and hybrid search are all unbuilt),
   `subgraph` handler, agent function-calling/ReAct (see the deferral note in
   apps/api/CLAUDE.md), and

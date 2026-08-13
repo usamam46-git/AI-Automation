@@ -467,6 +467,131 @@ hooks: `use-media-query.ts`, `use-gsap-reveal.ts`.
   across every section. The responsive classes and the `lg`-gated pin are
   reasoned, not observed — check them on a real device before launch.
 
+## 3D scene — "The Company Comes Alive" (in progress, started 2026-08-13)
+
+A four-scene scroll-scrubbed WebGL narrative that will **replace `run-film.tsx`**
+as the landing page's centrepiece. Built in phases in an isolated lab route;
+**not yet wired into `app/(marketing)/page.tsx`** — the live landing page is
+untouched so far.
+
+Files: `lib/{scene-script,document-cards}.ts` (both vitest-covered),
+`components/marketing/scene/{core-scene,document-field,document-texture}.tsx`,
+and the throwaway route `app/(marketing)/lab/core/page.tsx`. `ai-core.tsx`
+survives from the rejected first version and **needs redesign** — a glowing
+nucleus is wrong in a lit room; nothing imports it today.
+
+**Phase status: Phase 1 rebuilt in the new direction, NOT yet seen rendering.**
+The daylight rebuild typechecks, lints and passes **158 frontend tests** (35 of
+them over the scene and the document specs), but no frame of it has been
+verified in a browser — the automation lost its localhost permission mid-session.
+Treat the visual result as unproven until someone opens `/lab/core`.
+Phases 2–5 (edges, the run scene, clusters + mark collapse, integration) are not
+started.
+
+- **The scene is a DAYLIGHT ROOM, and this is settled — do not re-darken it.**
+  Warm studio grey ground (`#e8e6e1`-ish), white paper cards, near-black ink,
+  one lime accent, amber only on approval gates. **Nothing is emissive.**
+  The first version opened on the marketing hero's sky and descended into a
+  near-black void with a neon point-cloud core and indigo/violet objects. It was
+  **rejected by the product owner on sight**, for two reasons worth keeping
+  written down: indigo-gradient space is the default look of every AI landing
+  page, and an abstract particle field says nothing about back-office software.
+  If a future session finds itself reaching for a dark background, a coloured
+  rim light, bloom, or a glowing anything — that path has already been walked
+  and rejected. Only one piece of that version survives on disk —
+  `ai-core.tsx`, the point-cloud nucleus — and it is orphaned; the abstract
+  `node-field.tsx` was deleted before it was ever committed and is gone for
+  good. Nothing of the dark version is recoverable beyond that file.
+- **The objects are readable documents, not abstract solids. This is the whole
+  point of the scene.** `lib/document-cards.ts` holds real specs (invoice,
+  payslip, purchase order, leave request, approval request…) and
+  `document-texture.ts` draws each to a canvas that gets mapped onto a card.
+  The first version drew octahedrons, boxes and rings; it read as particles, and
+  a drifting polyhedron cannot tell a story. **Do not abstract these back into
+  geometry.**
+- **One company, one consistent set of facts.** The finance thread deliberately
+  reuses `run-film.ts`'s exact data — Acme Vendor LLC, `INV-2291`, `4,200.00`,
+  the `extract_invoice` requester — so scene 3 can follow *that specific
+  invoice* through extraction, the amount check, the approval hold and into the
+  ledger. `lib/document-cards.test.ts` pins the chain
+  (`PO-4471 → GR-2214 → INV-2291 → JE-99120`), that the PO, invoice, journal and
+  gate all agree on the amount, and that the gate reads `Waiting`. Change a
+  figure on one card and the tests will tell you which others must change too.
+- **Cards are physical: lit, shadow-casting, never self-lit.** `meshStandardMaterial`
+  with no emissive term, ACES tone mapping, one shadow-mapped key light plus a
+  hemisphere fill. A card that glows stops reading as paper and starts reading
+  as a screen.
+- **A box takes six materials, and index 4 is the printed face.** BoxGeometry's
+  material order is +x, −x, +y, −y, +z, −z. A single material maps the document
+  onto all six faces, which puts mirrored body copy on the back of every card
+  and a stretched sliver of it down each edge.
+- **The camera path is constrained by legibility, not composition.** The cards
+  carry body copy, so the camera has to sit close enough to read the nearest
+  ones (~200px of screen height at the opening). An earlier path opened at z=62
+  to show the field whole; at that distance a card is 60px tall and the scene is
+  abstract again. Depth comes from the *spread* of the field, not from
+  retreating out of it.
+- **R3F does not keep your `uniforms` object by reference — the material gets a
+  clone.** This is the single most expensive trap here and it cost a long debug
+  session. A component that memoises a uniforms object and mutates
+  `myUniforms.uIntensity.value` every frame is writing to something nothing
+  renders. The failure is *completely silent* and looks exactly like a dead
+  render loop: shaders compile, meshes are in the scene, `useFrame` runs (367
+  frames, measured), and every uniform on the live material sits at its initial
+  value. Diagnosed by comparing object identity in the browser. **Treat the
+  `uniforms` prop as initial values only** and drive everything after mount
+  through a ref on the `<shaderMaterial>` itself, as `ai-core.tsx` does.
+- **Declare `precision` identically in BOTH shader stages.** Vertex defaults to
+  `highp`, fragment to `mediump`, so any uniform or varying named in both links
+  with mismatched precision, fails `VALIDATE_STATUS`, and draws nothing with
+  only a console warning. `highp` in both — scene coordinates reach ~80 units,
+  where mediump's ~0.03-unit resolution makes the field visibly jitter. The
+  shared `PRECISION` constant exists so the two cannot drift.
+- **The same no-backtick-in-GLSL rule as `aurora-canvas.tsx` applies**, for the
+  same reason: the shaders live in JS template literals.
+- **The scrub never enters React state.** Same rule the run film already
+  established. `onUpdate` writes progress into refs and one DOM style, and
+  `setState` fires only when the discrete scene index changes. `applyImperative`
+  is split from `applyProgress` specifically so the reduced-motion path can
+  compose its still frame without a `setState` inside an effect — the ESLint
+  rule `react-hooks/set-state-in-effect` is correct here; restructure rather
+  than suppress it.
+- **No `@react-three/postprocessing`.** Bloom is faked by the core's own
+  camera-facing additive disc — one transparent quad instead of ~200KB gzipped
+  and a full-screen multi-pass blur on a landing page. Revisit only if a later
+  phase genuinely cannot get there without a real pass.
+- **The core is built from points, not as a glowing orb**, and that is an
+  argument rather than a style: it is the same node-and-edge substance as the
+  rest of the world at high density, so it reads as computational. Its four
+  additive layers clip to flat white very easily — if you retune, check that
+  individual points stay legible through the bloom rather than fusing into a
+  disc.
+- **Approval nodes render as open rings**, deliberately the same open middle
+  node as `orkest-mark.tsx`, and amber like the `mutating` badge in
+  `badge.tsx`. Amber not red: a gate is normal, not an error. The mark, the
+  canvas node and the 3D object should not become three unrelated drawings.
+- **Verifying this under browser automation needs two dev-only handles**, and
+  they are why `window.__orkestScene` and `window.__orkestApplyProgress` exist
+  (both `NODE_ENV !== "production"` only). Automation runs the page in a
+  **background tab**, where `requestAnimationFrame` never fires — so GSAP's
+  ticker is frozen, ScrollTrigger never processes a scroll, and R3F never
+  renders. To inspect a chosen moment:
+
+  ```js
+  window.scrollTo(0, p * 3.2 * innerHeight);   // keep ScrollTrigger in agreement
+  __orkestApplyProgress(p);
+  for (let i = 0; i < 180; i++) __orkestScene.advance(performance.now());
+  ```
+
+  All three lines are load-bearing. The real scroll must be set too, because
+  taking a screenshot forces a paint, which lets the ticker fire once and reset
+  progress from the actual scroll position. The ~180 frames are not decoration —
+  the camera is damped and one frame moves it a fraction of the way. R3F also
+  will not initialise until something forces a first paint, so take a throwaway
+  screenshot before the first `__orkestScene` access.
+- `app/(marketing)/lab/core/page.tsx` is **deleted in Phase 5**. It exists so
+  the scene can be broken and re-rolled without touching the shipping page.
+
 ## Tools registry page (2026-08-12)
 
 `app/(dashboard)/tools/page.tsx` + `components/tools/{tool-dialog,delete-tool-dialog}.tsx`,
