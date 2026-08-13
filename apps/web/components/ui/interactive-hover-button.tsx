@@ -15,9 +15,9 @@ import { cn } from "@/lib/utils";
  *    correctly at one width. Here the incoming layer is `inset-0` + centered,
  *    so a label of any length stays centred and the mechanic survives
  *    "Start building" as well as it survives "Button".
- * 2. **`tone` replaces the hard-coded `bg-primary` fill.** The hero sits on a
- *    sky gradient where `--primary` (near-black) would read as a hole, so the
- *    expanding dot is tokenised per surface.
+ * 2. **`tone` replaces the hard-coded `bg-primary` fill.** The buttons sit on
+ *    surfaces that vary from a light wall to dark walnut, so the expanding dot
+ *    is tokenised per surface rather than assuming one background.
  */
 const TONES = {
   lime: {
@@ -34,6 +34,37 @@ const TONES = {
     base: "mk-glass border-white/30 text-white",
     fill: "bg-white",
     incoming: "text-mk-sky-deep",
+  },
+  /**
+   * The office hero's primary: ink, with no green anywhere in it.
+   *
+   * The lime pill was deepened once and still read as neon sitting on a walnut
+   * desk — a saturated yellow-green against warm timber is a fight no amount of
+   * tuning wins. Near-black with white text is what a primary button looks like
+   * on furniture. Note the fill is **white**, not lime: the `ink` tone expands a
+   * lime dot on hover, which would put the neon straight back.
+   *
+   * Lime is not gone from the page — it is still the nav pill and still the
+   * accent rule on every document. It is just no longer a large area of colour
+   * on top of wood.
+   */
+  solid: {
+    base: "border-mk-ink bg-mk-ink text-white",
+    fill: "bg-white",
+    incoming: "text-mk-ink",
+  },
+  /**
+   * The quiet secondary, for the office hero.
+   *
+   * Two heavy buttons side by side — a bright lime pill next to a solid black
+   * one — was half of why the pair looked wrong against walnut and macOS grey.
+   * A primary carries the weight and a secondary should not compete with it, so
+   * this is paper with a hairline and ink text, and it fills to ink on hover.
+   */
+  quiet: {
+    base: "border-mk-hairline bg-white/85 text-mk-ink",
+    fill: "bg-mk-ink",
+    incoming: "text-white",
   },
 } as const;
 

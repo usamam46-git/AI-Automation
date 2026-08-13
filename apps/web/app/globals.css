@@ -154,12 +154,20 @@
   --mk-sky: #3e9bee;
   --mk-sky-pale: #a8dbff;
   --mk-sky-mist: #e8f4ff;
-  --mk-lime: #c8f536;
-  --mk-lime-deep: #a9d617;
+  /* Deepened from #c8f536 / #a9d617. The original was an electric neon that
+     worked on the old blue-gradient hero but read as harsh against macOS-light
+     greys and a walnut desk — the two loudest things on the page were the
+     buttons. Still unmistakably the brand lime, just no longer fluorescent. */
+  --mk-lime: #b9d94a;
+  --mk-lime-deep: #94b52c;
   --mk-ink: #141414;
   --mk-ink-soft: #5c5f66;
-  --mk-paper: #fafafa;
-  --mk-mist: #f0f1f3;
+  /* macOS light mode. #f5f5f7 is the system light background Apple itself uses;
+     --mk-mist is the one step down from it. Deliberately NEUTRAL greys — the
+     page carried a faint warm cast before, and the 3D scene amplified it into
+     something that read as beige. */
+  --mk-paper: #f5f5f7;
+  --mk-mist: #ececef;
   --mk-hairline: rgba(20, 20, 20, 0.08);
 }
 

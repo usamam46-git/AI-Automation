@@ -4,9 +4,21 @@ import * as React from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-import { SCENE_NODES, type SceneNode } from "@/lib/scene-script";
+import {
+  CARD_WORLD_HEIGHT,
+  CARD_WORLD_WIDTH,
+  SCENE_NODES,
+  type SceneNode,
+  cardPositionAt,
+  cardRotationAt,
+  documentPresenceAtProgress,
+  erpWrittenAtProgress,
+  focusedDocumentAtProgress,
+  runStageBlendAtProgress,
+  runStagePosition,
+} from "@/lib/scene-script";
 import { cardFor } from "@/lib/document-cards";
-import { CARD_ASPECT, documentTexture } from "@/components/marketing/scene/document-texture";
+import { documentTexture } from "@/components/marketing/scene/document-texture";
 
 /**
  * The field of back-office documents the scene opens on.
@@ -37,22 +49,48 @@ import { CARD_ASPECT, documentTexture } from "@/components/marketing/scene/docum
  * base orientation roughly facing the camera and only oscillates around it.
  */
 
-/** Card width in world units. Height follows the texture's aspect. */
-const CARD_WIDTH = 3.4;
-const CARD_HEIGHT = CARD_WIDTH * CARD_ASPECT;
+/**
+ * Card size in world units, owned by `scene-script.ts`.
+ *
+ * The layout there composes the opening frame by projecting cards through the
+ * camera — it has to know how big one is. Redeclaring the size here would let
+ * the composition and the geometry drift apart silently.
+ */
+const CARD_WIDTH = CARD_WORLD_WIDTH;
+const CARD_HEIGHT = CARD_WORLD_HEIGHT;
 /** Enough for a real shadow and a visible edge; paper, not cardboard. */
 const CARD_DEPTH = 0.06;
+
+/** The document the run writes. Its unwritten printing is the visual form of
+ *  the scene's load-bearing claim — see `document-texture.ts`. */
+const LEDGER_NODE_ID = "journal_entry";
 
 interface CardProps {
   node: SceneNode;
   settleRef: React.RefObject<number>;
+  progressRef: React.RefObject<number>;
   geometry: THREE.BoxGeometry;
 }
 
-function DocumentCardMesh({ node, settleRef, geometry }: CardProps) {
+function DocumentCardMesh({ node, settleRef, progressRef, geometry }: CardProps) {
   const meshRef = React.useRef<THREE.Mesh>(null);
   const card = React.useMemo(() => cardFor(node.id), [node.id]);
+
+  /**
+   * The ledger entry has two printings; every other card has one.
+   *
+   * `JE-99120` is the document the run writes, so it is the one that must be
+   * visibly *unwritten* while the approval gate holds. Both textures are built
+   * up front and swapped by index in `useFrame` — building one lazily mid-scrub
+   * would mean a canvas draw and a GPU upload on the frame the gate clears,
+   * which is the one frame in the scene that must not stutter.
+   */
+  const isLedger = node.id === LEDGER_NODE_ID;
   const texture = React.useMemo(() => documentTexture(node.id, card), [node.id, card]);
+  const unwrittenTexture = React.useMemo(
+    () => (isLedger ? documentTexture(node.id, card, "unwritten") : null),
+    [isLedger, node.id, card],
+  );
 
   /**
    * Six materials, because a box takes one per face.
@@ -65,9 +103,12 @@ function DocumentCardMesh({ node, settleRef, geometry }: CardProps) {
   const materials = React.useMemo(() => {
     const edge = new THREE.MeshStandardMaterial({ color: "#f2efe9", roughness: 0.95 });
     const back = new THREE.MeshStandardMaterial({ color: "#f7f5f0", roughness: 0.92 });
-    const front = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.88 });
+    const front = new THREE.MeshStandardMaterial({
+      map: unwrittenTexture ?? texture,
+      roughness: 0.88,
+    });
     return [edge, edge, edge, edge, front, back];
-  }, [texture]);
+  }, [texture, unwrittenTexture]);
 
   React.useEffect(() => {
     return () => materials.forEach((material) => material.dispose());
@@ -79,24 +120,73 @@ function DocumentCardMesh({ node, settleRef, geometry }: CardProps) {
 
     const t = clock.getElapsedTime();
     const settle = settleRef.current ?? 0;
-    const drift = 1 - settle * 0.85;
 
-    const [sx, sy, sz] = node.scattered;
-    const [hx, hy, hz] = node.home;
+    // Position and tilt both come from `scene-script.ts`. `connection-edges.tsx`
+    // attaches to these same cards and must agree with them exactly — two
+    // copies of this arithmetic would drift apart the first time an amplitude
+    // was retuned, and the symptom would be edges floating free of the
+    // documents they claim to connect. The layout's `DRIFT_MARGIN` budgets
+    // screen space for this same excursion.
+    const progress = progressRef.current ?? 0;
 
-    mesh.position.set(
-      sx + (hx - sx) * settle + Math.sin(t * 0.26 + node.phase) * 0.9 * drift,
-      sy + (hy - sy) * settle + Math.cos(t * 0.21 + node.phase * 1.4) * 0.75 * drift,
-      sz + (hz - sz) * settle + Math.sin(t * 0.18 + node.phase * 0.7) * 0.8 * drift,
-    );
+    const [px, py, pz] = cardPositionAt(node, settle, t, progress);
+    mesh.position.set(px, py, pz);
 
-    // Small oscillation about a face-on base pose — enough to feel weightless,
-    // never enough to turn the text away from the reader.
-    mesh.rotation.set(
-      Math.sin(t * 0.22 + node.phase) * 0.14,
-      Math.sin(t * 0.17 + node.phase * 1.3) * 0.28,
-      Math.sin(t * 0.13 + node.phase * 0.8) * 0.06,
-    );
+    // Staged documents square up to the camera: a card being *shown* to you
+    // should not be at a jaunty angle.
+    const staged = runStagePosition(node.id) ? runStageBlendAtProgress(progress) : 0;
+    const [rx, ry, rz] = cardRotationAt(node, t, progress);
+    mesh.rotation.set(rx * (1 - staged), ry * (1 - staged), rz * (1 - staged));
+
+    // The ledger's two printings. Swapping `map` is a pointer assignment on an
+    // already-uploaded texture, so the change costs nothing on the frame it
+    // happens — see the note where both are built.
+    if (isLedger && unwrittenTexture) {
+      // Reached through the mesh rather than through the memoised `materials`
+      // array. They are the same objects, but mutating the memo is what
+      // `react-hooks/immutability` rejects, and it is right to: a value a
+      // component memoises should not be rewritten from a frame loop.
+      const front = (mesh.material as THREE.MeshStandardMaterial[])[4];
+      const wanted = erpWrittenAtProgress(progress) ? texture : unwrittenTexture;
+      if (front.map !== wanted) {
+        front.map = wanted;
+        front.needsUpdate = true;
+      }
+    }
+
+    // The focused document lifts slightly toward the camera and squares up to
+    // it. Small on purpose: this is the scene pointing, not the card jumping.
+    const focused = focusedDocumentAtProgress(progress) === node.id;
+    const lift = focused ? 1 : 0;
+    mesh.position.z += lift * 1.6;
+    mesh.rotation.x *= 1 - lift * 0.75;
+    mesh.rotation.y *= 1 - lift * 0.75;
+    const emphasis = 1 + lift * 0.12;
+    mesh.scale.setScalar(node.scale * emphasis);
+
+    /**
+     * Documents outside the run recede while scene 3 plays.
+     *
+     * `depthWrite` goes off with them, which matters: a faded card that still
+     * writes depth punches a hole in whatever is behind it, so the run's own
+     * documents would be occluded by paper you can barely see. Faded cards are
+     * background and do not need to sort correctly against each other.
+     *
+     * `transparent` changes the shader program, so it is only assigned when it
+     * actually flips — which happens twice a page, at the scene's edges.
+     */
+    const presence = documentPresenceAtProgress(node.id, progress);
+    const faces = mesh.material as THREE.MeshStandardMaterial[];
+    const wantsTransparent = presence < 0.999;
+    for (const face of faces) {
+      if (face.transparent !== wantsTransparent) {
+        face.transparent = wantsTransparent;
+        face.needsUpdate = true;
+      }
+      face.opacity = presence;
+      face.depthWrite = !wantsTransparent;
+    }
+    mesh.castShadow = !wantsTransparent;
   });
 
   return (
@@ -104,7 +194,6 @@ function DocumentCardMesh({ node, settleRef, geometry }: CardProps) {
       ref={meshRef}
       geometry={geometry}
       material={materials}
-      scale={node.scale}
       castShadow
       receiveShadow
     />
@@ -114,10 +203,16 @@ function DocumentCardMesh({ node, settleRef, geometry }: CardProps) {
 export interface DocumentFieldProps {
   /** 0 = scattered (scene 1), 1 = settled into clusters (scene 4). */
   settleRef: React.RefObject<number>;
+  /** Raw scrub progress, for the run scene's focus and the ledger swap. */
+  progressRef: React.RefObject<number>;
   nodes?: readonly SceneNode[];
 }
 
-export function DocumentField({ settleRef, nodes = SCENE_NODES }: DocumentFieldProps) {
+export function DocumentField({
+  settleRef,
+  progressRef,
+  nodes = SCENE_NODES,
+}: DocumentFieldProps) {
   // One geometry shared by every card; only the materials differ.
   const geometry = React.useMemo(
     () => new THREE.BoxGeometry(CARD_WIDTH, CARD_HEIGHT, CARD_DEPTH),
@@ -128,7 +223,13 @@ export function DocumentField({ settleRef, nodes = SCENE_NODES }: DocumentFieldP
   return (
     <group>
       {nodes.map((node) => (
-        <DocumentCardMesh key={node.id} node={node} settleRef={settleRef} geometry={geometry} />
+        <DocumentCardMesh
+          key={node.id}
+          node={node}
+          settleRef={settleRef}
+          progressRef={progressRef}
+          geometry={geometry}
+        />
       ))}
     </group>
   );

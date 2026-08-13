@@ -420,58 +420,82 @@ verified via a full read-only orientation pass — see note below.)
   a registry toggle.
   **123 frontend tests** (114 + 9); `npm run build`, `tsc --noEmit` and `eslint`
   clean.
-- **3D landing scene started 2026-08-13 — Phase 1 of 5 done** (Vol. 3 §1.1,
-  frontend only, no backend change). A four-scene scroll-scrubbed WebGL
-  narrative that will **replace `run-film.tsx`** as the landing page's
-  centrepiece: scattered back-office objects → the AI core connects them → one
-  real run holding at the approval gate → HR/ERP/Finance orchestrated. The live
-  landing page is **untouched so far**; everything lives in the throwaway route
-  `app/(marketing)/lab/core/page.tsx` until Phase 5.
+- **3D landing scene — all 5 phases done 2026-08-13** (Vol. 3 §1.1, frontend
+  only, no backend change). A four-scene scroll-scrubbed WebGL narrative that
+  **replaced both the sky-gradient hero and `run-film.tsx`**. It is now the
+  landing page's **opening**: first paint is an office — a wall, a floor and a
+  desk with this company's paperwork on it — with the hero headline above and
+  the calls to action sitting on the desk. Scrolling lifts the documents off the
+  surface and the narrative runs from there: scattered
+  back-office documents → the core connects them → one real run holding at the
+  approval gate → HR/ERP/Finance orchestrated, collapsing into the Orkest mark.
+  The desk opening is load-bearing rather than decorative: it gives the sequence
+  a physical starting point a viewer already recognises, so the airborne field
+  reads as this company's work in the air rather than as objects that were
+  always floating.
+  It is **wired into `app/(marketing)/page.tsx` and verified in a browser at
+  every scene**. Deleted with it: `components/marketing/{run-film,run-inspector,
+  hero,sky-backdrop,aurora-canvas,hero-collage}.tsx` and the throwaway route
+  `app/(marketing)/lab/`. The hero's words survive unchanged in
+  `components/marketing/hero-copy.tsx`, over the room — and they stay
+  **server-rendered**, outside the `ssr: false` scene import, so the H1 is in
+  the initial HTML and a WebGL canvas never becomes the LCP element.
   **The first attempt at Phase 1 was rejected on sight and rebuilt** — worth
   knowing before touching it. It rendered abstract octahedrons/boxes/rings in an
   indigo-and-violet void with a glowing point-cloud core; the product owner's
   verdict was that it looked like every other AI landing page and said nothing
-  about ERP/HR/Finance. The scene is now a **daylight room**: warm studio grey,
+  about ERP/HR/Finance. The scene is a **daylight room**: near-white ground,
   white paper, near-black ink, nothing emissive — and every object is a
-  **readable business document** (invoice, payslip, purchase order, approval
-  request) drawn to a canvas texture. `lib/document-cards.ts` + its tests pin one
-  coherent company whose finance thread reuses `run-film.ts`'s exact figures.
-  Do not reintroduce the dark palette or abstract the documents back into
-  geometry; both paths have been walked.
-  Phase 1 shipped `lib/scene-script.ts` (pure choreography — scenes, camera
-  keyframes, the room's tone, the 20-object roster from a seeded PRNG),
-  `lib/document-cards.ts`, and `components/marketing/scene/{core-scene,
-  document-field,document-texture}.tsx`. `ai-core.tsx` survives from the rejected
-  version and **needs redesign for daylight** — a glowing nucleus is wrong in a
-  lit room.
+  **readable business document** drawn to a canvas texture. Do not reintroduce
+  the dark palette or abstract the documents back into geometry; both paths have
+  been walked.
+  `lib/scene-script.ts` is the whole choreography and is pure — including real
+  camera projection maths, so the composition is **asserted rather than
+  eyeballed**. That was added after the first frame anyone looked at turned out
+  to be wrong three ways at once (a hole through the middle, cards sliced by the
+  frame edge, and an employee record sitting behind the headline). A spherical
+  shell projects to an annulus; the distribution was the bug, not the seed.
+  **`lib/run-film.ts` is kept and is now load-bearing**: scene 3 is its beat list
+  mapped onto scroll rather than a second script, and its tested invariant that
+  `post_to_erp` is still `pending` at the approval gate is rendered as a **visual
+  fact** — at the hold, `JE-99120` shows no debit, no credit and no period, and
+  is stamped NOT POSTED. The figures appear only once the gate clears.
+  The ending collapses the graph into the Orkest mark, with the approval gates
+  landing in the **open middle node** — the same held-open node
+  `orkest-mark.tsx` uses for the human-approval step, and `MARK_NODES` is derived
+  from that SVG's viewBox so the two cannot drift.
   `three` and `@react-three/fiber` were already in the tree and unused since the
   initial commit; they now have their first consumer. **No new dependency** —
   notably not `@react-three/postprocessing`.
-  Two decisions worth not re-litigating, both detailed in apps/web/CLAUDE.md's
-  3D-scene section: the room stays **light** (first paint is still a CSS
-  gradient, so the section is not the LCP element), and `lib/run-film.ts` is
-  **kept, not deleted** —
-  its beat data becomes Phase 3's script, so the tested invariant that
-  `post_to_erp` is still `pending` on the approval beat carries into 3D as a
-  visual fact.
-  Two silent-failure traps found the hard way and now documented: **R3F does not
-  keep a `uniforms` object by reference** (the material holds a clone, so
-  per-frame mutation of a memoised copy renders nothing while `useFrame` happily
-  runs), and **shader `precision` must be declared in both stages** or the
-  program fails validation and draws nothing with only a console warning.
-  **158 frontend tests** (123 + 25 scene-script + 10 document-cards);
-  `tsc --noEmit` and `eslint` clean.
-  **NOT VERIFIED VISUALLY — this is the first thing to do on resuming.** The
-  rejected dark version was seen in a browser at four scrub positions; the
-  daylight rebuild that replaced it has **never been seen rendering at all**,
-  because Chrome automation froze and then lost its localhost permission
-  mid-session. Passing tests says nothing about whether it looks right. Also
-  unverified: motion in real time (automation runs in a background tab where
-  rAF never fires — see the two dev-only handles in apps/web/CLAUDE.md) and any
-  mobile viewport.
-- Next: finish the 3D scene Phases 2–5 (edges + graph formation, the run scene
-  with the approval hold, clusters + mark collapse, then integration and
-  retiring the run film), wire `embed()` into a real ingestion pipeline (the `knowledge_base`
+  **The palette is macOS light mode and it is neutral** — `--mk-paper` is
+  #f5f5f7 (the system light background macOS uses) and `--mk-mist` #ececef; the
+  scene's gradient uses those same tokens rather than inventing its own.
+  **The beige everyone kept seeing was the LIGHTS, not the palette**: the key
+  light was `#fffaf2`, the fill `#fff4e6` and the hemisphere ground `#d8d3c9`,
+  so every surface was multiplied by a warm light while every hex value in the
+  source said neutral. If the room ever looks warm again, check the lights in
+  `core-scene.tsx` first — chasing it through the colours found nothing, twice.
+  **The desk is real polished walnut** (procedural grain in `wood-texture.ts`,
+  clearcoat for the sheen), and it is the one warm thing in an otherwise neutral
+  room. An earlier pass argued against wood and built a grey desk; white paper
+  on a near-white desk washed out completely, and the timber is what finally
+  makes the documents read.
+  Two silent-failure traps stay documented in apps/web/CLAUDE.md: **R3F does not
+  keep a `uniforms` object by reference**, and **shader `precision` must be
+  declared in both stages**. Neither can currently fire — **there is no custom
+  shader left in the scene**; the core, edges and mark are stock
+  `meshStandardMaterial` driven by transforms and instanced matrices, which was
+  cheaper and more correct than the shader version.
+  **228 frontend tests** (95 over `scene-script` alone); `tsc --noEmit`,
+  `eslint` and `npm run build` clean.
+  **Still unverified: any real mobile viewport** (Chrome zooms rather than
+  reflows under automation here, so no breakpoint was exercised — the
+  composition rules compose for desktop aspects 1.6–2.4 and a phone likely needs
+  its own depth schedule), and real-time motion/performance on integrated
+  graphics.
+- Next: verify the 3D scene on a real mobile viewport (the one thing it has
+  never been seen on — see apps/web/CLAUDE.md), wire `embed()` into a real
+  ingestion pipeline (the `knowledge_base`
   module is still models-only — chunking, OCR, and hybrid search are all unbuilt),
   `subgraph` handler, agent function-calling/ReAct (see the deferral note in
   apps/api/CLAUDE.md), and
