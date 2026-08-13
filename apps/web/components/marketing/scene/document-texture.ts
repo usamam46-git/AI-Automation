@@ -21,7 +21,8 @@ import type { DocumentCard } from "@/lib/document-cards";
  * ## Palette
  *
  * White paper, near-black ink, one lime accent rule, amber only on approval
- * gates. There is deliberately no glow and no emissive treatment anywhere —
+ * gates. The greys are **neutral** (`#86868b` is macOS\'s own secondary label
+ * colour) — they were warm, and on a page this light a warm grey reads as beige. There is deliberately no glow and no emissive treatment anywhere —
  * these are physical objects lit by the scene's own lights, and any self-lit
  * surface immediately reads as a screen instead of as paper.
  */
@@ -32,8 +33,8 @@ export const CARD_PIXEL_HEIGHT = 672;
 export const CARD_ASPECT = CARD_PIXEL_HEIGHT / CARD_PIXEL_WIDTH;
 
 const INK = "#14161a";
-const MUTED = "#8a8781";
-const RULE = "#e6e3dd";
+const MUTED = "#86868b";
+const RULE = "#e4e4e8";
 const PAPER = "#ffffff";
 const LIME = "#a8dd45";
 const AMBER = "#e0a233";
@@ -85,11 +86,27 @@ function wrapText(
   return lines;
 }
 
-function drawCard(ctx: CanvasRenderingContext2D, card: DocumentCard) {
+/**
+ * `unwritten` draws the document as a page nothing has been posted to yet.
+ *
+ * This is how the scene shows its load-bearing claim. `run-film.ts` pins that
+ * `post_to_erp` is still `pending` while the approval gate waits — in the 2D
+ * film that was a badge on a rail, which is a thing you have to be told. Here
+ * the ledger entry is simply *blank*: the labels are printed, the values are
+ * not, and a muted line says why. You can see that nothing has been written.
+ */
+export type CardVariant = "final" | "unwritten";
+
+function drawCard(
+  ctx: CanvasRenderingContext2D,
+  card: DocumentCard,
+  variant: CardVariant = "final",
+) {
   const W = CARD_PIXEL_WIDTH;
   const H = CARD_PIXEL_HEIGHT;
   const pad = 44;
-  const accent = card.tone === "gate" ? AMBER : LIME;
+  const unwritten = variant === "unwritten";
+  const accent = unwritten ? RULE : card.tone === "gate" ? AMBER : LIME;
 
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, W, H);
@@ -134,7 +151,9 @@ function drawCard(ctx: CanvasRenderingContext2D, card: DocumentCard) {
   ctx.lineTo(W - pad, dividerY);
   ctx.stroke();
 
-  // Rows.
+  // Rows. On an unwritten page the labels are printed and the values are not —
+  // a ruled blank where the figure will go, which is what an unposted ledger
+  // line actually looks like.
   let y = dividerY + 54;
   for (const row of card.rows) {
     ctx.fillStyle = MUTED;
@@ -142,17 +161,39 @@ function drawCard(ctx: CanvasRenderingContext2D, card: DocumentCard) {
     ctx.textAlign = "left";
     ctx.fillText(row.label, pad, y);
 
-    ctx.fillStyle = INK;
-    ctx.font = `500 25px ${SANS}`;
-    ctx.textAlign = "right";
-    ctx.fillText(row.value, W - pad, y);
-    ctx.textAlign = "left";
+    if (unwritten) {
+      ctx.strokeStyle = RULE;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(W - pad - 128, y + 5);
+      ctx.lineTo(W - pad, y + 5);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = INK;
+      ctx.font = `500 25px ${SANS}`;
+      ctx.textAlign = "right";
+      ctx.fillText(row.value, W - pad, y);
+      ctx.textAlign = "left";
+    }
 
     y += 50;
   }
 
+  if (unwritten) {
+    // Says plainly what the blanks mean. Without this the card reads as a
+    // rendering failure rather than as a document waiting on a person.
+    ctx.fillStyle = AMBER;
+    ctx.font = `600 21px ${SANS}`;
+    withLetterSpacing(ctx, "1.2px", () => {
+      ctx.fillText("NOT POSTED", pad, H - 116);
+    });
+    ctx.fillStyle = MUTED;
+    ctx.font = `400 20px ${SANS}`;
+    ctx.fillText("Awaiting approval", pad, H - 84);
+  }
+
   // Total, ruled off and heavier.
-  if (card.total) {
+  if (card.total && !unwritten) {
     const totalY = H - 92;
     ctx.strokeStyle = RULE;
     ctx.beginPath();
@@ -204,8 +245,16 @@ const cache = new Map<string, THREE.CanvasTexture>();
  * Cached by node id because React re-renders and Fast Refresh would otherwise
  * redraw and re-upload twenty textures on every edit.
  */
-export function documentTexture(nodeId: string, card: DocumentCard): THREE.CanvasTexture {
-  const existing = cache.get(nodeId);
+export function documentTexture(
+  nodeId: string,
+  card: DocumentCard,
+  variant: CardVariant = "final",
+): THREE.CanvasTexture {
+  // Variant is part of the key: a card has two printings and both are live at
+  // once during scene 3, so caching by node id alone would hand the unwritten
+  // page back forever after the gate cleared.
+  const key = `${nodeId}:${variant}`;
+  const existing = cache.get(key);
   if (existing) return existing;
 
   const canvas = document.createElement("canvas");
@@ -214,7 +263,7 @@ export function documentTexture(nodeId: string, card: DocumentCard): THREE.Canva
 
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2D canvas context unavailable for document texture");
-  drawCard(ctx, card);
+  drawCard(ctx, card, variant);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -223,6 +272,6 @@ export function documentTexture(nodeId: string, card: DocumentCard): THREE.Canva
   texture.anisotropy = 8;
   texture.needsUpdate = true;
 
-  cache.set(nodeId, texture);
+  cache.set(key, texture);
   return texture;
 }

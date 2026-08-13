@@ -6,14 +6,28 @@ import * as THREE from "three";
 
 import { ScrollTrigger } from "@/lib/gsap";
 import { usePrefersReducedMotion } from "@/hooks/use-media-query";
+import { AiCore } from "@/components/marketing/scene/ai-core";
+import { ClusterLabels } from "@/components/marketing/scene/cluster-labels";
+import { ConnectionEdges } from "@/components/marketing/scene/connection-edges";
+import { HeroCopy } from "@/components/marketing/hero-copy";
+import { OfficeRoom } from "@/components/marketing/scene/office-room";
 import { DocumentField } from "@/components/marketing/scene/document-field";
+import { MarkCollapse } from "@/components/marketing/scene/mark-collapse";
+import { FILM_BEATS, runStatusLabel } from "@/lib/run-film";
 import {
   SCENES,
   backdropGradientAtProgress,
   cameraAtProgress,
+  coreVisibilityAtProgress,
+  heroOpacityAtProgress,
+  runBeatIndexAtProgress,
+  sceneCaptionOpacityAtProgress,
   sceneIndexAtProgress,
   settleAtProgress,
 } from "@/lib/scene-script";
+
+/** Index of the run scene in `SCENES`. */
+const RUN_SCENE_INDEX = 2;
 
 /**
  * Root of the 3D scene: a tall scroll container with a sticky WebGL stage.
@@ -146,12 +160,17 @@ export function CoreScene() {
 
   const rootRef = React.useRef<HTMLDivElement>(null);
   const backdropRef = React.useRef<HTMLDivElement>(null);
+  const captionRef = React.useRef<HTMLDivElement>(null);
+  const heroRef = React.useRef<HTMLDivElement>(null);
 
   const progressRef = React.useRef(0);
   const settleRef = React.useRef(0);
+  const coreRef = React.useRef(0);
   const pointerRef = React.useRef({ x: 0, y: 0 });
 
   const [sceneIndex, setSceneIndex] = React.useState(0);
+  /** Beat index while scene 3 is playing; `null` everywhere else. */
+  const [runBeat, setRunBeat] = React.useState<number | null>(null);
 
   // Same pessimistic-server-snapshot convention as `useMediaQuery`: `false`
   // during SSR and the first client render, then the real answer. The
@@ -170,7 +189,20 @@ export function CoreScene() {
    */
   const applyImperative = React.useCallback((progress: number) => {
     progressRef.current = progress;
+    if (heroRef.current) {
+      const opacity = heroOpacityAtProgress(progress);
+      heroRef.current.style.opacity = String(opacity);
+      // Stops the faded hero's buttons from staying clickable over the scene.
+      heroRef.current.style.visibility = opacity < 0.02 ? "hidden" : "visible";
+    }
+    if (captionRef.current) {
+      // The hero owns the words while the room is still whole. Two competing
+      // blocks of copy on one screen is one too many, so the scene's caption
+      // only arrives once the documents are off the desk.
+      captionRef.current.style.opacity = String(sceneCaptionOpacityAtProgress(progress));
+    }
     settleRef.current = settleAtProgress(progress);
+    coreRef.current = coreVisibilityAtProgress(progress);
     if (backdropRef.current) {
       backdropRef.current.style.background = backdropGradientAtProgress(progress);
     }
@@ -186,6 +218,17 @@ export function CoreScene() {
   const applyProgress = React.useCallback(
     (progress: number) => {
       applyImperative(progress);
+      // Scene 3 swaps copy on every *beat*, not just on the scene change, so
+      // the caption tracks the run rather than sitting on one sentence for a
+      // third of the page. Still discrete — this fires seven times across the
+      // scene, not once per scroll frame.
+      setRunBeat((previous) => {
+        const next =
+          sceneIndexAtProgress(progress) === RUN_SCENE_INDEX
+            ? runBeatIndexAtProgress(progress)
+            : null;
+        return next === previous ? previous : next;
+      });
       setSceneIndex((previous) => {
         const next = sceneIndexAtProgress(progress);
         return next === previous ? previous : next;
@@ -256,9 +299,24 @@ export function CoreScene() {
   // scrub and so never advances `sceneIndex` past its initial value.
   const activeIndex = reducedMotion ? sceneIndexAtProgress(STILL_PROGRESS) : sceneIndex;
   const active = SCENES[activeIndex];
+  // The run film's own beat, when scene 3 is playing. `run-film.ts` stays the
+  // single script for this run — the captions below are its sentences, not a
+  // second set written to match.
+  const beat = runBeat === null || reducedMotion ? null : FILM_BEATS[runBeat];
 
   return (
     <div ref={rootRef} style={{ height: `${SCROLL_VH}vh` }} className="relative">
+      {/* The page's hero, in the first viewport of the scroll container.
+          Deliberately NOT inside the sticky stage: it scrolls up and away on
+          its own while the room stays stuck behind it, which is the whole
+          transition and costs no scroll listener to do. */}
+      <div
+        ref={heroRef}
+        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-screen items-start justify-center pt-28 sm:pt-32"
+      >
+        <HeroCopy />
+      </div>
+
       <div className="sticky top-0 h-screen w-full overflow-hidden">
         <div
           ref={backdropRef}
@@ -297,16 +355,24 @@ export function CoreScene() {
               }
             }}
           >
-            {/* Overhead daylight. One key light with a shadow map, a warm
-                bounce from below standing in for the desk, and a hemisphere
-                fill so the backs of tilted cards never go black. No coloured
-                rim light anywhere — a cool or violet cast is exactly what made
-                the first version read as a generic AI page. */}
-            <hemisphereLight args={["#ffffff", "#d8d3c9", 1.15]} />
+            {/* Overhead daylight, and deliberately NEUTRAL.
+                
+                This is where a beige cast came from, and it is worth writing
+                down because nothing in the palette looked wrong: the key light
+                was #fffaf2, the fill #fff4e6 and the hemisphere ground #d8d3c9.
+                Every surface in the scene — near-white backdrop, white paper,
+                grey room — was being multiplied by a warm light and the whole
+                section read as beige while every hex value in the source said
+                otherwise. **Tint the lights and you tint everything.** If the
+                room ever looks warm again, check here before the palette.
+                
+                Still no coloured rim light: a cool or violet cast is exactly
+                what made the first version read as a generic AI page. */}
+            <hemisphereLight args={["#ffffff", "#e8e8ee", 1.15]} />
             <directionalLight
               position={[9, 22, 12]}
               intensity={2.1}
-              color="#fffaf2"
+              color="#ffffff"
               castShadow
               shadow-mapSize={[2048, 2048]}
               shadow-bias={-0.0006}
@@ -317,23 +383,43 @@ export function CoreScene() {
               shadow-camera-near={1}
               shadow-camera-far={90}
             />
-            <directionalLight position={[-12, -6, 8]} intensity={0.35} color="#fff4e6" />
+            <directionalLight position={[-12, -6, 8]} intensity={0.35} color="#f4f4f7" />
 
             <CameraRig progressRef={progressRef} pointerRef={pointerRef} damped={!reducedMotion} />
-            <DocumentField settleRef={settleRef} />
+            {/* The room first, so the documents lying on the desk have
+                something to cast their contact shadows onto. */}
+            <OfficeRoom progressRef={progressRef} />
+            <DocumentField settleRef={settleRef} progressRef={progressRef} />
+            {/* Edges before the core in the tree, but neither depends on the
+                other's order — both read the same refs and resolve their own
+                geometry each frame. */}
+            <ConnectionEdges progressRef={progressRef} settleRef={settleRef} />
+            <AiCore intensityRef={coreRef} />
+            <ClusterLabels progressRef={progressRef} />
+            <MarkCollapse progressRef={progressRef} />
           </Canvas>
         )}
 
         {/* Copy. Keyed on the scene so React swaps the node and the CSS
             transition replays — cross-fading two absolutely-positioned blocks
             would need both mounted and is not worth the layout cost. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-6 pb-16 sm:pb-20">
-          <div key={active.id} className="mx-auto max-w-3xl text-center [animation:mk-scene-copy_700ms_ease-out]">
+        <div
+          ref={captionRef}
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-6 pb-16 sm:pb-20"
+          style={{ opacity: 0 }}
+        >
+          <div
+            key={beat ? `beat-${runBeat}` : active.id}
+            className="mx-auto max-w-3xl text-center [animation:mk-scene-copy_700ms_ease-out]"
+          >
             <p className="text-[0.6875rem] font-semibold tracking-[0.18em] text-mk-ink/45 uppercase">
-              {active.eyebrow}
+              {/* During the run the eyebrow carries the live run status, which
+                  is a real `WorkflowRun.status` string — "Waiting for approval"
+                  is the product's own word for what is on screen. */}
+              {beat ? runStatusLabel(beat.runStatus) : active.eyebrow}
             </p>
             <p className="mt-3 text-balance text-2xl leading-snug font-medium text-mk-ink sm:text-[2rem]">
-              {active.line}
+              {beat ? beat.caption : active.line}
             </p>
           </div>
         </div>

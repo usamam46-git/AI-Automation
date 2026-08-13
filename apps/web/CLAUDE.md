@@ -415,20 +415,20 @@ hooks: `use-media-query.ts`, `use-gsap-reveal.ts`.
   through the standalone CSS `scale` / `translate` properties instead, because
   the pointer parallax writes `x`/`y` to `transform` continuously. A card that
   silently snaps to full size on first mouse move is this bug.
-- **The run film's beat state is React; its progress bar is not.** One
-  ScrollTrigger scrubs 0→1; `onUpdate` writes the continuous progress straight
-  to the DOM and only calls `setState` when the discrete beat index actually
-  changes. Putting the float into state re-renders the tree every scroll frame.
-- **The film pins on desktop only.** Below `lg` the same trigger runs unpinned,
-  because a pin fights a phone's collapsing address bar — every collapse is a
-  resize, every resize re-measures the pin. With `prefers-reduced-motion` no
-  trigger is created at all and the stepper buttons are the only control, which
-  is why they are real `<button>`s.
+- **The 2D run film is gone; `lib/run-film.ts` is not.** `run-film.tsx` and
+  `run-inspector.tsx` were deleted when the 3D scene took over the centrepiece
+  slot (2026-08-13). The *module* was deliberately kept: its beat list is the
+  script the 3D run scene plays. See the 3D-scene section below.
 - **The film is fiction that must stay technically true.** `lib/run-film.ts`
   uses real `WorkflowRun` statuses and its tests pin the load-bearing invariant:
   on the approval beat `approval_1` is `waiting` while `post_to_erp` is still
-  `pending`. If that ever flips, the film is claiming the ERP was written to
-  before a human approved — the exact opposite of the page's argument.
+  `pending`. If that ever flips, the page is claiming the ERP was written to
+  before a human approved — the exact opposite of its argument. The 3D scene now
+  renders that invariant directly as an unwritten ledger card.
+  Its `FILM_NODES` / `beatIndexAtProgress` exports are no longer used by any
+  component — they survive because `run-film.test.ts` covers them and because a
+  future run-detail surface is the obvious consumer. Do not prune them without
+  checking that test.
 - **No invented social proof.** The reference layout's star rating is replaced
   by capability facts, because the product has not shipped and any rating would
   be fabricated. Keep it that way.
@@ -467,130 +467,351 @@ hooks: `use-media-query.ts`, `use-gsap-reveal.ts`.
   across every section. The responsive classes and the `lg`-gated pin are
   reasoned, not observed — check them on a real device before launch.
 
-## 3D scene — "The Company Comes Alive" (in progress, started 2026-08-13)
+## 3D scene — "The Company Comes Alive" (all 5 phases done, 2026-08-13)
 
-A four-scene scroll-scrubbed WebGL narrative that will **replace `run-film.tsx`**
-as the landing page's centrepiece. Built in phases in an isolated lab route;
-**not yet wired into `app/(marketing)/page.tsx`** — the live landing page is
-untouched so far.
+A scroll-scrubbed WebGL narrative that is now **the landing page's opening**, and
+that replaced both the sky-gradient hero and `run-film.tsx`. Verified in a
+browser at every scene.
 
-Files: `lib/{scene-script,document-cards}.ts` (both vitest-covered),
-`components/marketing/scene/{core-scene,document-field,document-texture}.tsx`,
-and the throwaway route `app/(marketing)/lab/core/page.tsx`. `ai-core.tsx`
-survives from the rejected first version and **needs redesign** — a glowing
-nucleus is wrong in a lit room; nothing imports it today.
+**The page opens inside the office.** First paint is a room — a wall, a floor,
+and a desk with this company's paperwork lying on it — with the hero headline
+above it and the calls to action sitting on the desk. Scrolling lifts the
+documents off the surface and the four-scene narrative runs from there. The
+previous opening was a blue sky gradient with an aurora shader and a collage of
+floating UI cards; the product owner's call was that the page should start in
+the office instead. `hero.tsx`, `sky-backdrop.tsx`, `aurora-canvas.tsx` and
+`hero-collage.tsx` are **deleted**; the hero's words live on in
+`hero-copy.tsx`, unchanged, over the room.
 
-**Phase status: Phase 1 rebuilt in the new direction, NOT yet seen rendering.**
-The daylight rebuild typechecks, lints and passes **158 frontend tests** (35 of
-them over the scene and the document specs), but no frame of it has been
-verified in a browser — the automation lost its localhost permission mid-session.
-Treat the visual result as unproven until someone opens `/lab/core`.
-Phases 2–5 (edges, the run scene, clusters + mark collapse, integration) are not
-started.
+It **opens on an actual desk** — a surface with the company's paperwork lying on
+it, lit and casting real contact shadows — and the documents then lift off and
+disperse into the field. That opening is load-bearing rather than decorative: it
+gives the sequence a physical starting point a viewer already recognises, so the
+airborne field reads as *this company's work in the air* rather than as objects
+that were always floating. It is also the honest staging of the section's first
+sentence — the work is already happening, on a desk, right now.
 
-- **The scene is a DAYLIGHT ROOM, and this is settled — do not re-darken it.**
-  Warm studio grey ground (`#e8e6e1`-ish), white paper cards, near-black ink,
-  one lime accent, amber only on approval gates. **Nothing is emissive.**
-  The first version opened on the marketing hero's sky and descended into a
-  near-black void with a neon point-cloud core and indigo/violet objects. It was
+Files: `lib/{scene-script,document-cards}.ts` (both vitest-covered) and
+`components/marketing/hero-copy.tsx` and
+`components/marketing/scene/{core-scene,core-scene-section,office-room,
+document-field,document-texture,connection-edges,ai-core,cluster-labels,
+mark-collapse}.tsx`.
+
+**Deleted in Phase 5:** `components/marketing/{run-film,run-inspector}.tsx` and
+the throwaway route `app/(marketing)/lab/`. **`lib/run-film.ts` was kept** and is
+now load-bearing — see below.
+
+**228 frontend tests** (95 over `scene-script` alone); `tsc --noEmit`, `eslint`
+and `npm run build` clean.
+
+### The settled decisions — do not re-litigate these
+
+- **The palette is macOS light mode, and it is NEUTRAL.** `--mk-paper` is
+  #f5f5f7 — the system light background macOS itself uses — and `--mk-mist` is
+  #ececef. The scene\'s gradient stops are those same two tokens; keep them in
+  step. Greys here must never be warm: the page went through two rounds of
+  "why does this look beige" and warm greys were half the answer.
+- **THE LIGHTS WERE THE BEIGE, NOT THE PALETTE.** This is the one to remember.
+  The key light was `#fffaf2`, the fill `#fff4e6` and the hemisphere ground
+  `#d8d3c9`. Every surface — near-white backdrop, white paper, grey room — was
+  being multiplied by a warm light, so the whole section read as beige while
+  every hex value in the source said otherwise. Chasing it through the palette
+  found nothing, twice. **If the room ever looks warm again, check the lights in
+  `core-scene.tsx` before touching a single colour.**
+- **The hero copy is server-rendered and must stay that way.** It sits in the
+  page tree, not inside the `ssr: false` dynamic import — the scene cannot be
+  prerendered (it touches `window`, WebGL and ScrollTrigger), so putting the H1
+  inside it would take the page\'s largest text out of the initial HTML and make
+  a WebGL canvas the LCP element. Backdrop paints first, headline second, canvas
+  last.
+- **The hero scrolls away AND fades.** It is positioned in the first viewport of
+  the scroll container while the canvas behind it is `sticky`, so scrolling
+  lifts it off-screen for free. Scrolling alone is not enough though: a full
+  viewport of travel means the headline is still visible when the scene\'s own
+  caption arrives, and the page carries two competing blocks of copy.
+  `heroOpacityAtProgress` and `sceneCaptionOpacityAtProgress` share a handover
+  point so the crossfade is clean, and a test asserts both are never legible at
+  once.
+- **The room is a wall, a floor and a desk with a real front edge.** A single
+  plane read as paper on a light void. What makes a space legible is a floor, a
+  wall to close the distance, and a slab with visible **thickness and an apron**
+  under the front edge — an infinite plane has no edge and never becomes
+  furniture.
+- **The desk top is a full step darker than the wall, for legibility not taste.**
+  The documents on it are white; against a near-white surface they washed out to
+  unreadable. Paper needs something to be lighter *than*.
+- **The desk is real polished walnut, and it is the one warm thing in the
+  frame.** An earlier pass argued against wood on the grounds that a brown
+  rectangle is a foreign object on a near-white site, and built a grey desk
+  instead. That was wrong and the rendered result settled it: white paper on a
+  near-white desk had nothing to be lighter *than* and washed out completely.
+  The timber is what finally makes the documents read, and it gives the shot the
+  one note of material warmth that stops a near-white room looking like an empty
+  render. **The room around it stays strictly neutral** — the contrast is the
+  point, and a warm room plus a warm desk is where the beige came from.
+- **The grain is procedural (`wood-texture.ts`), and the polish is in the
+  MATERIAL not the map.** `MeshPhysicalMaterial` with a clearcoat over the grain
+  is what puts a soft specular sheen on the surface; the same texture on a
+  `MeshStandardMaterial` looks like printed laminate. Three things make wood
+  read as wood, in order: grain lines running one way with varied width and
+  spacing, **cathedral figure** (the stretched arcs of a growth ring — this is
+  what separates wood from "brown surface with stripes"), and slow tonal drift
+  so no two areas are the same value.
+- **The wood map must not tile.** Its left and right edges do not meet, so any
+  `repeat` above 1 puts a hard vertical seam straight down the middle of the
+  desk — the single most visible thing in the opening frame. One board across
+  the whole surface.
+- **The room fades with `depthWrite` ON, and that is a fix not a detail.** The
+  desk is a *box*: with depth writing off you see straight through its top face
+  into its own underside and far side, three layers of dark walnut blending
+  together. It read as the desk turning black the instant the first scroll
+  began. Writing depth is safe because the room is behind and below everything
+  else — the documents are opaque and draw first. A fading surface also stops
+  casting, or its shadow outlives it and leaves a dark rectangle lying on the
+  floor with nothing above it.
+- **The desk holds solid, then dissolves quickly** (`deskPresenceAtProgress`).
+  A long slow alpha fade on a solid wooden object spends most of its transition
+  as a half-transparent thing, which never looks like anything real. By the time
+  it starts the camera has already begun to climb, so the desk is leaving frame
+  anyway.
+- **The brand lime is deepened (#b9d94a / #94b52c, was #c8f536 / #a9d617).**
+  The original was an electric neon that worked on the old blue-gradient hero
+  and read as harsh against macOS-light greys and walnut — the two loudest
+  things on the page were the buttons. The hero's secondary button also moved
+  from `ink` to the `quiet` tone: a solid black pill beside a lime one is two
+  heavy buttons competing, and a secondary should not shout.
+- **The desk edge is a hard contrast line and the hero copy is spaced around
+  it.** Everything above it is on a light grey wall and reads normally;
+  anything below is grey text on dark walnut and is unreadable. The copy is
+  tuned so its **last line of text** clears the edge — the buttons may cross it
+  because they are opaque.
+- **The scene is a DAYLIGHT ROOM.** Near-white ground, white paper cards,
+  near-black ink, one lime accent, amber only on approval gates. **Nothing is
+  emissive.** The first version opened on the hero's sky and descended into a
+  near-black void with a neon point-cloud core and indigo/violet objects; it was
   **rejected by the product owner on sight**, for two reasons worth keeping
   written down: indigo-gradient space is the default look of every AI landing
   page, and an abstract particle field says nothing about back-office software.
-  If a future session finds itself reaching for a dark background, a coloured
-  rim light, bloom, or a glowing anything — that path has already been walked
-  and rejected. Only one piece of that version survives on disk —
-  `ai-core.tsx`, the point-cloud nucleus — and it is orphaned; the abstract
-  `node-field.tsx` was deleted before it was ever committed and is gone for
-  good. Nothing of the dark version is recoverable beyond that file.
-- **The objects are readable documents, not abstract solids. This is the whole
-  point of the scene.** `lib/document-cards.ts` holds real specs (invoice,
-  payslip, purchase order, leave request, approval request…) and
-  `document-texture.ts` draws each to a canvas that gets mapped onto a card.
-  The first version drew octahedrons, boxes and rings; it read as particles, and
-  a drifting polyhedron cannot tell a story. **Do not abstract these back into
+  If a future session reaches for a dark background, a coloured rim light, bloom,
+  or a glowing anything — that path has been walked and rejected.
+- **The objects are readable documents, not abstract solids.** This is the whole
+  point. `lib/document-cards.ts` holds real specs and `document-texture.ts` draws
+  each to a canvas mapped onto a card. **Do not abstract these back into
   geometry.**
-- **One company, one consistent set of facts.** The finance thread deliberately
-  reuses `run-film.ts`'s exact data — Acme Vendor LLC, `INV-2291`, `4,200.00`,
-  the `extract_invoice` requester — so scene 3 can follow *that specific
-  invoice* through extraction, the amount check, the approval hold and into the
-  ledger. `lib/document-cards.test.ts` pins the chain
-  (`PO-4471 → GR-2214 → INV-2291 → JE-99120`), that the PO, invoice, journal and
-  gate all agree on the amount, and that the gate reads `Waiting`. Change a
-  figure on one card and the tests will tell you which others must change too.
-- **Cards are physical: lit, shadow-casting, never self-lit.** `meshStandardMaterial`
-  with no emissive term, ACES tone mapping, one shadow-mapped key light plus a
-  hemisphere fill. A card that glows stops reading as paper and starts reading
-  as a screen.
+- **One company, one consistent set of facts.** The finance thread reuses
+  `run-film.ts`'s exact data — Acme Vendor LLC, `INV-2291`, `4,200.00`, the
+  `extract_invoice` requester. `document-cards.test.ts` pins the chain
+  (`PO-4471 → GR-2214 → INV-2291 → JE-99120`) and that the gate reads `Waiting`.
 - **A box takes six materials, and index 4 is the printed face.** BoxGeometry's
-  material order is +x, −x, +y, −y, +z, −z. A single material maps the document
-  onto all six faces, which puts mirrored body copy on the back of every card
-  and a stretched sliver of it down each edge.
-- **The camera path is constrained by legibility, not composition.** The cards
-  carry body copy, so the camera has to sit close enough to read the nearest
-  ones (~200px of screen height at the opening). An earlier path opened at z=62
-  to show the field whole; at that distance a card is 60px tall and the scene is
-  abstract again. Depth comes from the *spread* of the field, not from
-  retreating out of it.
+  order is +x, −x, +y, −y, +z, −z. One material maps the document onto all six
+  faces, putting mirrored body copy on the back and a stretched sliver down each
+  edge.
+- **No `@react-three/postprocessing`.** Still not a dependency. The scene is
+  physically lit rather than additive, so there is nothing for bloom to do.
+
+### The composition is computed and asserted, not eyeballed
+
+This is the largest thing Phase 1 added, and it exists because the first frame
+anyone actually looked at was wrong in three ways at once.
+
+- **The layout is composed at `LAYOUT_PROGRESS` (0.22), not at progress 0.**
+  Progress 0 is the desk. Composing the airborne field against the desk camera
+  would place it for a shot it is never seen in, so every rule — copy safe zone,
+  frame-edge, depth schedule — is evaluated at the first moment the field is
+  actually the subject. Tests must pass `LAYOUT_PROGRESS` too; several were
+  passing a literal `0` and silently measuring the desk.
+- **`projectAtProgress` / `unprojectAtProgress` are real camera maths in a pure
+  module.** The layout composes the opening frame by projecting candidate card
+  positions through the camera, so rules like "nothing behind the copy" are
+  *tested* rather than hoped for.
+- **Positions are sampled in SCREEN space and unprojected**, not sampled in world
+  space and hoped to land well. The region that is simultaneously near enough to
+  read, inside frame, clear of the copy and off the camera axis is a narrow
+  annulus; uniform world sampling finds it about once in a hundred tries and the
+  sampler simply failed to place its 17th card.
+- **A spherical shell projects to an annulus.** The original scattered field was
+  a shell, which is why the first frame had a hole through the middle and cards
+  packed into the corners. No seed fixes that; the distribution was the bug.
+- **The opening frame cannot hold the whole roster.** Twenty legible cards need
+  about half the frame once the copy block is excluded. `DEPTH_SCHEDULE` places
+  **12 of 20 in frame** and pushes the other 8 outside it. A card must be wholly
+  inside or wholly outside — **never straddling an edge**, which reads as a
+  rendering fault.
+- **Inside and outside are judged at DIFFERENT aspect ratios** (1.6 and 2.4). The
+  fov is vertical, so a wider window reveals more world horizontally: cards
+  parked off a 16:9 frame reappeared, clipped, in the corners of a 1512×798 one.
+- **Spacing scales with on-screen size** (`requiredGap`), and is measured on the
+  *drawn* size while frame-edge and copy collisions are measured on the
+  *drift-inflated* footprint. Mixing those up is how an early "cards are big
+  enough to read" assertion passed while every visible card was too small — the
+  inflation, not the card, was carrying it.
+- **`DRIFT_MARGIN` and the drift amplitudes in `document-field.tsx` must stay in
+  step.** The layout reserves screen space for exactly that excursion. `scale` is
+  drawn *before* placement for the same reason: a sampler that does not know a
+  card is 1.25× is wrong by a quarter.
+- **The hero reserves a SHAPE, not a rectangle.** `HERO_SAFE_ZONE` is the wide
+  upper band; `HERO_CTA_CHANNEL` is a narrow strip covering **only the last line
+  of small text**. Reserving one rectangle for the whole hero left the desk a
+  band 0.68 NDC tall to seat documents 0.8 NDC tall and exactly two fitted;
+  reserving space for the buttons too emptied the entire lower centre and put a
+  hole through the middle of the shot. The buttons are opaque pills — paper
+  behind them reads as buttons sitting on a desk, which is what they should look
+  like. **Text needs a clean background; a solid button does not.** This is also
+  why the proof facts were moved above the buttons: small grey text was the
+  lowest element and forced the reserved band far too deep.
+- **The desk and the airborne field get SEPARATE PRNG streams.** Both samplers
+  draw inside one loop, so with a single stream the number of attempts the desk
+  takes shifts every subsequent airborne draw — retuning the desk camera by two
+  units moved the airborne field and made a pinned card unplaceable. A change to
+  one composition must not silently break the other.
+- **A steep desk shot and a tall wall behind it cannot coexist**, and it is worth
+  knowing before retuning the opening camera. Camera pitch sets where the horizon
+  lands: at 40 degrees down the horizon is off the top of frame and there is no
+  wall to be seen, which is why the opening uses a shallow angle and pays for it
+  with foreshortened documents. Steeper means bigger, more readable paper and no
+  room; shallower means a room and smaller paper.
+- **`NAV_SAFE_TOP` (0.76 NDC) keeps authored layouts out from under the floating
+  nav pill**, which is drawn over the canvas on every frame of this page. The
+  desk shot put its back row of documents directly beneath it. The rule is
+  deliberately asymmetric — only the top of frame has furniture in it.
+- **Foreshortening applies to SPACING, not to framing.** A card lying flat on
+  the desk presents about two thirds of its height to the camera but its *full
+  width*. `framing` derives the horizontal half-extent from `radiusY`, so
+  handing it a flattened radius under-reports width by a third and documents get
+  sliced by the left and right frame edges. Framing uses the upright
+  (conservative) footprint; only the neighbour test uses the flattened one.
+- **Desk documents are allowed to overlap** (`DESK_OVERLAP`, half the airborne
+  gap). Paper on a desk overlaps, and that is what makes it read as a desk in
+  use rather than as a filing system. Spacing the desk with the *upright*
+  footprint and the airborne gap seated exactly two documents on the whole
+  surface.
+- **When the visible desk is full, the rest go off to the SIDES, not further
+  back.** Pushing them deeper puts them near the top of frame where they land in
+  the straddle band, get rejected, and the sampler exhausts its attempts and
+  throws.
+- **`COPY_SAFE_ZONE` is ±0.46 NDC**, derived from the copy block being
+  `max-w-3xl` (768px) and centred. It was ±0.62 first, which left near cards
+  nowhere to go.
+
+### The clusters, the run, and the ending
+
+- **Cluster members sit on a RING, not a jittered cloud.** A card is 4 world
+  units wide; five scattered inside a ±4.5 box *must* overlap, and the settled
+  graph read as four piles of paper. `clusterRadius` divides out
+  `CLUSTER_RING_SQUASH` or the top and bottom of each ring still touch.
+- **The four clusters are a balanced 2×2, not a diamond.** A diamond puts one
+  cluster at bottom centre — exactly where the copy sits.
+- **Scene 2 pulls the camera BACK, it does not push in.** Moving to z=19 while
+  the field was still ninety units wide put the viewer inside the web: every edge
+  became a scaffolding pole and nothing read as a connection.
+- **Scene 3 is `run-film.ts`'s beat list mapped onto scroll — not a second
+  script.** This is why that module was kept rather than deleted. `runBeat*`,
+  `erpWrittenAtProgress` and `heldAtGateAtProgress` all derive from
+  `nodeStatesAtBeat`, so the scene cannot drift from the film's own tests.
+- **The load-bearing invariant is now a VISUAL fact.** `run-film.ts` pins that
+  `post_to_erp` is `pending` while `approval_1` waits. In 3D that drives which
+  *printing* of the ledger card renders: at the hold **JE-99120 has no debit, no
+  credit and no period, and is stamped NOT POSTED / Awaiting approval**. When the
+  gate clears the figures appear. If this ever inverts, the scene is showing the
+  ERP being written to before a person approved.
+  Note the ledger therefore reads NOT POSTED from the *first* frame of the page,
+  before the run has been introduced. That is deliberate and literally true —
+  nothing has been posted yet — and it makes the fill-in at the tool beat a
+  payoff. Do not "fix" it by showing the ledger written and then blanking it;
+  un-writing a ledger is worse.
+- **Scene 3 recedes the rest of the room** (`documentPresenceAtProgress`) and
+  **stages the run's five documents in execution order** (`RUN_STAGE`). The first
+  version of the hold had eleven unrelated cards in shot with the caption running
+  across an invoice. A scene that says "here is one run" should not show the whole
+  company at the same time. Receded cards drop `depthWrite` — a faded card that
+  still writes depth punches a hole in what is behind it.
+- **The ending collapses into the Orkest mark, and the approval gates land in the
+  OPEN MIDDLE NODE.** `MARK_NODES` is derived from `orkest-mark.tsx`'s 24×24
+  viewBox so the two cannot drift. The open centre *is* the human-approval step,
+  so the two approval requests in the room are exactly what belongs there — the
+  mark in the nav turns out to be a picture of what the visitor just watched.
+- **`coreIntensityAtProgress` vs `coreVisibilityAtProgress` are deliberately
+  separate.** Ignition never dims (the core does not stop reasoning); only
+  visibility goes at the collapse.
+
+### Traps, including two that cost hours
+
 - **R3F does not keep your `uniforms` object by reference — the material gets a
-  clone.** This is the single most expensive trap here and it cost a long debug
-  session. A component that memoises a uniforms object and mutates
+  clone.** A component that memoises a uniforms object and mutates
   `myUniforms.uIntensity.value` every frame is writing to something nothing
-  renders. The failure is *completely silent* and looks exactly like a dead
-  render loop: shaders compile, meshes are in the scene, `useFrame` runs (367
-  frames, measured), and every uniform on the live material sits at its initial
-  value. Diagnosed by comparing object identity in the browser. **Treat the
-  `uniforms` prop as initial values only** and drive everything after mount
-  through a ref on the `<shaderMaterial>` itself, as `ai-core.tsx` does.
-- **Declare `precision` identically in BOTH shader stages.** Vertex defaults to
-  `highp`, fragment to `mediump`, so any uniform or varying named in both links
-  with mismatched precision, fails `VALIDATE_STATUS`, and draws nothing with
-  only a console warning. `highp` in both — scene coordinates reach ~80 units,
-  where mediump's ~0.03-unit resolution makes the field visibly jitter. The
-  shared `PRECISION` constant exists so the two cannot drift.
-- **The same no-backtick-in-GLSL rule as `aurora-canvas.tsx` applies**, for the
-  same reason: the shaders live in JS template literals.
-- **The scrub never enters React state.** Same rule the run film already
-  established. `onUpdate` writes progress into refs and one DOM style, and
-  `setState` fires only when the discrete scene index changes. `applyImperative`
-  is split from `applyProgress` specifically so the reduced-motion path can
-  compose its still frame without a `setState` inside an effect — the ESLint
-  rule `react-hooks/set-state-in-effect` is correct here; restructure rather
-  than suppress it.
-- **No `@react-three/postprocessing`.** Bloom is faked by the core's own
-  camera-facing additive disc — one transparent quad instead of ~200KB gzipped
-  and a full-screen multi-pass blur on a landing page. Revisit only if a later
-  phase genuinely cannot get there without a real pass.
-- **The core is built from points, not as a glowing orb**, and that is an
-  argument rather than a style: it is the same node-and-edge substance as the
-  rest of the world at high density, so it reads as computational. Its four
-  additive layers clip to flat white very easily — if you retune, check that
-  individual points stay legible through the bloom rather than fusing into a
-  disc.
-- **Approval nodes render as open rings**, deliberately the same open middle
-  node as `orkest-mark.tsx`, and amber like the `mutating` badge in
-  `badge.tsx`. Amber not red: a gate is normal, not an error. The mark, the
-  canvas node and the 3D object should not become three unrelated drawings.
-- **Verifying this under browser automation needs two dev-only handles**, and
-  they are why `window.__orkestScene` and `window.__orkestApplyProgress` exist
-  (both `NODE_ENV !== "production"` only). Automation runs the page in a
-  **background tab**, where `requestAnimationFrame` never fires — so GSAP's
-  ticker is frozen, ScrollTrigger never processes a scroll, and R3F never
-  renders. To inspect a chosen moment:
+  renders. The failure is *completely silent*: shaders compile, meshes are in the
+  scene, `useFrame` runs, and every uniform sits at its initial value. Treat the
+  `uniforms` prop as initial values only and drive everything through a ref on
+  the `<shaderMaterial>`.
+- **Declare `precision` identically in BOTH shader stages** or the program fails
+  `VALIDATE_STATUS` and draws nothing with only a console warning.
+- **Neither trap can currently fire: there is no custom shader left in the
+  scene.** The core, the edges and the mark are all stock `meshStandardMaterial`
+  driven by transforms and instanced matrices. That was cheaper *and* more
+  correct than the shader version. Keep it that way unless a phase genuinely
+  cannot be done without a pass.
+- **`react-hooks/immutability` correctly rejects mutating a memoised value from
+  `useFrame`.** Reaching `materials[4]` from a `useMemo` array and assigning
+  `.map` is an error. Reach the same object through the mesh ref
+  (`mesh.material as THREE.MeshStandardMaterial[]`) instead — same object, no
+  rule violation, and the rule is right that a memoised value should not be
+  rewritten from a frame loop.
+- **`LineBasicMaterial.linewidth` is ignored by every WebGL renderer.** Edges are
+  thin boxes so they can be one pixel thick *and* take light and cast shadow.
+- **Edges taper rather than fade**, because all chain edges share one material —
+  per-edge opacity would need per-edge materials.
+- **Cluster labels need `depthTest: false` and a `renderOrder`.** Without it a
+  card drifting in front slices a cluster name in half, which reads as a clipping
+  bug rather than as depth.
+- **Same no-backtick-in-GLSL rule as `aurora-canvas.tsx`** if a shader ever
+  returns.
+- **The scrub never enters React state.** `onUpdate` writes progress into refs and
+  one DOM style; `setState` fires only when the discrete scene index — or, in
+  scene 3, the discrete beat — changes. `applyImperative` stays split from
+  `applyProgress` so the reduced-motion path composes its still frame without a
+  `setState` inside an effect.
 
-  ```js
-  window.scrollTo(0, p * 3.2 * innerHeight);   // keep ScrollTrigger in agreement
-  __orkestApplyProgress(p);
-  for (let i = 0; i < 180; i++) __orkestScene.advance(performance.now());
-  ```
+### Verifying this under browser automation
 
-  All three lines are load-bearing. The real scroll must be set too, because
-  taking a screenshot forces a paint, which lets the ticker fire once and reset
-  progress from the actual scroll position. The ~180 frames are not decoration —
-  the camera is damped and one frame moves it a fraction of the way. R3F also
-  will not initialise until something forces a first paint, so take a throwaway
-  screenshot before the first `__orkestScene` access.
-- `app/(marketing)/lab/core/page.tsx` is **deleted in Phase 5**. It exists so
-  the scene can be broken and re-rolled without touching the shipping page.
+Automation runs the page in a **background tab**, where `requestAnimationFrame`
+never fires — GSAP's ticker is frozen, ScrollTrigger never processes a scroll,
+and R3F never renders. `window.__orkestScene` and `window.__orkestApplyProgress`
+exist for this (both `NODE_ENV !== "production"` only).
+
+```js
+// Derive the range from the DOM. A hardcoded multiple of the viewport (it was
+// 3.2 = (420vh - 100vh)/100) silently drifts the moment the window resizes,
+// and you land in the wrong scene without noticing.
+const root = [...document.querySelectorAll('div[style*="vh"]')]
+  .find(d => d.style.height?.includes('vh'));
+const top = root.getBoundingClientRect().top + scrollY;
+const range = root.getBoundingClientRect().height - innerHeight;
+
+window.scrollTo(0, Math.round(top + p * range));  // keep ScrollTrigger in agreement
+window.__orkestApplyProgress(p);
+// A SYNTHETIC clock. `advance(performance.now())` in a tight loop passes ~the
+// same timestamp 300 times, so a damped camera barely integrates and the frame
+// is not the one you asked for.
+let t = performance.now();
+for (let i = 0; i < 300; i++) { t += 16.7; window.__orkestScene.advance(t); }
+```
+
+All of it is load-bearing. The real scroll must be set too, because taking a
+screenshot forces a paint, which lets the ticker fire once and reset progress
+from the actual scroll position. R3F will not initialise until something forces a
+first paint, so **take a throwaway screenshot before the first `__orkestScene`
+access**.
+
+### Still unverified
+
+- **Any real mobile viewport.** Chrome zooms rather than reflows when resized
+  under automation here, so no breakpoint has been exercised. The composition
+  rules compose for desktop aspects (1.6–2.4); a phone is a different frame and
+  probably needs its own depth schedule.
+- **Motion in real time** at 60fps under a real scroll, and performance on
+  integrated graphics.
+- The floating nav pill overlaps cards in some frames. It reads acceptably but
+  has not been designed around.
 
 ## Tools registry page (2026-08-12)
 
