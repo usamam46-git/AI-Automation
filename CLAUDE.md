@@ -5,6 +5,19 @@ backend), `apps/web` (Next.js frontend), `Docs/ERP HR Financial System
 Automation Docs/` (the 7-volume engineering blueprint — the source of
 truth for architecture decisions).
 
+## Current sprint — read this first
+
+**`Docs/15-day-build-plan.md` is the active plan** (2026-08-14 → 2026-08-29).
+It states what is being built, in what order, the architecture decisions already
+settled, and the OpenAI budget model. Read it before proposing work on the
+knowledge base, RAG, retrieval or the demo workflows — several approaches are
+deliberately ruled out there with reasons, and re-deriving them wastes a day.
+
+The headline: **`knowledge_base` is the one module to build.** MinIO, both vector
+indexes on `document_chunks`, the `worker_documents` queue and `LLMClient.embed()`
+are already provisioned and unused. Keep the plan's progress log at the bottom
+updated as days complete.
+
 ## Before any non-trivial change
 
 Check the relevant blueprint volume in `Docs/ERP HR Financial System
