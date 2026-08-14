@@ -152,6 +152,14 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      # This queue runs document ingestion, which calls LLMClient.embed() — so it
+      # needs a key for exactly the same reason worker_workflow does. It was the
+      # one app service without it, and the failure mode is quiet: BYOK resolves
+      # from the DB (hence INTEGRATION_ENCRYPTION_KEY below, already present), but
+      # an org with no stored key falls back to settings.OPENAI_API_KEY, which
+      # would be empty here. Ingestion would then fail per-document, with nothing
+      # in the error pointing at compose.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-jwt}
       INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-7XWWZGvXxliGesghj6biPRpjyjNr7lwfWMlf2jbtxQI=}
