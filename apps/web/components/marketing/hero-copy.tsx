@@ -29,24 +29,40 @@ import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button
  * paper with a hairline. Lime survives where it still works: the nav pill and
  * the accent rule on every document.
  *
- * ## It is ink on paper now, not white on sky
+ * ## The type is nearly opaque ink, and that is a contrast requirement
  *
- * The old copy was white with a text-shadow, and every contrast decision on it
- * was tuned against a blue gradient — that whole contract is void here. On the
- * room's near-white wall the text is `--mk-ink` (#141414), which is 16:1 and
- * needs no shadow, no scrim and no envelope. The "Watch a run" button loses its
- * glass tone for the same reason — a frosted button needs something behind it
- * to frost. It takes the `quiet` tone rather than `ink`: a solid black pill
- * beside a lime one made two heavy buttons competing on a walnut desk, and the
- * secondary should not be shouting.
+ * This copy has been retuned twice for two different backgrounds. It began as
+ * white with a text-shadow over a blue gradient. It then became low-opacity ink
+ * over a modelled near-white wall, where `text-mk-ink/45` on a flat #f2f2f5
+ * surface is an elegant 7:1 and the docstring here claimed it needed "no
+ * shadow, no scrim and no envelope".
  *
- * ## The block is tight because the desk edge is a hard line
+ * **That claim is void over a photograph, and the failure mode is worth knowing:
+ * translucent ink has a contrast ceiling that no background can lift.** Ink at
+ * 45% reaches only ~3.4:1 even on pure white, so on the plate the second
+ * headline line measured 1.0:1 — literally invisible in its worst patch — and no
+ * amount of scrim could have fixed it. `text-mk-ink-soft` (#5c5f66) had the
+ * mirror problem: a mid-grey always finds a mid-tone in a photograph to vanish
+ * into, and it measured 1.0:1 at *every* wash strength tested.
  *
- * The wood starts a little over half way down the frame. Everything above that
- * line is on a light grey wall and reads normally; anything below it is grey
- * text on dark walnut and is simply unreadable. So the copy is spaced to keep
- * its **last line of text** above the desk edge — the buttons are allowed to
- * cross it because they are opaque.
+ * So the tones here are near-opaque (80/70/90/85%), which restores the visual
+ * hierarchy through weight rather than through transparency, and the plate
+ * carries a measured 45% wash for the rest. Both halves were needed; neither
+ * worked alone. The measured ratios are recorded in `apps/web/CLAUDE.md` — if
+ * you change a tone here or the wash there, re-measure per text line, because
+ * per element box flatters the numbers by including leading and ragged edges.
+ *
+ * The "Watch a run" button keeps the `quiet` tone rather than `ink`: two solid
+ * heavy pills side by side compete, and the secondary should not be shouting.
+ *
+ * ## The block clears the table edge
+ *
+ * The tabletop starts at 72% of frame (`PLATE_DESK_EDGE_NDC`). Everything above
+ * that is the blurred room and reads normally; the wood below carries the
+ * paperwork and must stay clean, so nothing here is allowed to reach it. The
+ * buttons are the lowest element and stop above the edge — unlike the previous
+ * plate, they no longer sit *on* the desk, because this table is a working
+ * surface with twenty documents on it rather than an empty band.
  *
  * ## The buttons are the lowest element, on purpose
  *
@@ -77,14 +93,14 @@ export function HeroCopy() {
 
   return (
     <div className="mx-auto max-w-3xl px-5 text-center">
-      <p className="mk-eyebrow text-mk-ink/50">Workflow automation for ERP, HR and Finance</p>
+      <p className="mk-eyebrow text-mk-ink/80">Workflow automation for ERP, HR and Finance</p>
 
       <h1 className="mk-display mt-4 text-[2.75rem] text-mk-ink sm:text-6xl lg:text-[4.25rem]">
         <span className="block">Automation that knows</span>
-        <span className="block text-mk-ink/45">when to ask</span>
+        <span className="block text-mk-ink/70">when to ask</span>
       </h1>
 
-      <p className="mx-auto mt-5 max-w-2xl text-[1.0625rem] leading-relaxed font-medium text-mk-ink-soft sm:text-[1.125rem]">
+      <p className="mx-auto mt-5 max-w-2xl text-[1.0625rem] leading-relaxed font-medium text-mk-ink/90 sm:text-[1.125rem]">
         Orkest runs your back-office workflows end to end — reading documents, calling your systems,
         closing the loop. Then it stops for a person before anything touches your ledger.
       </p>
@@ -93,7 +109,7 @@ export function HeroCopy() {
         {PROOF.map((item) => (
           <li
             key={item.label}
-            className="flex items-center gap-1.5 text-[0.8125rem] text-mk-ink-soft"
+            className="flex items-center gap-1.5 text-[0.8125rem] text-mk-ink/85"
           >
             <item.icon className="size-3.5 text-mk-lime-deep" aria-hidden />
             {item.label}

@@ -11,19 +11,26 @@ import { ClusterLabels } from "@/components/marketing/scene/cluster-labels";
 import { ConnectionEdges } from "@/components/marketing/scene/connection-edges";
 import { HeroCopy } from "@/components/marketing/hero-copy";
 import { OfficeRoom } from "@/components/marketing/scene/office-room";
+import { PLATE_OVERSCAN, RoomPlate } from "@/components/marketing/scene/room-plate";
 import { DocumentField } from "@/components/marketing/scene/document-field";
 import { MarkCollapse } from "@/components/marketing/scene/mark-collapse";
 import { FILM_BEATS, runStatusLabel } from "@/lib/run-film";
 import {
+  PLATE_PARALLAX_SCALE,
   SCENES,
   backdropGradientAtProgress,
   cameraAtProgress,
   coreVisibilityAtProgress,
   heroOpacityAtProgress,
+  keyLightWarmthAtProgress,
+  plateDefocusAtProgress,
+  platePresenceAtProgress,
+  plateScaleAtProgress,
   runBeatIndexAtProgress,
   sceneCaptionOpacityAtProgress,
   sceneIndexAtProgress,
   settleAtProgress,
+  swayScaleAtProgress,
 } from "@/lib/scene-script";
 
 /** Index of the run scene in `SCENES`. */
@@ -77,9 +84,16 @@ const RUN_SCENE_INDEX = 2;
  *  product sooner. This is the main pacing knob for the whole section. */
 const SCROLL_VH = 420;
 
-/** Where the scene sits when motion is reduced: mid-scene-2, the composed
- *  "everything is connected" frame rather than an empty opening one. */
-const STILL_PROGRESS = 0.4;
+/**
+ * Where the scene sits when motion is reduced.
+ *
+ * Was 0.4 — mid-scene-2 — on the reasoning that the composed "everything is
+ * connected" frame beat an empty opening one. The premise changed: the opening
+ * is no longer empty, it is a photograph of an office with this company's
+ * paperwork on the desk, and it is the best single frame on the page. A visitor
+ * who has asked for less motion should get the shot, not the diagram.
+ */
+const STILL_PROGRESS = 0;
 
 /** Probed once per page load — creating a throwaway context on every render
  *  would be wasteful, and the answer cannot change. */
@@ -129,9 +143,18 @@ function CameraRig({ progressRef, pointerRef, damped }: RigProps) {
     const { position, target } = cameraAtProgress(progress);
     const pointer = pointerRef.current ?? { x: 0, y: 0 };
 
-    // Pointer parallax. Small and proportional to distance so it reads as the
-    // scene having depth, never as the camera being yanked around.
-    const sway = 2.6;
+    /**
+     * Pointer parallax. Small and proportional to distance so it reads as the
+     * scene having depth, never as the camera being yanked around.
+     *
+     * Scaled down almost to nothing while the photographed room is on screen.
+     * A plate is a fixed viewpoint and cannot parallax with the camera, so at
+     * full sway the documents skate across a stationary tabletop on every mouse
+     * move — ~9% of the frame's width at that distance. `room-plate.tsx` is
+     * translated by the small residual that remains, which is what keeps the
+     * paper attached to the wood.
+     */
+    const sway = 2.6 * swayScaleAtProgress(progress);
     const desired = new THREE.Vector3(
       position[0] + pointer.x * sway,
       position[1] + pointer.y * sway * 0.6,
@@ -155,6 +178,89 @@ function CameraRig({ progressRef, pointerRef, damped }: RigProps) {
   return null;
 }
 
+/**
+ * The key light, matched to the window in the plate and then unmatched.
+ *
+ * ## Direction
+ *
+ * Light in `desk-room.jpg` comes through a window on the **left**: the sunlit
+ * parallelogram on the back wall, the rim on the plant, and every shadow in the
+ * frame agree on it. The key therefore sits upper-left and slightly toward the
+ * camera, so paper shadows fall right and away exactly as the chair's and the
+ * plant's do. Mismatched shadow direction is the single most reliable tell that
+ * something has been composited, and it costs nothing to get right.
+ *
+ * ## Colour, and the rule this appears to break
+ *
+ * `apps/web/CLAUDE.md` records "the lights were the beige, not the palette" as a
+ * hard-won conclusion. It was correct: a warm key over a near-white *modelled*
+ * room turned the section beige while every hex value in the source read
+ * neutral.
+ *
+ * That diagnosis does not transfer to a photographed room. Nothing here is a
+ * near-white modelled surface any more — the room is a plate and the only thing
+ * this light touches is paper. White light on white paper inside a visibly warm
+ * room is the composite tell again, in colour instead of direction.
+ *
+ * So the warmth is real but **bounded**: `keyLightWarmthAtProgress` reaches
+ * exactly zero at `LIFTOFF_END`, and a test asserts it stays there for the rest
+ * of the page. Scenes 2, 3 and 4 are lit precisely as neutrally as before. If
+ * the room ever looks warm past the liftoff, start here — but the rule is still
+ * in force everywhere it was ever about.
+ */
+function KeyLight({ progressRef }: { progressRef: React.RefObject<number> }) {
+  const lightRef = React.useRef<THREE.DirectionalLight>(null);
+  const warm = React.useMemo(() => new THREE.Color("#fff2e0"), []);
+  const neutral = React.useMemo(() => new THREE.Color("#ffffff"), []);
+
+  useFrame(() => {
+    const light = lightRef.current;
+    if (!light) return;
+    const warmth = keyLightWarmthAtProgress(progressRef.current ?? 0);
+    light.color.copy(neutral).lerp(warm, warmth);
+  });
+
+  return (
+    <directionalLight
+      ref={lightRef}
+      // Upper LEFT, angled toward the camera. Was [9, 22, 12] — upper right —
+      // which put every paper shadow on the opposite side from every shadow in
+      // the photograph.
+      position={[-16, 15, 9]}
+      // Raised from 2.1 when the key moved left, and the reason is arithmetic
+      // rather than taste: the old key at [9, 22, 12] was far steeper, and its
+      // direction dotted with a flat card's up-normal at 0.83 against this
+      // one's 0.63. Holding the intensity would have quietly dimmed every sheet
+      // by a quarter — the documents came out grey, and grey paper on a lit
+      // table is the thing the whole scene is trying not to look like.
+      intensity={2.7}
+      castShadow
+      shadow-mapSize={[2048, 2048]}
+      // Bias was -0.0006 across a 80-unit shadow camera, which pushed the
+      // contact shadows off the paper entirely. `normalBias` is the right tool
+      // for thin flat geometry — it offsets along the surface normal rather
+      // than in depth, so it kills acne on the cards without peter-panning the
+      // very shadows this scene depends on.
+      shadow-bias={-0.0001}
+      shadow-normalBias={0.02}
+      // Tightened from ±40 to the band the documents actually occupy at the
+      // opening. The same 2048² map over a third of the area is three times the
+      // shadow resolution exactly where the contact shadows have to sell the
+      // composite.
+      shadow-camera-left={-24}
+      shadow-camera-right={24}
+      shadow-camera-top={24}
+      shadow-camera-bottom={-24}
+      shadow-camera-near={1}
+      shadow-camera-far={60}
+      // The window in the plate is a large, soft source and its shadows are
+      // correspondingly soft. A crisp shadow edge under a sheet of paper would
+      // be the one object in frame lit by a different room.
+      shadow-radius={4}
+    />
+  );
+}
+
 export function CoreScene() {
   const reducedMotion = usePrefersReducedMotion();
 
@@ -162,6 +268,8 @@ export function CoreScene() {
   const backdropRef = React.useRef<HTMLDivElement>(null);
   const captionRef = React.useRef<HTMLDivElement>(null);
   const heroRef = React.useRef<HTMLDivElement>(null);
+  const plateRef = React.useRef<HTMLDivElement>(null);
+  const plateBlurRef = React.useRef<HTMLDivElement>(null);
 
   const progressRef = React.useRef(0);
   const settleRef = React.useRef(0);
@@ -177,6 +285,33 @@ export function CoreScene() {
   // no-WebGL branch is a complete section, so rendering it for one frame costs
   // nothing.
   const webgl = React.useSyncExternalStore(subscribeNever, hasWebGL, () => false);
+
+  /**
+   * The plate's transform: the push-in, plus the parallax that keeps the paper
+   * on the wood.
+   *
+   * Separate from `applyImperative` because it has **two** drivers. The scrub
+   * moves the push-in, but the parallax follows the pointer — and the camera it
+   * has to agree with is updated in `useFrame`, not on scroll. Writing this from
+   * `applyImperative` alone would leave the plate still while the camera swayed,
+   * which is the exact artefact `swayScaleAtProgress` exists to prevent, only
+   * reintroduced on the other axis. So the pointer handler calls it too.
+   */
+  const writePlateTransform = React.useCallback((progress: number) => {
+    const plate = plateRef.current;
+    if (!plate) return;
+    // `PLATE_OVERSCAN` is the material this translation moves within; without
+    // it the plate would drag its own edge into frame. The scale is applied
+    // about the desk edge (`transform-origin` on the element), so growing it
+    // does not slide the tabletop out from under the documents.
+    const pointer = pointerRef.current ?? { x: 0, y: 0 };
+    const swayed = PLATE_PARALLAX_SCALE * swayScaleAtProgress(progress);
+    const px = -pointer.x * swayed * 1.4;
+    const py = pointer.y * swayed * 0.8;
+    plate.style.transform =
+      `scale(${(plateScaleAtProgress(progress) * PLATE_OVERSCAN).toFixed(4)}) ` +
+      `translate3d(${px.toFixed(3)}%, ${py.toFixed(3)}%, 0)`;
+  }, []);
 
   /**
    * The imperative half: refs and one DOM write, no React state.
@@ -206,7 +341,25 @@ export function CoreScene() {
     if (backdropRef.current) {
       backdropRef.current.style.background = backdropGradientAtProgress(progress);
     }
-  }, []);
+    /**
+     * The photographed room's exit: opacity, a slow push-in, and the rack focus.
+     *
+     * Written straight to the DOM alongside the backdrop gradient, for exactly
+     * the same reason — this updates on every scroll frame and must never touch
+     * React state. The blurred twin's opacity is the focus pull; cross-fading
+     * two composited layers costs the compositor nothing, where re-evaluating a
+     * full-screen `filter` every frame would cost a repaint.
+     */
+    if (plateRef.current) {
+      const presence = platePresenceAtProgress(progress);
+      plateRef.current.style.opacity = String(presence);
+      plateRef.current.style.visibility = presence < 0.004 ? "hidden" : "visible";
+    }
+    if (plateBlurRef.current) {
+      plateBlurRef.current.style.opacity = String(plateDefocusAtProgress(progress));
+    }
+    writePlateTransform(progress);
+  }, [writePlateTransform]);
 
   /**
    * Writes one progress value everywhere it is consumed.
@@ -290,10 +443,13 @@ export function CoreScene() {
         x: (event.clientX / window.innerWidth) * 2 - 1,
         y: -((event.clientY / window.innerHeight) * 2 - 1),
       };
+      // The camera picks this up on its next frame; the plate is DOM and has no
+      // frame loop of its own, so it is moved here or it does not move at all.
+      writePlateTransform(progressRef.current ?? 0);
     };
     window.addEventListener("pointermove", onPointerMove, { passive: true });
     return () => window.removeEventListener("pointermove", onPointerMove);
-  }, [reducedMotion]);
+  }, [reducedMotion, writePlateTransform]);
 
   // Derived rather than stored for the reduced-motion path, which never runs a
   // scrub and so never advances `sceneIndex` past its initial value.
@@ -325,6 +481,12 @@ export function CoreScene() {
           style={{ background: backdropGradientAtProgress(0) }}
         />
 
+        {/* The photographed room, between the studio gradient and the canvas.
+            It is what the gradient is revealed *from* as the liftoff pulls
+            focus and fades it out. DOM rather than a texture, so it paints
+            before any shader compiles and survives a lost WebGL context. */}
+        <RoomPlate plateRef={plateRef} blurRef={plateBlurRef} />
+
         {webgl && (
           <Canvas
             className="absolute inset-0"
@@ -355,39 +517,39 @@ export function CoreScene() {
               }
             }}
           >
-            {/* Overhead daylight, and deliberately NEUTRAL.
-                
+            {/* Ambient, and deliberately NEUTRAL — this half of the rule is
+                unchanged and must stay that way.
+
                 This is where a beige cast came from, and it is worth writing
                 down because nothing in the palette looked wrong: the key light
                 was #fffaf2, the fill #fff4e6 and the hemisphere ground #d8d3c9.
                 Every surface in the scene — near-white backdrop, white paper,
                 grey room — was being multiplied by a warm light and the whole
                 section read as beige while every hex value in the source said
-                otherwise. **Tint the lights and you tint everything.** If the
-                room ever looks warm again, check here before the palette.
-                
+                otherwise. **Tint the lights and you tint everything.**
+
+                The KEY light is now warm for the duration of the plate, and
+                only for that duration — see `KeyLight`, which sets out why the
+                rule above still holds everywhere it was ever about. These two
+                stay neutral throughout, so the warmth has one home and one
+                ramp rather than being smeared across the rig.
+
                 Still no coloured rim light: a cool or violet cast is exactly
                 what made the first version read as a generic AI page. */}
             <hemisphereLight args={["#ffffff", "#e8e8ee", 1.15]} />
-            <directionalLight
-              position={[9, 22, 12]}
-              intensity={2.1}
-              color="#ffffff"
-              castShadow
-              shadow-mapSize={[2048, 2048]}
-              shadow-bias={-0.0006}
-              shadow-camera-left={-40}
-              shadow-camera-right={40}
-              shadow-camera-top={40}
-              shadow-camera-bottom={-40}
-              shadow-camera-near={1}
-              shadow-camera-far={90}
-            />
-            <directionalLight position={[-12, -6, 8]} intensity={0.35} color="#f4f4f7" />
+            <KeyLight progressRef={progressRef} />
+            {/* Fill, from the shadow side. Moved right when the key moved left:
+                a fill on the same side as the key fills nothing, and the point
+                of it is to keep the shadowed edge of a card from going to solid
+                black against warm oak. Neutral and weak, as before. */}
+            <directionalLight position={[13, 3, 10]} intensity={0.35} color="#f4f4f7" />
 
             <CameraRig progressRef={progressRef} pointerRef={pointerRef} damped={!reducedMotion} />
-            {/* The room first, so the documents lying on the desk have
-                something to cast their contact shadows onto. */}
+            {/* The shadow catcher first, so the documents lying on the
+                photographed desk have something to cast their contact shadows
+                onto. Those shadows are what weld 3D paper to a plate — without
+                them the cards are geometrically correct and still read as
+                stickers. */}
             <OfficeRoom progressRef={progressRef} />
             <DocumentField settleRef={settleRef} progressRef={progressRef} />
             {/* Edges before the core in the tree, but neither depends on the

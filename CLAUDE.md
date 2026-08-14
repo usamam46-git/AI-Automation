@@ -493,8 +493,34 @@ verified via a full read-only orientation pass — see note below.)
   composition rules compose for desktop aspects 1.6–2.4 and a phone likely needs
   its own depth schedule), and real-time motion/performance on integrated
   graphics.
+- **The landing scene's opening room became a PHOTOGRAPH on 2026-08-14**
+  (frontend only, no backend change). The modelled wall/floor/walnut desk is
+  replaced by `apps/web/public/desk-room.jpg`, composited as a DOM plate *under*
+  the transparent canvas by `components/marketing/scene/room-plate.tsx`. The
+  documents are still real WebGL geometry on a real solved plane, now casting
+  contact shadows onto an invisible `ShadowMaterial` catcher — `office-room.tsx`
+  is gutted to that one plane and `wood-texture.ts` is deleted.
+  The camera is **solved against the photograph, not eyeballed**: a luminance
+  scan measures the table's far edge at NDC -0.4463, the opening camera is held
+  exactly level (the plate has no keystoning), and six tests assert the match so
+  the wood and the paper cannot drift apart. Two real bugs were found and fixed
+  that way — an eyeballed `object-position` that left the documents floating
+  above the table, and a card-to-catcher gap so small that every contact shadow
+  landed underneath the card that cast it.
+  Two settled rules were knowingly amended, both recorded in apps/web/CLAUDE.md
+  with the reasoning: the key light is now **warm and from the left** for the
+  plate's lifetime only (ramping to neutral by `LIFTOFF_END`, so scenes 2–4 are
+  lit exactly as before), and the hero copy now carries a **measured** 45% wash
+  plus near-opaque type — translucent ink has a contrast ceiling no background
+  can lift, and it measured 1.0:1 over the photograph.
+  The first plate the product owner supplied was 736×414 and sharp-everywhere;
+  it was replaced mid-build with a 1000×661 shot whose background is
+  **optically** out of focus, which is what makes the whole approach work.
+  **241 frontend tests**; `tsc --noEmit`, `eslint` and `npm run build` clean, and
+  verified in a browser at progress 0, 0.085, 0.22, 0.70 and 1.0.
 - Next: verify the 3D scene on a real mobile viewport (the one thing it has
-  never been seen on — see apps/web/CLAUDE.md), wire `embed()` into a real
+  never been seen on — and now more important, since the plate is 1.51 aspect
+  and a phone crops it hard — see apps/web/CLAUDE.md), wire `embed()` into a real
   ingestion pipeline (the `knowledge_base`
   module is still models-only — chunking, OCR, and hybrid search are all unbuilt),
   `subgraph` handler, agent function-calling/ReAct (see the deferral note in

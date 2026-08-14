@@ -7,12 +7,17 @@ import {
   CLUSTER_CENTERS,
   CLUSTER_LABELS,
   CARD_REST_Y,
+  CARD_WORLD_HEIGHT,
+  DESK_FAR_Z,
+  DESK_FORESHORTEN,
+  DESK_NEAR_Z,
   DESK_Y,
   LIFTOFF_END,
+  PLATE_DESK_EDGE_NDC,
+  PLATE_DESK_EDGE_Z,
   MARK_NODES,
   CORE_ENDPOINT,
   COPY_SAFE_ZONE,
-  HERO_CTA_CHANNEL,
   HERO_SAFE_ZONE,
   LAYOUT_PROGRESS,
   LAYOUT_SEED,
@@ -44,6 +49,11 @@ import {
   isVisibleAtOpening,
   markCollapseAtProgress,
   markTargetFor,
+  plateDefocusAtProgress,
+  platePresenceAtProgress,
+  plateScaleAtProgress,
+  keyLightWarmthAtProgress,
+  swayScaleAtProgress,
   projectAtProgress,
   roomDepthAtProgress,
   runBeatAtProgress,
@@ -258,6 +268,26 @@ function inflateDeskFootprint(node: (typeof SCENE_NODES)[number]) {
     ...raw,
     radiusY: raw.radiusY * node.scale + 0.8 / (raw.depth * tanHalf),
   };
+}
+
+/**
+ * A desk document as actually painted — foreshortened, no drift inflation.
+ *
+ * The tabletop rules are measured on this rather than on the inflated upright
+ * footprint. A card lying flat presents ~42% of its height, and the upright
+ * footprint is more than twice as tall as the entire visible tabletop, so
+ * testing the far-edge rule against it would reject every possible placement.
+ */
+function drawnDeskFootprint(node: (typeof SCENE_NODES)[number]) {
+  const raw = projectAtProgress(node.desk, 0);
+  return { ...raw, radiusY: raw.radiusY * DESK_FORESHORTEN * node.scale };
+}
+
+/** Whether a card is seated on the visible tabletop, as opposed to pushed off
+ *  to the sides. Clear of both side edges at the narrowest composed aspect. */
+function seatedOnDesk(node: (typeof SCENE_NODES)[number]) {
+  const f = inflateDeskFootprint(node);
+  return Math.abs(f.x) * (1.78 / 1.6) + f.radiusY / 1.6 < 0.98;
 }
 
 /** The cards actually in frame at the opening — the field extends past it. */
@@ -979,23 +1009,46 @@ describe("the desk opening", () => {
   it("shows a deskful of documents, not a token few", () => {
     // The first version spaced the desk with the upright footprint and seated
     // exactly two documents on the whole surface.
-    const onScreen = SCENE_NODES.filter(
-      (node) => framing(inflateDeskFootprint(node)) === "inside",
-    );
-    expect(onScreen.length).toBeGreaterThanOrEqual(8);
+    expect(SCENE_NODES.filter(seatedOnDesk).length).toBeGreaterThanOrEqual(5);
   });
 
-  it("keeps the desk clear of the HERO copy and never slices a document", () => {
-    // The desk is the page's hero now, so the reserved band is the headline's
-    // (upper frame), not the scene caption's (lower frame).
+  it("never lets a document ride up over the photographed table's edge", () => {
+    // THE tabletop rule. Beyond this line the plate is chair, credenza and
+    // shelf — a document there is not on a desk, it is stuck to the furniture.
     for (const node of SCENE_NODES) {
-      const screen = inflateDeskFootprint(node);
-      expect(framing(screen), `${node.id} straddles the frame edge on the desk`).not.toBe(
-        "straddling",
-      );
-      if (framing(screen) === "inside") {
-        expect(intersectsHeroZone(screen), `${node.id} lands on the headline`).toBe(false);
-      }
+      if (!seatedOnDesk(node)) continue;
+      const drawn = drawnDeskFootprint(node);
+      expect(
+        drawn.y + drawn.radiusY,
+        `${node.id} crosses the table edge onto the chair`,
+      ).toBeLessThanOrEqual(PLATE_DESK_EDGE_NDC);
+    }
+  });
+
+  it("never slices a document on a SIDE frame edge", () => {
+    // Bottom cropping is natural; a sheet cut in half by the side of the
+    // viewport is not, and there is ample room in x without it.
+    for (const node of SCENE_NODES) {
+      const f = inflateDeskFootprint(node);
+      const clearOfSides = Math.abs(f.x) * (1.78 / 1.6) + f.radiusY / 1.6 < 0.98;
+      const wellOutside = Math.abs(f.x) * (1.78 / 2.4) - f.radiusY / 2.4 > 1.06;
+      expect(
+        clearOfSides || wellOutside,
+        `${node.id} straddles a side frame edge on the desk`,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps the desk clear of the hero copy", () => {
+    // Vacuous at the plate's framing — the hero bottoms out at NDC -0.18 and
+    // the tabletop starts at -0.75 — but retained so that moving the copy down
+    // can never silently start painting paper behind the headline.
+    for (const node of SCENE_NODES) {
+      if (!seatedOnDesk(node)) continue;
+      expect(
+        intersectsHeroZone(inflateDeskFootprint(node)),
+        `${node.id} lands on the headline`,
+      ).toBe(false);
     }
   });
 
@@ -1003,26 +1056,11 @@ describe("the desk opening", () => {
     // The composition the opening depends on: wall and headline above, desk and
     // paperwork below. A document drifting up into the headline breaks both.
     for (const node of SCENE_NODES) {
+      if (!seatedOnDesk(node)) continue;
       const screen = inflateDeskFootprint(node);
-      if (framing(screen) !== "inside") continue;
-      expect(screen.y + screen.radiusY, `${node.id} rises into the headline`).toBeLessThanOrEqual(
+      expect(screen.y, `${node.id} rises into the headline`).toBeLessThanOrEqual(
         HERO_SAFE_ZONE.minY,
       );
-    }
-  });
-
-  it("leaves a clear channel for the calls to action", () => {
-    // Documents may come up either side of the buttons but never behind them.
-    for (const node of SCENE_NODES) {
-      const screen = inflateDeskFootprint(node);
-      if (framing(screen) !== "inside") continue;
-      const radiusX = screen.radiusY / 1.78;
-      const overlapsChannel =
-        screen.x + radiusX > HERO_CTA_CHANNEL.minX &&
-        screen.x - radiusX < HERO_CTA_CHANNEL.maxX &&
-        screen.y + screen.radiusY > HERO_CTA_CHANNEL.minY &&
-        screen.y - screen.radiusY < HERO_CTA_CHANNEL.maxY;
-      expect(overlapsChannel, `${node.id} sits behind the buttons`).toBe(false);
     }
   });
 
@@ -1042,11 +1080,143 @@ describe("the desk opening", () => {
 
   it("keeps the desk out from under the floating nav", () => {
     // The nav pill is drawn over the canvas; readable paper beneath it is lost.
+    // Subsumed by the table-edge rule at the plate's framing (-0.75 is far below
+    // 0.78), but kept as the statement of intent it always was.
     for (const node of SCENE_NODES) {
-      const screen = inflateDeskFootprint(node);
-      if (framing(screen) !== "inside") continue;
-      expect(screen.y + screen.radiusY, `${node.id} runs under the nav`).toBeLessThan(0.78);
+      if (!seatedOnDesk(node)) continue;
+      const drawn = drawnDeskFootprint(node);
+      expect(drawn.y + drawn.radiusY, `${node.id} runs under the nav`).toBeLessThan(0.78);
     }
+  });
+});
+
+describe("the camera is matched to the plate", () => {
+  // These are the assertions the whole opening rests on. `desk-room.jpg` is a
+  // photograph: the 3D camera has to agree with the one that took it, or the
+  // documents sit in a different perspective from the table under them. Every
+  // number here was solved in closed form (see PLATE_DESK_EDGE_NDC), so a
+  // failure means a constant moved, not that a tolerance is too tight.
+
+  it("puts the photographed table's far edge exactly where it was measured", () => {
+    const edge = projectAtProgress([0, CARD_REST_Y, PLATE_DESK_EDGE_Z], 0);
+    expect(edge.y).toBeCloseTo(PLATE_DESK_EDGE_NDC, 2);
+  });
+
+  it("keeps the opening camera exactly level", () => {
+    // The plate shows no keystoning — it was shot with the sensor plane
+    // vertical — and the closed-form solve above assumes a level camera. A
+    // tilted camera over an untilted photograph is a mismatch nobody can name
+    // and everybody sees.
+    const { position, target } = cameraAtProgress(0);
+    expect(target[1]).toBeCloseTo(position[1], 6);
+  });
+
+  it("runs the paperwork off the bottom of frame, leaving no bare foreground", () => {
+    // The nearest card's near EDGE, not its centre. If the band stopped short
+    // of the bottom of frame there would be a strip of empty tabletop across
+    // the foreground, which reads as a rendering boundary rather than as a
+    // table — and it is also simply not what a working desk looks like.
+    const half = CARD_WORLD_HEIGHT / 2;
+    const yAt = (depth: number) => projectAtProgress([0, CARD_REST_Y, 14 - depth], 0).y;
+    const near = projectAtProgress([0, CARD_REST_Y, DESK_NEAR_Z], 0);
+    expect(yAt(near.depth - half)).toBeLessThan(-1);
+  });
+
+  it("agrees with DESK_FORESHORTEN about how flat a flat card looks", () => {
+    // The module's constant and the projection must not drift: the layout
+    // reserves screen space using the former and the renderer draws with the
+    // latter.
+    const tanHalf = Math.tan((46 * Math.PI) / 360);
+    const midZ = (DESK_NEAR_Z + DESK_FAR_Z) / 2;
+    const mid = projectAtProgress([0, CARD_REST_Y, midZ], 0);
+    const half = CARD_WORLD_HEIGHT / 2;
+
+    const yAt = (depth: number) => projectAtProgress([0, CARD_REST_Y, 14 - depth], 0).y;
+    const flatSpan = Math.abs(yAt(mid.depth + half) - yAt(mid.depth - half));
+    const uprightSpan = (2 * half) / (mid.depth * tanHalf);
+
+    expect(flatSpan / uprightSpan).toBeCloseTo(DESK_FORESHORTEN, 2);
+  });
+
+  it("fits a whole document inside the visible tabletop", () => {
+    // What the second plate bought, and the reason it replaced the first. The
+    // original photograph's table was a 0.25-NDC sliver where these two bounds
+    // crossed over — no sheet could be both wholly on the wood and wholly in
+    // frame, so nothing on the desk could be read. Here the range is wide.
+    const half = CARD_WORLD_HEIGHT / 2;
+    const yAt = (depth: number) => projectAtProgress([0, CARD_REST_Y, 14 - depth], 0).y;
+    const nearest = (() => {
+      for (let d = 5; d < 60; d += 0.001) if (yAt(d - half) >= -1) return d;
+      return Infinity;
+    })();
+    const furthest = (() => {
+      for (let d = 60; d > 5; d -= 0.001) if (yAt(d + half) <= PLATE_DESK_EDGE_NDC) return d;
+      return 0;
+    })();
+    expect(furthest).toBeGreaterThan(nearest);
+    // And the authored band sits inside that range at its far end, so no card
+    // the sampler can place will cross onto the bookcase.
+    expect(14 - DESK_FAR_Z).toBeLessThanOrEqual(furthest);
+  });
+
+  it("reads the paperwork at a legible size", () => {
+    // The camera height is the document-size knob (see CAMERA_KEYS[0]). A card
+    // is a fixed 4 world units wide, so this is the assertion that stops a
+    // future camera retune from silently shrinking the opening's subject back
+    // to unreadable ticks — the failure the first plate actually had.
+    const px = (z: number) => {
+      const s = projectAtProgress([0, CARD_REST_Y, z], 0);
+      return ((CARD_WORLD_WIDTH / (s.depth * Math.tan((46 * Math.PI) / 360) * 1.78)) / 2) * 1600;
+    };
+    expect(px(DESK_NEAR_Z)).toBeGreaterThan(260);
+    expect(px(DESK_FAR_Z)).toBeGreaterThan(150);
+  });
+});
+
+describe("the plate's exit", () => {
+  it("holds the room whole, then takes it away", () => {
+    expect(platePresenceAtProgress(0)).toBeCloseTo(1);
+    expect(platePresenceAtProgress(LIFTOFF_END)).toBeCloseTo(0);
+  });
+
+  it("pulls focus before it fades, never after", () => {
+    // A sharp image dissolving reads as a dissolve — as the room being deleted.
+    // Defocusing first is what makes it read as a camera leaving.
+    const half = LIFTOFF_END * 0.5;
+    expect(plateDefocusAtProgress(half)).toBeGreaterThan(1 - platePresenceAtProgress(half));
+  });
+
+  it("only ever pushes in", () => {
+    expect(plateScaleAtProgress(0)).toBeCloseTo(1);
+    let previous = 0;
+    for (let p = 0; p <= LIFTOFF_END; p += 0.002) {
+      expect(plateScaleAtProgress(p)).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = plateScaleAtProgress(p);
+    }
+    expect(plateScaleAtProgress(LIFTOFF_END)).toBeCloseTo(1.06);
+  });
+
+  it("returns the key light to neutral exactly as the room leaves", () => {
+    // The bounded half of the divergence from "the lights were the beige".
+    // Scenes 2-4 must be lit precisely as neutrally as they were before.
+    expect(keyLightWarmthAtProgress(0)).toBeCloseTo(1);
+    expect(keyLightWarmthAtProgress(LIFTOFF_END)).toBeCloseTo(0);
+    let previous = 2;
+    for (let p = 0; p <= 1; p += 0.005) {
+      expect(keyLightWarmthAtProgress(p)).toBeLessThanOrEqual(previous + 1e-9);
+      previous = keyLightWarmthAtProgress(p);
+    }
+    for (let p = LIFTOFF_END; p <= 1; p += 0.01) {
+      expect(keyLightWarmthAtProgress(p)).toBeCloseTo(0);
+    }
+  });
+
+  it("suppresses the pointer sway while the photograph is on screen", () => {
+    // Otherwise the documents skate across a stationary tabletop on every
+    // mouse move: the camera sways 2.6 units, which is ~9% of frame width there.
+    expect(swayScaleAtProgress(0)).toBeCloseTo(0.15);
+    expect(swayScaleAtProgress(LIFTOFF_END)).toBeCloseTo(1);
+    expect(swayScaleAtProgress(0.5)).toBeCloseTo(1);
   });
 });
 
