@@ -473,15 +473,19 @@ A scroll-scrubbed WebGL narrative that is now **the landing page's opening**, an
 that replaced both the sky-gradient hero and `run-film.tsx`. Verified in a
 browser at every scene.
 
-**The page opens inside the office.** First paint is a room — a wall, a floor,
-and a desk with this company's paperwork lying on it — with the hero headline
-above it and the calls to action sitting on the desk. Scrolling lifts the
-documents off the surface and the four-scene narrative runs from there. The
-previous opening was a blue sky gradient with an aurora shader and a collage of
-floating UI cards; the product owner's call was that the page should start in
+**The page opens inside the office.** First paint is a room with this company's
+paperwork lying on the desk, the hero headline above it, and the four-scene
+narrative running from there as scrolling lifts the documents off the surface.
+The previous opening was a blue sky gradient with an aurora shader and a collage
+of floating UI cards; the product owner's call was that the page should start in
 the office instead. `hero.tsx`, `sky-backdrop.tsx`, `aurora-canvas.tsx` and
-`hero-collage.tsx` are **deleted**; the hero's words live on in
-`hero-copy.tsx`, unchanged, over the room.
+`hero-collage.tsx` are **deleted**; the hero's words live on in `hero-copy.tsx`
+over the room.
+
+> **As of 2026-08-14 that room is a PHOTOGRAPH, not geometry.** Read
+> "The room is a PHOTOGRAPH now" below before changing anything in the opening —
+> it supersedes several rules in this section, which are struck through where
+> that applies.
 
 It **opens on an actual desk** — a surface with the company's paperwork lying on
 it, lit and casting real contact shadows — and the documents then lift off and
@@ -491,18 +495,153 @@ airborne field reads as *this company's work in the air* rather than as objects
 that were always floating. It is also the honest staging of the section's first
 sentence — the work is already happening, on a desk, right now.
 
-Files: `lib/{scene-script,document-cards}.ts` (both vitest-covered) and
-`components/marketing/hero-copy.tsx` and
-`components/marketing/scene/{core-scene,core-scene-section,office-room,
-document-field,document-texture,connection-edges,ai-core,cluster-labels,
-mark-collapse}.tsx`.
+Files: `lib/{scene-script,document-cards}.ts` (both vitest-covered),
+`public/desk-room.jpg`, `components/marketing/hero-copy.tsx` and
+`components/marketing/scene/{core-scene,core-scene-section,room-plate,
+office-room,document-field,document-texture,connection-edges,ai-core,
+cluster-labels,mark-collapse}.tsx`.
 
 **Deleted in Phase 5:** `components/marketing/{run-film,run-inspector}.tsx` and
 the throwaway route `app/(marketing)/lab/`. **`lib/run-film.ts` was kept** and is
-now load-bearing — see below.
+now load-bearing — see below. **Deleted 2026-08-14:**
+`components/marketing/scene/wood-texture.ts`, unreferenced once the modelled
+desk became a plate.
 
-**228 frontend tests** (95 over `scene-script` alone); `tsc --noEmit`, `eslint`
+**241 frontend tests** (108 over `scene-script` alone); `tsc --noEmit`, `eslint`
 and `npm run build` clean.
+
+### The room is a PHOTOGRAPH now (2026-08-14)
+
+The modelled room — wall, floor, procedural walnut desk, apron — is gone.
+`public/desk-room.jpg` is a real office shot, composited *under* the transparent
+canvas by `components/marketing/scene/room-plate.tsx`, and the documents are
+still real geometry sitting on a real solved plane above it. The brief was that
+the opening frame be genuinely realistic and that the realism survive the
+transition into the narrative.
+
+Read this section before touching the opening. Several of the rules below
+**supersede** ones in "The settled decisions" that follows, and each says so.
+
+- **`PLATE_DESK_EDGE_NDC` (-0.4463) is measured, not chosen, and everything
+  hangs off it.** A per-row luminance scan of the plate finds one dominant step
+  in the lower frame at y=478/661 — blurred dark interior (~95) to lit sharp oak
+  (~212). If the plate is ever replaced or cropped, **re-measure**: the camera
+  solve, the card band, the `object-position` and the wash all derive from it.
+  The scan is a dozen lines (mean row luminance across the centre 40%, then the
+  largest step in the lower half) and lives in the task history, not the repo.
+- **The opening camera is exactly LEVEL, and that is load-bearing.** Verticals in
+  the plate show no keystoning, so it was shot with the sensor plane vertical.
+  Level also collapses the projection to `y = -h / (d·tanHalf)`, which is what
+  makes `PLATE_DESK_EDGE_Z` and `DESK_FORESHORTEN` solvable in closed form
+  instead of eyeballed. A test asserts `target[1] === position[1]`.
+- **Camera height is the document-size knob.** `y = 0.25` puts the lens 5.2 units
+  above the paper (~1.3 document widths — a low product-shot camera, which is
+  what the plate's own framing implies). A card is a fixed 4 units wide and its
+  on-screen size is `~5.3/d`, so raising the camera shrinks every document. The
+  first pass at this plate kept the old `y = 1.5` and the paperwork came out too
+  small to read. A test pins the near/far on-screen widths.
+- **`object-position` and `transform-origin` are BOTH the desk-edge fraction
+  (72.31%), and this is the alignment.** `object-cover` crops to fill, so the
+  photographed edge slides with viewport aspect unless it is anchored — and the
+  3D camera projects the tabletop to a *fixed* NDC. Anchoring at the edge's own
+  height fraction makes it aspect-invariant: with vertical overflow `Hd - Hc`,
+  taking `f` of it off the top puts the edge at `f·Hd - f·(Hd - Hc) = f·Hc`.
+  **This was a real bug, not a hypothetical:** at an eyeballed `62%` the
+  documents floated ~0.08 NDC above the wood, standing on the furniture.
+- **Contact shadows are what weld paper to plate, and the gap is what makes them
+  visible.** `office-room.tsx` is now a single `ShadowMaterial` plane. The
+  catcher sits `CATCHER_DROP` (0.11) *below* the card rest plane — it was 0.02,
+  the right number for avoiding coplanar artefacts and the wrong one for
+  casting. The key light is ~50° off vertical, so a card `g` above the surface
+  displaces its shadow by `~1.2g`; at 0.02 that lands **underneath the card that
+  cast it** and the papers read as stickers. The cards did not move — moving
+  them would change `h` and invalidate the whole solve — so the gap is opened
+  downward, where a transparent plane is invisible. Also `shadow-normalBias`,
+  not a big `shadow-bias`: normal-offset is the right tool for thin flat
+  geometry and does not peter-pan the shadows the scene depends on.
+- **The key light is on the LEFT and warm, bounded to the plate's lifetime.**
+  This is a **deliberate, scoped divergence from "the lights were the beige"**
+  below. That rule diagnosed a warm key multiplying a near-white *modelled* room;
+  here the room is a photograph that is genuinely warm and the only thing the key
+  lights is paper. White light on white paper in a visibly warm room is the
+  composite tell in colour, as the wrong shadow direction is in geometry.
+  `keyLightWarmthAtProgress` reaches exactly 0 at `LIFTOFF_END` and a test holds
+  it there for the rest of the page — scenes 2–4 are lit exactly as neutrally as
+  before. The hemisphere and fill stay neutral throughout, so warmth has one home.
+- **Intensity went 2.1 → 2.7 when the key moved, and that is arithmetic.** The
+  old key at `[9,22,12]` dotted a flat card's up-normal at 0.83; this one at
+  `[-16,15,9]` at 0.63. Holding intensity dimmed every sheet by a quarter and the
+  documents came out grey. Grey paper is the thing the scene is trying not to be.
+- **The plate defocuses BEFORE it fades.** A sharp image dissolving reads as the
+  room being deleted — as a picture being removed. Pulling focus first and
+  drifting forward reads as a camera leaving a room, which is the whole point of
+  the handoff. Implemented as a cross-fade to a **pre-blurred twin** rather than
+  an animated `filter`: a full-screen filter re-evaluated every scroll frame is
+  the expensive way to do it and looks no better. A test asserts the ordering.
+- **The pointer sway is suppressed while the plate is up.** A photograph is a
+  fixed viewpoint and cannot parallax. At full sway (2.6 units) the documents
+  skate across a stationary tabletop by ~9% of frame width on every mouse move.
+  `swayScaleAtProgress` holds 0.15 while the room is present and the plate is
+  translated to match, inside a `PLATE_OVERSCAN` of 1.03 so no edge is revealed.
+  The transform has **two drivers** — the scrub and the pointer — so
+  `writePlateTransform` is called from both `applyImperative` and the pointermove
+  handler, not just the former.
+- **The grade is minimal because this plate does not need saving.** Its
+  background is **optically** out of focus while the tabletop is sharp, which
+  does three jobs at once: the room reads as really photographed, the upscale is
+  invisible where the image is already soft, and the copy lands on a low-detail
+  field. A synthetic edge-defocus was built for the *first* plate and removed
+  with this one — a synthetic blur over a real one is just a second blur, and it
+  softened the one region that must stay crisp. Grain stays, light (0.04): it
+  gives the WebGL documents and the photographed table one shared surface noise,
+  which is quietly a large part of why they sit together.
+- **The image is `unoptimized`, and `priority` is deprecated in Next 16.** The
+  optimizer would upscale server-side and re-encode — hundreds of KB to invent
+  detail not in the file. Use `loading="eager"` + `fetchPriority="high"`; the
+  `qualities` config now defaults to `[75]`, so a bare `quality={92}` would fail.
+- **The `loading` fallback renders the plate, frozen.** Identical markup at
+  identical geometry, so the swap when the scene chunk lands is invisible rather
+  than a flash of grey — and a visitor whose JS never arrives still gets the shot.
+
+#### Hero copy contrast over the plate — measured, and re-measure if you touch it
+
+`hero-copy.tsx` used to carry a docstring saying the copy "needs no shadow, no
+scrim and no envelope". True of a flat #f2f2f5 modelled wall; **void over a
+photograph**, where the copy crosses about three stops from the window to the
+bookcase. Two independent failures had to be fixed together:
+
+1. **Translucent ink has a contrast ceiling no background can lift.** Ink at 45%
+   reaches only ~3.4:1 on *pure white*, so `text-mk-ink/45` measured 1.0:1 — not
+   marginal, invisible. `text-mk-ink-soft` (#5c5f66) had the mirror problem: a
+   mid-grey always finds a mid-tone in a photograph to vanish into, and measured
+   1.0:1 at **every** wash strength tried. Tones are now 80/70/90/85%, so the
+   hierarchy comes from weight rather than transparency.
+2. **A 45% white wash on the plate**, whose lower stop is the table edge so it
+   dies exactly where the wood begins — hazing the timber would flatten the one
+   sharp region and veil the documents. It scales about the same anchor, so the
+   stop stays welded to the edge under the push-in.
+
+Measured on the shipped page at 1600×776, worst 8px patch **per text line**
+(`Range.getClientRects()`, vertically inset 18% for ascender slack — per element
+box flatters the numbers by including leading and ragged right edges):
+
+| Line | Ratio | Needs |
+|---|---|---|
+| Eyebrow, 11px | 4.75:1 | 4.5 |
+| Headline line 1, 68px | 6.22:1 | 3.0 (large) |
+| Headline line 2, 68px | 4.08:1 | 3.0 (large) |
+| Subhead, 18px | 4.59:1 | 4.5 |
+| Proof row, 13px | 5.66:1 | 4.5 |
+
+Every worst patch lands at x≈1000 — the dark bookcase edge. That is the spot to
+check first. **Do not eyeball this**: composite the plate with the wash into a
+canvas, resolve the computed colour through a 1×1 canvas (`getComputedStyle`
+returns `oklab()` here, and naively regexing its numbers reads the lightness as
+the red channel and flatters every ratio by ~10%), then sample per line.
+
+**The CTAs no longer sit on the desk.** That was a deliberate touch when the desk
+was an empty band; this table is a working surface with twenty documents on it,
+and the copy block now stops above the edge.
 
 ### The settled decisions — do not re-litigate these
 
@@ -518,6 +657,11 @@ and `npm run build` clean.
   every hex value in the source said otherwise. Chasing it through the palette
   found nothing, twice. **If the room ever looks warm again, check the lights in
   `core-scene.tsx` before touching a single colour.**
+  **Amended 2026-08-14:** the KEY light is now deliberately warm from progress 0
+  to `LIFTOFF_END`, to match the photographed room, and neutral for the whole
+  rest of the page. See the plate section above for why that does not
+  reintroduce this bug. The hemisphere and fill are unchanged and stay neutral
+  throughout. Everything this rule was originally about still holds.
 - **The hero copy is server-rendered and must stay that way.** It sits in the
   page tree, not inside the `ssr: false` dynamic import — the scene cannot be
   prerendered (it touches `window`, WebGL and ScrollTrigger), so putting the H1
@@ -532,16 +676,24 @@ and `npm run build` clean.
   `heroOpacityAtProgress` and `sceneCaptionOpacityAtProgress` share a handover
   point so the crossfade is clean, and a test asserts both are never legible at
   once.
-- **The room is a wall, a floor and a desk with a real front edge.** A single
+> **The five rules that follow are SUPERSEDED (2026-08-14).** The modelled room
+> and its procedural walnut desk were replaced by `desk-room.jpg` and
+> `wood-texture.ts` was deleted. They are kept because their *reasoning* is still
+> live — the paper-needs-something-to-be-lighter-than requirement is satisfied by
+> the plate's mid-tone oak (#c19f77), and the warm-desk-in-a-neutral-room balance
+> is now the plate's own. Do not rebuild any of this in three.js.
+
+- ~~**The room is a wall, a floor and a desk with a real front edge.**~~ A single
   plane read as paper on a light void. What makes a space legible is a floor, a
   wall to close the distance, and a slab with visible **thickness and an apron**
   under the front edge — an infinite plane has no edge and never becomes
   furniture.
-- **The desk top is a full step darker than the wall, for legibility not taste.**
-  The documents on it are white; against a near-white surface they washed out to
-  unreadable. Paper needs something to be lighter *than*.
-- **The desk is real polished walnut, and it is the one warm thing in the
-  frame.** An earlier pass argued against wood on the grounds that a brown
+- ~~**The desk top is a full step darker than the wall, for legibility not
+  taste.**~~ The documents on it are white; against a near-white surface they
+  washed out to unreadable. Paper needs something to be lighter *than*. *(Still
+  true, and still the reason the plate's tabletop works.)*
+- ~~**The desk is real polished walnut, and it is the one warm thing in the
+  frame.**~~ An earlier pass argued against wood on the grounds that a brown
   rectangle is a foreign object on a near-white site, and built a grey desk
   instead. That was wrong and the rendered result settled it: white paper on a
   near-white desk had nothing to be lighter *than* and washed out completely.
@@ -549,27 +701,29 @@ and `npm run build` clean.
   one note of material warmth that stops a near-white room looking like an empty
   render. **The room around it stays strictly neutral** — the contrast is the
   point, and a warm room plus a warm desk is where the beige came from.
-- **The grain is procedural (`wood-texture.ts`), and the polish is in the
-  MATERIAL not the map.** `MeshPhysicalMaterial` with a clearcoat over the grain
+- ~~**The grain is procedural (`wood-texture.ts`), and the polish is in the
+  MATERIAL not the map.**~~ `MeshPhysicalMaterial` with a clearcoat over the grain
   is what puts a soft specular sheen on the surface; the same texture on a
   `MeshStandardMaterial` looks like printed laminate. Three things make wood
   read as wood, in order: grain lines running one way with varied width and
   spacing, **cathedral figure** (the stretched arcs of a growth ring — this is
   what separates wood from "brown surface with stripes"), and slow tonal drift
   so no two areas are the same value.
-- **The wood map must not tile.** Its left and right edges do not meet, so any
+- ~~**The wood map must not tile.**~~ Its left and right edges do not meet, so any
   `repeat` above 1 puts a hard vertical seam straight down the middle of the
   desk — the single most visible thing in the opening frame. One board across
   the whole surface.
-- **The room fades with `depthWrite` ON, and that is a fix not a detail.** The
+- ~~**The room fades with `depthWrite` ON, and that is a fix not a detail.**~~ The
   desk is a *box*: with depth writing off you see straight through its top face
   into its own underside and far side, three layers of dark walnut blending
   together. It read as the desk turning black the instant the first scroll
   began. Writing depth is safe because the room is behind and below everything
   else — the documents are opaque and draw first. A fading surface also stops
   casting, or its shadow outlives it and leaves a dark rectangle lying on the
-  floor with nothing above it.
-- **The desk holds solid, then dissolves quickly** (`deskPresenceAtProgress`).
+  floor with nothing above it. *(The shadow-catcher still stops casting as it
+  fades, for the second half of this reason.)*
+- **The room holds solid, then dissolves quickly** (`platePresenceAtProgress`,
+  which reuses `deskPresenceAtProgress`'s curve).
   A long slow alpha fade on a solid wooden object spends most of its transition
   as a half-transparent thing, which never looks like anything real. By the time
   it starts the camera has already begun to climb, so the desk is leaving frame
@@ -581,10 +735,12 @@ and `npm run build` clean.
   from `ink` to the `quiet` tone: a solid black pill beside a lime one is two
   heavy buttons competing, and a secondary should not shout.
 - **The desk edge is a hard contrast line and the hero copy is spaced around
-  it.** Everything above it is on a light grey wall and reads normally;
-  anything below is grey text on dark walnut and is unreadable. The copy is
-  tuned so its **last line of text** clears the edge — the buttons may cross it
-  because they are opaque.
+  it.** Everything above it is the blurred room and reads normally; the wood
+  below carries twenty documents and must stay clean. **Amended 2026-08-14:**
+  the whole copy block now clears the edge, buttons included. They used to be
+  allowed to cross it because paper behind an opaque pill reads as a button
+  sitting on a desk — true when the desk was an empty band, wrong now that it is
+  a working surface. See the plate section above for the measured contrast.
 - **The scene is a DAYLIGHT ROOM.** Near-white ground, white paper cards,
   near-black ink, one lime accent, amber only on approval gates. **Nothing is
   emissive.** The first version opened on the hero's sky and descended into a
@@ -807,11 +963,22 @@ access**.
 - **Any real mobile viewport.** Chrome zooms rather than reflows when resized
   under automation here, so no breakpoint has been exercised. The composition
   rules compose for desktop aspects (1.6–2.4); a phone is a different frame and
-  probably needs its own depth schedule.
+  probably needs its own depth schedule. **The plate makes this sharper, not
+  softer:** `desk-room.jpg` is 1.51 aspect, so a portrait phone crops it hard,
+  and the hero-contrast numbers above were measured at 1600×776 only. The
+  desk-edge anchoring is aspect-invariant by construction, but the wash and the
+  copy's overlap with the dark bookcase are not — re-measure on a real device.
 - **Motion in real time** at 60fps under a real scroll, and performance on
-  integrated graphics.
+  integrated graphics. The plate adds one full-screen composited layer plus a
+  blurred twin; both are static-`filter` and should be free, but that is reasoned
+  rather than profiled.
 - The floating nav pill overlaps cards in some frames. It reads acceptably but
   has not been designed around.
+- **Whether the `loading` fallback is server-rendered.** Next 16's docs do not
+  state whether `dynamic(..., { ssr: false })` renders its `loading` component
+  during SSR. If it does, the plate is the LCP element and in the initial HTML;
+  if not, this is still strictly better than the grey block it replaced. Not
+  worth guessing at — check the served HTML if LCP ever needs the answer.
 
 ## Tools registry page (2026-08-12)
 

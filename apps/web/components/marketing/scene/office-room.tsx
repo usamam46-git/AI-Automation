@@ -4,200 +4,134 @@ import * as React from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-import { DESK_Y, FLOOR_Y, WALL_Z, deskPresenceAtProgress } from "@/lib/scene-script";
-import { woodTexture } from "@/components/marketing/scene/wood-texture";
+import {
+  CARD_REST_Y,
+  PLATE_DESK_EDGE_Z,
+  platePresenceAtProgress,
+} from "@/lib/scene-script";
 
 /**
- * The office the page opens in.
+ * The tabletop the documents rest on — invisible except for their shadows.
  *
- * This is the first thing a visitor sees, and it replaced a sky-gradient hero.
- * The brief was specific: not a gradient, not particles, but **a genuine office
- * with a desk that has the documents on it**, with the whole narrative starting
- * from there.
+ * ## This used to be the room, and no longer is
  *
- * ## Structure, not decoration
+ * It was a wall, a floor, a procedural walnut desk and an apron: a complete
+ * modelled office. `room-plate.tsx` replaced all of it with a photograph, so the
+ * only thing still needed in 3D is a surface for the paperwork to sit on and,
+ * far more importantly, to **cast onto**.
  *
- * A single floating plane read as paper on a light void rather than as a room.
- * What makes a space legible is the same short list every time: a floor, a wall
- * to close the distance, and a desk with a **visible front edge and an apron
- * below it**, so the eye gets a thickness and an under-side. The desk edge is
- * the single most load-bearing piece here — an infinite plane has no edge and
- * therefore never becomes furniture.
+ * ## The shadows are the whole job
  *
- * ## The room is neutral; the desk is walnut
+ * Contact shadows are what weld 3D paper to a photographed surface. Without
+ * them the cards are geometrically correct and still read as stickers — the eye
+ * reads "not attached" long before it can say why. Everything else about this
+ * component is in service of one plane that is invisible until something is
+ * above it.
  *
- * Wall and floor are macOS-light greys — the same `--mk-paper` / `--mk-mist`
- * family as the rest of the page, and strictly neutral. Warm greys here read as
- * beige on a page this light.
+ * `ShadowMaterial` renders *only* where a shadow falls, so the photographed oak
+ * shows through everywhere else. That is the reason it is used rather than a
+ * matched wooden plane: no attempt to reproduce the plate's tabletop can survive
+ * comparison with the plate's tabletop two pixels away.
  *
- * The **desk is real polished hardwood**, and it is the one warm thing in the
- * frame. An earlier pass argued against wood on the grounds that a brown
- * rectangle is a foreign object on a near-white site; that was wrong, and the
- * rendered result settled it. A grey desk under white paper gave the documents
- * nothing to be lighter *than*, and they washed out — the timber is what finally
- * makes the paperwork read. It also gives the shot the one note of material
- * warmth that stops a near-white room feeling like an empty render.
+ * ## Warm-neutral, not black
  *
- * The polish is in the **material, not the map**: `MeshPhysicalMaterial` with a
- * clearcoat over the grain, which is what puts a soft specular sheen across the
- * surface as the light moves. A `MeshStandardMaterial` with the same texture
- * looks like printed laminate.
- *
- * ## It leaves when the documents do
- *
- * The whole room fades on `deskPresenceAtProgress`, so by the time the field is
- * airborne there is nothing left of it. A wall still hanging behind a graph in
- * scene 2 would read as a backdrop someone forgot to remove.
+ * The plate's tabletop samples at #c0956e — warm mid-tone oak. A pure black
+ * shadow on it reads as a hole punched in the table rather than as an occlusion,
+ * because a real shadow there is still lit by everything in the room that is not
+ * the window. The colour below is a desaturated brown, and the opacity is low:
+ * the window light in the plate is soft and its own shadows (the plant's, the
+ * chair's) are correspondingly gentle. Matching their weight matters as much as
+ * matching their direction.
  */
 
-const WALL_COLOR = "#f2f2f5";
-const FLOOR_COLOR = "#e2e2e7";
-/** Tints the wood map. Left near-white so the texture carries the colour. */
-const DESK_TINT = "#ffffff";
-/** The edge and apron are the same timber a shade deeper, as a real desk's
- *  cut edge and shadowed under-panel are. */
-const DESK_EDGE_TINT = "#c9b49c";
+/** Sampled from the plate's tabletop and darkened, rather than black. */
+const SHADOW_COLOR = "#4a3826";
 
-/** Thick enough to read as a desk rather than as a sheet of card. */
-const DESK_THICKNESS = 0.55;
-const DESK_WIDTH = 62;
-const DESK_DEPTH = 48;
-/** The desk's centre in z. Its front edge lands just below the frame's lower
- *  third at the opening camera, which is what puts the documents in the lower
- *  half and leaves the upper half for the headline. */
-const DESK_CENTER_Z = -14;
+/**
+ * How dark the contact shadows go.
+ *
+ * Tuned against the plate's own shadows rather than to taste — the window light
+ * is soft and diffuse, so a hard dark shadow under a sheet of paper would be the
+ * one object in frame lit by a different room.
+ */
+const SHADOW_OPACITY = 0.3;
+
+/** The catcher runs from behind the photographed table's far edge to well past
+ *  the bottom of frame, so a card cropped by the viewport still lands its
+ *  shadow on something. Width likewise overruns the frame at every aspect. */
+const CATCHER_DEPTH = 30;
+const CATCHER_WIDTH = 90;
+
+/**
+ * How far the catcher sits below the cards' rest plane.
+ *
+ * ## Not a z-fight nudge — this is what makes the shadow visible at all
+ *
+ * It was 0.02, which is the right number for avoiding coplanar artefacts and
+ * the wrong number for casting. The key light comes from upper-left at roughly
+ * 50 degrees off vertical, so a card `g` above the surface displaces its shadow
+ * by about `1.2g`. At 0.02 that is 0.024 world units against a card four units
+ * wide — the shadow lands **underneath the card that cast it** and nothing is
+ * visible but a sliver at one edge. The papers read as pasted on, which is the
+ * exact failure this component exists to prevent.
+ *
+ * At 0.11 the displacement is ~0.13 units, roughly ten screen pixels at the
+ * opening camera: a soft edge of shadow emerging from the lower-right of each
+ * sheet, which is what paper on a lit desk actually looks like.
+ *
+ * The cards themselves did **not** move — `CARD_REST_Y` is load-bearing for the
+ * whole camera solve (it sets `h`, and every desk constant derives from it), so
+ * the gap is opened downward instead. A transparent plane 0.11 units below the
+ * paper is invisible; moving the paper 0.11 units up is not.
+ */
+const CATCHER_DROP = 0.11;
 
 export interface OfficeRoomProps {
   progressRef: React.RefObject<number>;
 }
 
 export function OfficeRoom({ progressRef }: OfficeRoomProps) {
-  const groupRef = React.useRef<THREE.Group>(null);
+  const meshRef = React.useRef<THREE.Mesh>(null);
 
-  const materials = React.useMemo(
-    () => ({
-      wall: new THREE.MeshStandardMaterial({
-        color: WALL_COLOR,
-        roughness: 1,
-        metalness: 0,
+  const material = React.useMemo(
+    () =>
+      new THREE.ShadowMaterial({
+        color: SHADOW_COLOR,
+        opacity: SHADOW_OPACITY,
         transparent: true,
-        opacity: 0,
+        // The catcher is the furthest thing back that is not the plate, and
+        // nothing is ever drawn behind it. Writing depth would let an invisible
+        // plane occlude the cards whose shadows it exists to receive.
+        depthWrite: false,
       }),
-      floor: new THREE.MeshStandardMaterial({
-        color: FLOOR_COLOR,
-        roughness: 1,
-        metalness: 0,
-        transparent: true,
-        opacity: 0,
-      }),
-      // Physical, not standard: the clearcoat is the polish. Without it the
-      // grain reads as a printed pattern rather than as a finished surface.
-      deskTop: new THREE.MeshPhysicalMaterial({
-        map: woodTexture(),
-        color: DESK_TINT,
-        roughness: 0.34,
-        metalness: 0,
-        clearcoat: 0.6,
-        clearcoatRoughness: 0.22,
-        transparent: true,
-        opacity: 0,
-      }),
-      deskEdge: new THREE.MeshPhysicalMaterial({
-        map: woodTexture(),
-        color: DESK_EDGE_TINT,
-        roughness: 0.42,
-        metalness: 0,
-        clearcoat: 0.4,
-        clearcoatRoughness: 0.3,
-        transparent: true,
-        opacity: 0,
-      }),
-    }),
     [],
   );
 
-  React.useEffect(() => {
-    const list = Object.values(materials);
-    return () => list.forEach((material) => material.dispose());
-  }, [materials]);
+  React.useEffect(() => () => material.dispose(), [material]);
 
   useFrame(() => {
-    const group = groupRef.current;
-    if (!group) return;
+    const mesh = meshRef.current;
+    if (!mesh) return;
 
-    const presence = deskPresenceAtProgress(progressRef.current ?? 0);
-    group.visible = presence > 0.002;
-    if (!group.visible) return;
-
-    // Written through the group's own materials rather than a memoised array —
-    // same reasoning as the cards: `react-hooks/immutability` is right that a
-    // memoised value should not be rewritten from a frame loop.
-    group.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      const material = mesh.material as THREE.MeshStandardMaterial | undefined;
-      if (!material || !("opacity" in material)) return;
-      material.opacity = presence;
-      /**
-       * `depthWrite` stays ON while fading. This is the fix for a real artefact.
-       *
-       * Turning it off made the desk turn into a murky grey-brown wash the
-       * instant the first scroll began: the desk is a **box**, so without depth
-       * writing you see straight through its top face into its own underside and
-       * far side, and three layers of dark walnut blended together. It read as
-       * the desk turning black.
-       *
-       * Writing depth is safe here because the room is behind and below
-       * everything else — the documents are opaque and draw first, so they are
-       * never occluded by it.
-       */
-      material.depthWrite = true;
-      // A fading surface must stop casting, or its shadow outlives it and
-      // leaves a dark rectangle lying on the floor with nothing above it.
-      mesh.castShadow = presence > 0.98;
-    });
+    // Fades in step with the plate. A shadow outliving the surface it was cast
+    // on is the same artefact the old wooden desk had — a dark rectangle lying
+    // in mid-air with nothing above it.
+    const presence = platePresenceAtProgress(progressRef.current ?? 0);
+    mesh.visible = presence > 0.002;
+    if (!mesh.visible) return;
+    (mesh.material as THREE.ShadowMaterial).opacity = SHADOW_OPACITY * presence;
   });
 
   return (
-    <group ref={groupRef} visible={false}>
-      {/* Back wall. Closes the distance so the room has an end; without it the
-          desk recedes into open space and the shot stops being interior. */}
-      <mesh position={[0, 8, WALL_Z]} material={materials.wall} receiveShadow>
-        <planeGeometry args={[220, 90]} />
-      </mesh>
-
-      {/* Floor. Mostly below frame at the opening camera, but it catches the
-          desk's shadow, and that shadow is what gives the desk somewhere to
-          stand. */}
-      <mesh
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, FLOOR_Y, -10]}
-        material={materials.floor}
-        receiveShadow
-      >
-        <planeGeometry args={[220, 160]} />
-      </mesh>
-
-      {/* The desk itself: a slab with real thickness, so it has a front edge.
-          Positioned so its TOP face sits exactly at DESK_Y, which is the plane
-          `scene-script.ts` lays the documents on. */}
-      <mesh
-        position={[0, DESK_Y - DESK_THICKNESS / 2, DESK_CENTER_Z]}
-        material={materials.deskTop}
-        castShadow
-        receiveShadow
-      >
-        <boxGeometry args={[DESK_WIDTH, DESK_THICKNESS, DESK_DEPTH]} />
-      </mesh>
-
-      {/* Apron below the front edge. A slab alone reads as a floating shelf;
-          the under-panel is what makes it a desk you could sit at. */}
-      <mesh
-        position={[0, DESK_Y - DESK_THICKNESS - 1.6, DESK_CENTER_Z + DESK_DEPTH / 2 - 1.4]}
-        material={materials.deskEdge}
-        castShadow
-      >
-        <boxGeometry args={[DESK_WIDTH - 3, 3.2, 0.7]} />
-      </mesh>
-    </group>
+    <mesh
+      ref={meshRef}
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[0, CARD_REST_Y - CATCHER_DROP, PLATE_DESK_EDGE_Z + CATCHER_DEPTH / 2]}
+      material={material}
+      receiveShadow
+      visible={false}
+    >
+      <planeGeometry args={[CATCHER_WIDTH, CATCHER_DEPTH]} />
+    </mesh>
   );
 }

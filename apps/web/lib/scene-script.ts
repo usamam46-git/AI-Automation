@@ -189,19 +189,84 @@ export const DESK_Y = -5;
  * breathing room so no camera angle can bring them back into contact.
  */
 export const CARD_REST_Y = DESK_Y + 0.05;
-/** The room the desk stands in. The floor is below it, the wall behind it, and
- *  both are what make the opening read as an office rather than as a surface
- *  floating in a void. */
-export const FLOOR_Y = -9.5;
-export const WALL_Z = -40;
-/** Near and far edges of the desk the opening camera can actually see. */
-const DESK_NEAR_Z = -1;
-/** The desk runs back nearly to the wall. Documents thin out with distance the
- *  way they do on a real surface, which is what fills the lower frame without
- *  stacking everything into the foreground. */
-const DESK_FAR_Z = -26;
-/** A card lying flat presents about two thirds of its height to this camera. */
-const DESK_FORESHORTEN = 0.66;
+/**
+ * The room the desk stands in — now a photograph, not geometry.
+ *
+ * `FLOOR_Y` and `WALL_Z` used to position a modelled floor and back wall in
+ * `office-room.tsx`. `room-plate.tsx` replaced that whole room with
+ * `public/desk-room.jpg`, so nothing renders at either coordinate any more and
+ * both were removed along with the meshes and the procedural walnut map.
+ */
+
+/* -------------------------------------------------------------------------- */
+/* The plate — the photographed room the page opens in                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where the photographed table's far edge lands, in NDC y.
+ *
+ * **Measured off the plate, not chosen.** `public/desk-room.jpg` is 1000×661; a
+ * per-row luminance scan of the lower frame finds one dominant step at y=478 —
+ * the blurred dark interior (luminance ~95) giving way to the lit, sharp oak
+ * tabletop (~212), a jump of 80 in four rows. `1 - 2 * 478 / 661 = -0.4463`.
+ *
+ * Everything below derives from this one number, which is why it is stated once
+ * and asserted in the tests rather than being spread across three files as tuned
+ * magic constants. **If the plate is ever replaced with a different photograph
+ * or a crop, re-measure it** — the whole opening composition hangs off it. The
+ * scan is a dozen lines: mean row luminance across the centre 40% of the frame,
+ * then the largest single step in the lower half.
+ */
+export const PLATE_DESK_EDGE_NDC = -0.4463;
+
+/**
+ * Where that edge sits in world space, given the opening camera.
+ *
+ * The opening camera is deliberately **level** (see `CAMERA_KEYS`), so the
+ * projection reduces to `y = -h / (d * tanHalf)` with `h = 0.25 - CARD_REST_Y`,
+ * i.e. 5.2. Solving `d = h / (0.4463 * tanHalf)` gives 27.44, so the
+ * photographed table's far edge sits at `z = 14 - 27.44`. Documents live in
+ * front of it; the shadow catcher spans up to it.
+ */
+export const PLATE_DESK_EDGE_Z = -13.44;
+
+/**
+ * Near and far bounds of the band documents may occupy on the photographed desk.
+ *
+ * ## A whole document fits, and that is what this plate bought
+ *
+ * The visible tabletop runs from NDC -0.4463 to -1.0 — **0.55 NDC, better than
+ * a quarter of the frame**. Requiring a card to be wholly inside it gives
+ * `d >= 14.87` (near end above the bottom of frame) and `d <= 24.82` (far end
+ * below the table edge), which is a wide, comfortable range.
+ *
+ * That was not true of the first plate, whose table was a 0.25-NDC sliver where
+ * the two constraints were mutually exclusive and every sheet had to be cropped.
+ * The documents there could not be read at the opening; here they can, which is
+ * the whole reason the plate was replaced.
+ *
+ * `DESK_NEAR_Z` still reaches slightly in front of the whole-fit range, so a
+ * sheet or two runs off the bottom of frame. That is deliberate and is what a
+ * photograph of a working desk looks like — the table continues toward the
+ * viewer and so does the paperwork. `placeOnDesk` enforces the asymmetry:
+ * never past the table's far edge, freely past the bottom.
+ */
+export const DESK_NEAR_Z = 1.0;
+export const DESK_FAR_Z = -10.3;
+/**
+ * How much of its height a card lying flat presents to the opening camera.
+ *
+ * `h * d / (d^2 - c^2)` at mid-band, with `c` the card's half depth — 0.284 at
+ * `d = 18.65`. A test pins this against the projection so the two cannot drift.
+ *
+ * It is a mid-band approximation: the true ratio runs 0.35 at the front of the
+ * band to 0.22 at the back, because a flat card's angular height falls off as
+ * `1/d^2` while an upright one falls off as `1/d`. Using the mid value
+ * *over*-estimates the height of the far cards, which is the safe direction —
+ * the far-edge rule then rejects placements that would in fact have been legal
+ * rather than letting one ride up onto the bookcase.
+ */
+export const DESK_FORESHORTEN = 0.284;
 /** How much closer than the airborne rule desk documents may sit. Below 1
  *  because paper on a desk overlaps. */
 const DESK_OVERLAP = 0.5;
@@ -218,15 +283,37 @@ export const LIFTOFF_END = 0.16;
 export const LAYOUT_PROGRESS = 0.22;
 
 export const CAMERA_KEYS: readonly CameraKey[] = [
-  // On the desk. Low and close, looking down across the surface at roughly 40
-  // degrees — steep enough that a document lying flat is still readable
-  // (foreshortening costs about a third of its height), shallow enough that the
-  // shot reads as a desk in a room rather than as a scanned page.
-  // Sitting at the desk, looking across it into the room. The wall fills the
-  // upper frame — which is where the hero copy goes — and the desk fills the
-  // lower. This is the first thing on the page, so it has to work as a hero
-  // composition and not only as a shot of a table.
-  { at: 0.0, position: [0, 1.5, 14], target: [0, 0.55, -11] },
+  /**
+   * Matched to the photograph, and **exactly level** — that is load-bearing.
+   *
+   * Verticals in `desk-room.jpg` run parallel to the frame edges: the shelf
+   * uprights, the window frame and the door of the credenza show no keystoning
+   * at all, which means the plate was shot with the sensor plane vertical. A
+   * tilted 3D camera over an untilted photograph is the kind of mismatch nobody
+   * can name but everybody sees — the papers would sit in a subtly different
+   * perspective from the table under them.
+   *
+   * Level also collapses the projection to `y = -h / (d * tanHalf)`, which is
+   * what makes `PLATE_DESK_EDGE_Z` and `DESK_FORESHORTEN` solvable in closed
+   * form instead of tuned by eye. The previous key looked down by 2.2 degrees
+   * (its comment claimed 40, which was never true of these numbers).
+   *
+   * ## The height is the document size
+   *
+   * `y = 0.25` puts the camera 5.2 world units above the paper — about 1.3
+   * document-widths, which is the physically right answer for this plate: a
+   * low product-shot camera sitting a hand's height above the table, which is
+   * exactly what the photograph's own framing implies. It is also the knob that
+   * sets how large the paperwork reads, since a card is a fixed 4 units wide
+   * and its on-screen size is `~5.3 / d`. At this height the near sheets land
+   * around 320px and the far ones around 175px on a 1600px viewport — an A4
+   * sheet on a table, which is what they are.
+   *
+   * Raising the camera pushes the whole band further away and shrinks every
+   * document; the first pass at this plate used the old `y = 1.5` and the
+   * paperwork came out too small to read.
+   */
+  { at: 0.0, position: [0, 0.25, 14], target: [0, 0.25, -11] },
   // Lifting: the camera rises with the documents and levels off.
   { at: LIFTOFF_END, position: [0, 4, 17], target: [0, -1, -2] },
   { at: LAYOUT_PROGRESS, position: [0, 3, 30], target: [0, 1, 0] },
@@ -899,24 +986,34 @@ function placeVisible(
 }
 
 /**
- * Places one document on the desk.
+ * Places one document on the photographed desk.
  *
- * Same rules as the airborne field, evaluated against the desk camera: nothing
- * behind the copy, nothing sliced by the frame edge, no two documents stacked
- * on the same spot. The surface continues past the viewport, so a document that
- * lands wholly outside frame is simply further down the desk.
+ * ## The rules are not the airborne field's rules
  *
- * The footprint used here is the upright one, which over-estimates: a card lying
- * flat is foreshortened to roughly two thirds of its height. Over-estimating is
- * the safe direction — it spaces the desk a little generously rather than
- * letting two documents overlap.
+ * The scattered field floats in open space, where a card sliced by any frame
+ * edge reads as a rendering fault. Paper on a table is the opposite case: the
+ * table continues toward the viewer, past the bottom of the shot, and so does
+ * the paperwork. The near sheets in any real photograph of a desk are cropped.
+ *
+ * So this sampler enforces a different pair of rules:
+ *
+ *  - **Never past the table's far edge.** A card whose top rises above
+ *    `PLATE_DESK_EDGE_NDC` is standing on the chair. This is the hard one, and
+ *    it is checked against the *upright* footprint (see below).
+ *  - **Freely past the bottom.** No lower-edge test at all. As the note on
+ *    `DESK_NEAR_Z` sets out, no whole document fits in the visible band anyway,
+ *    so forbidding this would place exactly zero documents.
+ *
+ * Left and right straddling is still rejected — the table runs the full width of
+ * the plate, but a sheet half-cut by the side of the *viewport* has no such
+ * excuse, and there is ample room in x without it.
  */
 function placeOnDesk(rand: () => number, placed: ScreenPoint[], scale: number): Vec3 | null {
   const tanHalf = Math.tan((CAMERA_FOV_DEG * Math.PI) / 360);
 
-  // Two passes. The first tries to seat the document in frame under the spacing
-  // rule; the second, once the visible surface is full, puts it further down the
-  // desk where it is simply out of shot. A desk does not stop at the viewport.
+  // Two passes. The first tries to seat the document on the visible tabletop
+  // under the spacing rule; the second, once that is full, puts it off to the
+  // sides where it is simply out of shot. A table does not stop at the viewport.
   for (let attempt = 0; attempt < 900; attempt += 1) {
     const crowdedPass = attempt < 650;
 
@@ -929,9 +1026,8 @@ function placeOnDesk(rand: () => number, placed: ScreenPoint[], scale: number): 
     const halfWidth = probe.depth * tanHalf * COMPOSE_ASPECT;
 
     // Once the visible surface is full, remaining documents go off to the
-    // sides. Sideways rather than further back: pushing them deeper puts them
-    // near the top of frame, where they land in the straddle band and are
-    // rejected, and the sampler runs out of attempts.
+    // sides. Sideways rather than further back: further back is now the table's
+    // own edge, and anything crossing it lands on the chair.
     const x = crowdedPass
       ? (rand() * 2 - 1) * halfWidth * 0.95
       : (rand() < 0.5 ? -1 : 1) * halfWidth * (1.5 + rand() * 0.8);
@@ -943,22 +1039,36 @@ function placeOnDesk(rand: () => number, placed: ScreenPoint[], scale: number): 
     /**
      * Foreshortening applies to SPACING only, not to framing.
      *
-     * A card lying flat presents about two thirds of its height to this camera
-     * — but its full width. `framing` derives the horizontal half-extent from
-     * `radiusY`, so handing it a flattened radius under-reports the width by a
-     * third and documents get sliced by the left and right frame edges. Framing
+     * A card lying flat presents ~42% of its height to this camera — but its
+     * full width. `framing` derives the horizontal half-extent from `radiusY`,
+     * so handing it a flattened radius under-reports the width by more than half
+     * and documents get sliced by the left and right frame edges. Framing
      * therefore uses the upright (conservative) footprint, and only the
      * neighbour test uses the flattened one.
      */
     const footprint = inflate(raw, scale);
     const drawn = scaled({ ...raw, radiusY: raw.radiusY * DESK_FORESHORTEN }, scale);
 
-    const frame = framing(footprint);
-    if (frame === "straddling") continue;
+    // Side edges only. `framing` also tests the top and bottom of frame, which
+    // is precisely what must not apply here, so the horizontal half of it is
+    // reproduced rather than reused.
+    const xAtNarrow = Math.abs(footprint.x) * (COMPOSE_ASPECT / NARROW_ASPECT);
+    const rxAtNarrow = footprint.radiusY / NARROW_ASPECT;
+    const xAtWide = Math.abs(footprint.x) * (COMPOSE_ASPECT / WIDE_ASPECT);
+    const rxAtWide = footprint.radiusY / WIDE_ASPECT;
+    const clearOfSides = xAtNarrow + rxAtNarrow < 0.98;
+    const wellOutside = xAtWide - rxAtWide > 1.06;
+    if (!clearOfSides && !wellOutside) continue;
 
-    if (frame === "inside") {
+    if (clearOfSides) {
       if (!crowdedPass) continue;
-      // The hero copy, not the scene caption — see `HERO_SAFE_ZONE`.
+      // The table's far edge. Measured on the drawn (foreshortened) footprint
+      // because that is what is actually painted — the upright inflation would
+      // reject the entire band.
+      if (drawn.y + drawn.radiusY > PLATE_DESK_EDGE_NDC) continue;
+      // Kept for the day the copy block moves. At the plate's framing the hero
+      // bottoms out at NDC -0.18 and the tabletop starts at -0.75, so the two
+      // cannot currently touch.
       if (intersectsHeroZone(footprint)) continue;
       // Papers on a desk overlap, and that is what makes it read as a desk in
       // use rather than as a filing system. The gap is a fraction of the
@@ -1184,6 +1294,110 @@ export function deskPresenceAtProgress(progress: number): number {
   const t = Math.min(Math.max(progress / LIFTOFF_END, 0), 1);
   return 1 - smoothstep(Math.min(Math.max((t - hold) / (1 - hold), 0), 1));
 }
+
+/* -------------------------------------------------------------------------- */
+/* The plate's exit — a camera leaving a room, not a room evaporating         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How present the photographed room is, 0–1.
+ *
+ * Shares `deskPresenceAtProgress`'s hold-then-fall shape, and for the same
+ * reason: a long slow alpha fade spends most of its duration showing a
+ * half-transparent thing, which never looks like anything real. The room holds
+ * whole while the paper climbs, then goes quickly.
+ */
+export function platePresenceAtProgress(progress: number): number {
+  return deskPresenceAtProgress(progress);
+}
+
+/**
+ * The rack focus, 0 (sharp) → 1 (defocused).
+ *
+ * ## Why the room defocuses instead of simply fading
+ *
+ * A photograph that cross-fades to a flat gradient tells the visitor the room
+ * was a picture, which is the one thing this opening must not do. Pulling focus
+ * and drifting forward is what a camera does when it stops attending to
+ * something, so the room reads as being *left*, not deleted.
+ *
+ * It runs **ahead** of the opacity fade — focus goes first, then the room goes —
+ * because the reverse order shows a sharp image dissolving, which reads as a
+ * dissolve. It also, conveniently, hides the plate's modest resolution exactly
+ * when it starts being scaled up.
+ */
+export function plateDefocusAtProgress(progress: number): number {
+  if (!Number.isFinite(progress)) return 1;
+  const t = Math.min(Math.max(progress / LIFTOFF_END, 0), 1);
+  return smoothstep(Math.min(t / 0.72, 1));
+}
+
+/**
+ * The slow push-in, 1 → 1.06.
+ *
+ * Small on purpose. Enough that the frame is alive and the move reads as a
+ * camera, not so much that the upscale becomes obvious or that the papers
+ * visibly slide against the tabletop while it happens.
+ */
+export function plateScaleAtProgress(progress: number): number {
+  if (!Number.isFinite(progress)) return 1.06;
+  const t = Math.min(Math.max(progress / LIFTOFF_END, 0), 1);
+  return 1 + 0.06 * smoothstep(t);
+}
+
+/**
+ * How warm the key light is, 1 (matching the plate) → 0 (neutral white).
+ *
+ * ## A deliberate, bounded divergence from a settled rule
+ *
+ * `apps/web/CLAUDE.md` records "the lights were the beige, not the palette" as a
+ * hard-won conclusion, and it was right: a warm key multiplying a near-white 3D
+ * room turned the whole section beige while every hex value in the source said
+ * neutral.
+ *
+ * That diagnosis does not transfer to a photographed room. The plate is
+ * genuinely warm — its tabletop samples at #c0956e — and the only surfaces the
+ * key light touches are the paper cards. Lighting white paper with pure white
+ * light inside a warm room is the classic composite tell: the paper reads as
+ * having been pasted on, because it is the one object in frame not sharing the
+ * room's light.
+ *
+ * The warmth is therefore tied to the plate's own lifetime and reaches exactly
+ * zero at `LIFTOFF_END`. Scenes 2, 3 and 4 are lit precisely as neutrally as
+ * they were before. **If the room ever looks warm past the liftoff, this
+ * function is the first place to look** — but the rule it appears to break is
+ * still in force everywhere it was ever about.
+ */
+export function keyLightWarmthAtProgress(progress: number): number {
+  if (!Number.isFinite(progress)) return 0;
+  const t = Math.min(Math.max(progress / LIFTOFF_END, 0), 1);
+  return 1 - smoothstep(t);
+}
+
+/**
+ * How much of the pointer parallax is allowed, 0–1.
+ *
+ * ## The papers would otherwise slide across the photograph
+ *
+ * `CameraRig` sways the camera by up to 2.6 world units with the pointer. At the
+ * tabletop that is ~9.4% of the frame's width — so with a fixed plate behind
+ * them, the documents would visibly skate across a stationary tabletop on every
+ * mouse move. A photograph is a fixed viewpoint and cannot parallax with them.
+ *
+ * A small residual is kept rather than freezing the frame outright: at 0.15 the
+ * excursion is ~1.4% of frame width, which the plate covers by being scaled
+ * 1.04 and translated to match (see `room-plate.tsx`), so nothing is ever
+ * revealed at its edges. Full sway returns as the room leaves.
+ */
+export function swayScaleAtProgress(progress: number): number {
+  const present = platePresenceAtProgress(progress);
+  return 1 - present * 0.85;
+}
+
+/** Fraction of the camera's sway the plate must be translated by to keep the
+ *  documents welded to the tabletop. Paired with the 1.04 scale-up in
+ *  `room-plate.tsx`, which is what gives it material to move within. */
+export const PLATE_PARALLAX_SCALE = 0.15;
 
 /**
  * How visible the scene's own caption is, 0–1.
