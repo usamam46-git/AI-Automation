@@ -68,6 +68,20 @@ psycopg2-binary = "^2.9.12"
 cachetools = "^7.1.6"
 httpx = "^0.27.0"            # outbound calls for http_request tool nodes; also the FastAPI test client
 
+# Document ingestion (Vol. 2 §3.4) — knowledge-base extraction and chunking.
+# pypdf is pure Python with no system libraries, which is what makes it usable
+# in `python:3.12-slim` without adding apt packages to the Dockerfile; pymupdf
+# is AGPL and ships binary wheels, pdfplumber drags in far more for no gain
+# here. There is deliberately NO OCR dependency — scanned documents are out of
+# scope (see the 15-day plan §4), so a PDF with no extractable text must fail
+# loudly rather than index zero chunks.
+pypdf = "^5.1.0"
+python-docx = "^1.1.2"
+# Token counting for chunk sizing. `cl100k_base` is the encoding the
+# text-embedding-3-* family uses, so a chunk measured here is a chunk the
+# embedding endpoint will agree with.
+tiktoken = "^0.8.0"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
 pytest-asyncio = "^0.23.0"

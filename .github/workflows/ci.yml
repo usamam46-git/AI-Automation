@@ -12,11 +12,16 @@ jobs:
 
     services:
       postgres:
+        # Database name MUST end in `_test`. tests/conftest.py hard-exits
+        # otherwise: the suite TRUNCATEs every table around every test, and the
+        # guard exists because a run against a dev database on 2026-08-15
+        # destroyed real data. The service container here is ephemeral, so the
+        # name is the only thing that needs to satisfy it.
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: aap_user
           POSTGRES_PASSWORD: aap_pass
-          POSTGRES_DB: aap_db
+          POSTGRES_DB: aap_test
         ports:
           - 5432:5432
         options: >-
@@ -91,7 +96,7 @@ jobs:
           SECRET_KEY: test_secret_key_12345
           JWT_SECRET_KEY: test_jwt_secret_key_12345
           INTEGRATION_ENCRYPTION_KEY: Bw4VHCMqMTg/Rk1UW2JpcHd+hYyTmqGor7a9xMvS2eA=
-          DATABASE_URL: postgresql+asyncpg://aap_user:aap_pass@localhost:5432/aap_db
+          DATABASE_URL: postgresql+asyncpg://aap_user:aap_pass@localhost:5432/aap_test
           REDIS_URL: redis://localhost:6379/0
           CELERY_BROKER_URL: redis://localhost:6379/1
         run: |

@@ -25,7 +25,6 @@ Idempotency:
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import logging
 import time
@@ -41,8 +40,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from src.core.llm_client import LLMClient, LLMConfigurationError, LLMTransientError, get_llm_client
-from src.db.database import async_session_maker, engine
-from src.db.sync_database import dispose_sync_engine
+from src.db.database import async_session_maker
 from src.graphs.compiler import (
     DraftVersionCompileError,
     GraphCompileError,
@@ -60,6 +58,7 @@ from src.modules.executions.models import NodeExecution, WorkflowRun
 from src.modules.integrations.service import IntegrationService
 from src.modules.tools.service import ToolExecutionLogger, ToolService
 from src.modules.workflows.models import WorkflowVersion
+from src.workers.async_bridge import run_async
 from src.workers.celery_app import celery_app
 from src.workers.postgres_saver import PostgresSaver
 
@@ -427,41 +426,11 @@ async def _stream_graph(
 # ---------------------------------------------------------------------------
 
 
-def _run_async(coro: Any) -> Any:
-    """
-    Run a coroutine in a fresh event loop, disposing the SQLAlchemy engine's
-    connection pool before that loop closes.
-
-    This is mandatory, not tidiness. `engine` is a module-level singleton whose
-    pool caches asyncpg connections, and every task below runs its own
-    asyncio.run(), which creates and then destroys a NEW event loop. An asyncpg
-    connection is bound to the loop that opened it, so a connection left in the
-    pool by task N gets checked out by task N+1 against a loop that no longer
-    exists, and the first write fails with
-
-        AttributeError: 'NoneType' object has no attribute 'send'
-
-    `pool_pre_ping` does not save us here: the ping itself runs on the dead
-    transport. Disposing per task costs one reconnect and buys correctness --
-    the pool was never genuinely reused across tasks anyway.
-
-    This went unnoticed because a worker never ran a second task: the Celery app
-    had no `include`, so its task registry was empty and every job was discarded
-    as unregistered.
-
-    The sync engine (`src/db/sync_database.py`, used by ToolExecutionLogger) is
-    disposed alongside it. It uses NullPool so there are no idle connections to
-    release, but an engine must not be carried across a fork either.
-    """
-
-    async def _runner() -> Any:
-        try:
-            return await coro
-        finally:
-            await engine.dispose()
-            dispose_sync_engine()
-
-    return asyncio.run(_runner())
+# Moved to workers/async_bridge.py on 2026-08-15 so document_tasks.py shares one
+# implementation rather than carrying a copy that can drift. Aliased rather than
+# renamed at every call site: the name `_run_async` appears throughout this
+# module and in apps/api/CLAUDE.md's worker-invariants section.
+_run_async = run_async
 
 
 @celery_app.task(

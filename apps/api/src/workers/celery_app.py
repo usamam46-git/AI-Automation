@@ -2,13 +2,14 @@
 workers/celery_app.py — Celery application configuration.
 
 Queue topology (Vol. 2 §5.1):
-  workflow_execution — LLM-latency-bound graph runs (concurrency=4, prefetch=1)
-  dead_letter        — tasks that exhausted all retries
+  workflow_execution  — LLM-latency-bound graph runs (concurrency=4, prefetch=1)
+  document_processing — knowledge-base ingestion (concurrency=8, prefetch=2)
+  dead_letter         — tasks that exhausted all retries
 
-Only the workflow_execution queue is implemented this phase.
-document_processing and notifications queues are deferred until their
-respective modules exist — the containers for both boot with empty task
-registries, which is why the beat tick is routed to workflow_execution.
+document_processing went live 2026-08-15 with knowledge-base ingestion. The
+notifications queue is still deferred until that module exists — its container
+boots with an empty task registry, which (along with the same having been true
+of worker_documents) is why the beat tick is routed to workflow_execution.
 
 Beat: one periodic entry, `dispatch-due-schedules` (added 2026-08-09), which
 drives cron-triggered workflows. See workers/trigger_tasks.py.
@@ -31,7 +32,14 @@ celery_app = Celery(
     # of type ...". The test suite cannot catch that — it bypasses the broker
     # and awaits _stream_graph() directly — so this is only ever visible when a
     # run triggered from the UI sits at `pending` forever.
-    include=["src.workers.graph_tasks", "src.workers.trigger_tasks"],
+    include=[
+        "src.workers.graph_tasks",
+        "src.workers.trigger_tasks",
+        # Added 2026-08-15 with the ingestion pipeline. worker_documents has
+        # consumed `-Q document_processing` since the initial commit with an
+        # empty registry; this is the first task routed there.
+        "src.workers.document_tasks",
+    ],
 )
 
 celery_app.conf.update(
@@ -55,6 +63,12 @@ celery_app.conf.update(
             "exchange": "workflow_execution",
             "routing_key": "workflow_execution",
         },
+        # Live as of 2026-08-15 (knowledge-base ingestion). The queue name must
+        # match worker_documents' `-Q document_processing` in docker-compose.
+        "document_processing": {
+            "exchange": "document_processing",
+            "routing_key": "document_processing",
+        },
         "dead_letter": {
             "exchange": "dead_letter",
             "routing_key": "dead_letter",
@@ -72,6 +86,10 @@ celery_app.conf.update(
         # worker_notifications still boot with nothing registered. The tick is
         # a short DB query, so it does not meaningfully occupy an LLM slot.
         "src.workers.trigger_tasks.dispatch_due_schedules": {"queue": "workflow_execution"},
+        # Ingestion is I/O-bound (object storage + embedding round-trips), not
+        # LLM-latency-bound like a graph run, which is why it gets its own
+        # container at concurrency 8 rather than sharing workflow_execution.
+        "src.workers.document_tasks.ingest_document": {"queue": "document_processing"},
     },
     # ---------------------------------------------------------------------
     # Beat schedule (Vol. 2 §5 — "Celery Beat / scheduled triggers")

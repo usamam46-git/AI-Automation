@@ -67,6 +67,27 @@ section below for why it lives there and not in `webhooks/`).
   and Postgres' `now()` is transaction start time, so every row in a test
   gets an identical timestamp and the cursor-pagination tests fail.
   `testcontainers` (Vol. 7 §4) is still not wired up.
+- **The suite REFUSES to run outside a `*_test` database** (guard added
+  2026-08-15, `_assert_safe_test_database` at the top of `conftest.py`, above
+  every fixture). Truncation is correct isolation and a catastrophic default:
+  it wipes whatever `DATABASE_URL` names. On 2026-08-15 a run inside the
+  `aap_api` container — where `DATABASE_URL` is the **dev** database — destroyed
+  an org, a user, a published workflow and its entire run history. Nothing
+  warned, and the only symptom was the next login failing with "system roles not
+  seeded", because `roles` had been truncated too.
+  It is a hard `pytest.exit` at import time, not a fixture: by the time fixtures
+  run the first TRUNCATE is already imminent. `AAP_ALLOW_DESTRUCTIVE_TESTS=1`
+  overrides it for a throwaway stack or a CI database whose name doesn't match.
+  Running the suite therefore means naming the test DB explicitly:
+
+  ```
+  docker exec aap_postgres psql -h 127.0.0.1 -U aap_user -d postgres -c "CREATE DATABASE aap_test;"
+  DATABASE_URL=postgresql+asyncpg://aap_user:aap_pass@postgres:5432/aap_test python -m alembic upgrade head
+  DATABASE_URL=postgresql+asyncpg://aap_user:aap_pass@postgres:5432/aap_test python -m pytest
+  ```
+
+  `aap_test` needs migrating like any other database, and again after every new
+  migration — a fresh one is empty, and the guard only checks the *name*.
 - Every new tenant-scoped endpoint needs an explicit cross-tenant isolation
   test: create two orgs, confirm Org A's token gets a 404 (never a 403,
   never a data leak) on Org B's resources.
@@ -614,6 +635,71 @@ against when that module is built — `embedding_model` should not accept free t
 present; there are no tests for it yet and `embed()` has never been called. The
 rates in `_EMBEDDING_MODELS` carry the same hand-maintained staleness caveat as
 `_MODEL_PRICING`.
+
+## Knowledge base + ingestion pipeline (landed 2026-08-15)
+
+`knowledge_base` went models-only → real. `/api/v1/knowledge-bases` (CRUD +
+documents + chunks), `src/core/{storage,document_text}.py`,
+`src/workers/document_tasks.py`, migration `20260815_kb_ingestion`.
+**This is the first code that touches MinIO, and `ingest_document` is the first
+task ever registered on `worker_documents`** — that container had consumed
+`-Q document_processing` with an empty registry since the initial commit.
+
+Proven end to end against the live stack: `curl -F file=@ap-policy.pdf` → 202 →
+worker extracts, chunks, embeds → `indexed` with `page_count`, chunks carrying
+1536-d vectors readable through the API.
+
+- **Two files live in `core/`, not in the module.** `storage.py` and
+  `document_text.py` are infrastructure and pure logic respectively; the
+  five-file module convention has no slot for either, and `llm_client.py` /
+  `encryption.py` are the precedent. `document_text.py` in particular is the
+  code most worth testing hard, and it has no DB, no network and no storage so
+  the tests need no mocks.
+- **Deduplication happens at UPLOAD, not only at ingest.** The first
+  implementation only skipped when re-ingesting the *same row*, which is the
+  retry case and not the one that costs money. Re-uploading a file creates a new
+  row, and during development that happens constantly. `upload_document` now
+  hashes the bytes (already in memory) and returns the existing indexed document
+  with **HTTP 200** instead of 202, storing nothing and embedding nothing.
+  `ix_documents_kb_content_hash` exists for that lookup. The per-row skip in the
+  task is kept as well — it covers redelivery.
+- **`document_chunks` has no `organization_id` and is not in the RLS policy
+  set.** There is nothing for a policy to filter on, so the join through
+  `documents` in `KnowledgeBaseRepository.list_chunks` is the ONLY defence, not
+  defence-in-depth. `test_chunks_are_isolated_between_orgs` pins it.
+- **`DocumentChunkResponse` must never serialise `embedding`.** 1536 floats per
+  chunk makes a page of chunks a multi-megabyte payload of data no client can
+  use — the vector's only consumer is the cosine query inside Postgres.
+- **`passive_deletes=True` on the KB relationships is load-bearing, not
+  tidiness.** Without it SQLAlchemy loads the children on delete and sets their
+  FK to NULL *before* the DB cascade can fire, which is a `NotNullViolationError`
+  because those columns are NOT NULL. Deleting a knowledge base failed outright
+  until it was set; a test caught it.
+- **The API default embedding model is `-small`; the COLUMN default is
+  `-large`.** Deliberate, not a mismatch to fix. Both are requested at 1536 dims,
+  so they are interchangeable in the schema and the shared HNSW index; -small is
+  6.5× cheaper and the development loop re-indexes the same corpus repeatedly.
+  `embedding_model` is absent from `KnowledgeBaseUpdate` under `extra="forbid"`:
+  changing it invalidates every stored chunk, and re-embedding on a PATCH would
+  be a silent unbounded spend.
+- **No OCR, and the consequence is handled rather than ignored.** A PDF that
+  yields no extractable text raises `UnextractableDocumentError` instead of
+  indexing zero chunks. A document that silently indexes to nothing is a
+  knowledge base that answers "I don't know" forever with nothing explaining why.
+- **Chunking packs paragraphs, it does not slide a token window.** A window that
+  cuts mid-sentence embeds a fragment whose meaning is neither neighbour's. An
+  oversized paragraph falls back to a token split. **No chunk may be empty** —
+  `embed()` raises on whitespace-only input and raises for the *whole batch*, so
+  one blank chunk fails an entire document.
+- **`_run_async` moved to `workers/async_bridge.py`** so `graph_tasks` and
+  `document_tasks` share one implementation. `graph_tasks._run_async` is kept as
+  an alias — the name appears throughout that module and in the worker-invariants
+  section above. Behaviour unchanged.
+- **Workers do NOT bind-mount `src/`; only `api` does.** A new task module is
+  invisible to `worker_documents` until the image is rebuilt, and the symptom is
+  a task missing from the `[tasks]` list at boot with no error anywhere. Hit
+  while wiring this up. `docker compose build worker_documents` after any change
+  under `src/workers/`.
 
 ## Deliberate design decisions (not bugs)
 

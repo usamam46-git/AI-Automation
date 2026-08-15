@@ -31,19 +31,78 @@ startup; this gets the isolation without the infrastructure.
 """
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.core.redis import close_redis, get_redis, init_redis
 from src.db.database import async_session_maker, engine
 from src.db.seed_roles import seed_system_roles
 from src.db.sync_database import dispose_sync_engine
 from src.main import app
+
+# ---------------------------------------------------------------------------
+# Destructive-run guard — must stay ABOVE every fixture
+# ---------------------------------------------------------------------------
+#
+# The isolation described above is destructive by design: `_clean_database`
+# TRUNCATEs every `public` table around EVERY test, against whatever database
+# `DATABASE_URL` happens to name. That is correct for a test database and
+# catastrophic for a development one, and nothing distinguished the two.
+#
+# On 2026-08-15 this suite was run inside the `aap_api` container, where
+# DATABASE_URL points at the dev database. It destroyed the org, the user, a
+# published workflow and its whole run history. Nothing warned, and the damage
+# only surfaced at the next login attempt as "system roles not seeded" — the
+# `roles` table having been truncated along with everything else.
+#
+# The guard is deliberately a hard `pytest.exit` at collection time rather than
+# a fixture: by the time fixtures run, the first TRUNCATE is already imminent.
+# `AAP_ALLOW_DESTRUCTIVE_TESTS=1` is the escape hatch for anyone who genuinely
+# means it (a throwaway stack, CI with an ephemeral database whose name does not
+# happen to match).
+_TEST_DB_SUFFIX = "_test"
+_ALLOW_DESTRUCTIVE_ENV = "AAP_ALLOW_DESTRUCTIVE_TESTS"
+
+
+def _database_name(url: str) -> str:
+    """The database name from a SQLAlchemy URL, without needing a driver."""
+    return urlparse(url).path.lstrip("/").split("?")[0]
+
+
+def _assert_safe_test_database() -> None:
+    if os.getenv(_ALLOW_DESTRUCTIVE_ENV):
+        return
+
+    name = _database_name(settings.DATABASE_URL)
+    if name.endswith(_TEST_DB_SUFFIX):
+        return
+
+    pytest.exit(
+        f"\n\nRefusing to run: DATABASE_URL names the database '{name}', which does not end "
+        f"in '{_TEST_DB_SUFFIX}'.\n\n"
+        "This suite TRUNCATEs every table in the `public` schema around every single test. "
+        "Pointed at a development database it destroys orgs, users, workflows and run "
+        "history, and the first symptom is a failed login.\n\n"
+        "Use a dedicated test database:\n"
+        "    createdb aap_test  (or: docker exec aap_postgres createdb -U aap_user aap_test)\n"
+        "    DATABASE_URL=postgresql+asyncpg://aap_user:aap_pass@postgres:5432/aap_test \\\n"
+        "        python -m alembic upgrade head\n"
+        "    DATABASE_URL=postgresql+asyncpg://aap_user:aap_pass@postgres:5432/aap_test \\\n"
+        "        python -m pytest\n\n"
+        f"If you really mean to truncate '{name}', set {_ALLOW_DESTRUCTIVE_ENV}=1.\n",
+        returncode=2,
+    )
+
+
+_assert_safe_test_database()
 
 # Alembic's bookkeeping table is the one thing in `public` that must survive —
 # wiping it would make the next run think the database is unmigrated. Everything
@@ -141,6 +200,7 @@ def _stub_celery_dispatch(celery_calls: list[tuple[str, tuple, dict]]):
     Imported lazily because `src.workers.graph_tasks` pulls in LangGraph and the
     graph compiler — no reason to make every test session pay that at collection.
     """
+    from src.workers.document_tasks import ingest_document
     from src.workers.graph_tasks import execute_workflow, resume_workflow
     from src.workers.trigger_tasks import dispatch_due_schedules
 
@@ -158,6 +218,10 @@ def _stub_celery_dispatch(celery_calls: list[tuple[str, tuple, dict]]):
         # itself), but stub it anyway so the "a test run sends the worker zero
         # jobs" invariant holds even if a future test reaches for it.
         patch.object(dispatch_due_schedules, "delay", _recorder("dispatch_due_schedules")),
+        # Every document upload dispatches this. Without the stub, uploading
+        # in a test hands the live worker_documents container a real job —
+        # which would then embed against the real OpenAI key.
+        patch.object(ingest_document, "delay", _recorder("ingest_document")),
     ):
         yield
 

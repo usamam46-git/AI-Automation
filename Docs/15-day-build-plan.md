@@ -27,7 +27,7 @@ real cost tracking · tool registry with `tool_executions` audit · manual, cron
 and HMAC-webhook triggers · immutable audit log · per-org daily run quota · BYOK
 OpenAI keys · execution viewer · marketing landing page.
 
-**337 backend tests, 243 frontend tests.**
+**389 backend tests, 243 frontend tests.**
 
 ### Provisioned but unused — the head start
 
@@ -36,18 +36,18 @@ to RAG rather than a whole subsystem:
 
 | Thing | State |
 |---|---|
-| MinIO object storage | Service running in `infra/docker-compose.yml`, `boto3` a dependency, `MINIO_*` settings in `core/config.py` — **no client code** |
-| `document_chunks` HNSW index | Shipped in `20260724_062650_manual_indexes.py` (cosine ops) |
+| MinIO object storage | **Client landed 2026-08-15** — `src/core/storage.py`, the first code to touch it |
+| `document_chunks` HNSW index | Shipped, and **populated 2026-08-15**. Queried on day 1; retrieval service is days 6–7 |
 | `document_chunks` GIN index | Also shipped — `to_tsvector('english', content)`. **Hybrid search is pre-indexed**, only unqueried |
-| `worker_documents` Celery queue | Boots with an empty task registry |
-| `LLMClient.embed()` | Written with dimension enforcement — **has never been called** |
+| `worker_documents` Celery queue | **Live 2026-08-15** — runs `ingest_document` |
+| `LLMClient.embed()` | **Proven 2026-08-15**, and now driving ingestion |
 | KB tables | `knowledge_bases`, `documents`, `ocr_results`, `document_chunks` all exist |
 
 ### Missing
 
-- **`knowledge_base` module is models-only** — no `schemas.py`, `repository.py`,
-  `service.py`, `router.py`. This is the one module to build.
-- No extraction, chunking, embedding pipeline or retrieval.
+- ~~`knowledge_base` module is models-only~~ — **built 2026-08-15** (days 2–5).
+- ~~No extraction, chunking or embedding pipeline~~ — **built 2026-08-15**.
+  **Retrieval is still missing** and is days 6–7: nothing queries the vectors yet.
 - No KB UI.
 - Audit-log viewer UI (endpoint complete since 2026-08-09, zero consumers).
 
@@ -176,20 +176,26 @@ Ordered by risk, not by comfort.
 
 ### Days 2–5 — ingestion pipeline · ~$0.15
 
-- [ ] Storage service over MinIO via `boto3`, org-scoped keys matching the
-      documented `org-uuid/kb-uuid/filename` shape.
-- [ ] Add deps: a PDF text extractor, `python-docx`, `tiktoken` for honest token counts.
-- [ ] Build `knowledge_base` to the five-file convention. Validate
-      `embedding_model` against `SUPPORTED_EMBEDDING_MODELS` — not free text.
-- [ ] Register the ingestion task on `worker_documents`: download → extract →
-      chunk with overlap → batch-embed → insert. Drive `status` through
-      `uploaded → processing → indexed | failed`.
-- [ ] **Content hash per document; skip re-embedding unchanged files.** A cost
-      control, and what keeps a 15-day iteration loop inside budget.
-- [ ] Cross-tenant isolation test — `document_chunks` has no direct
-      `organization_id`, so scope through `document → knowledge_base`.
+- [x] Storage service over MinIO via `boto3` — `src/core/storage.py`. Keys are
+      `org/kb/document-id/file`; the document id is inserted so two uploads of
+      `policy.pdf` into one KB cannot overwrite each other's bytes.
+- [x] Deps added: `pypdf` (pure Python — no apt packages in `python:3.12-slim`),
+      `python-docx`, `tiktoken`.
+- [x] `knowledge_base` built to the five-file convention. `embedding_model`
+      validated against `SUPPORTED_EMBEDDING_MODELS`; API default is **-small**
+      (the column default is -large, deliberately different — see the module docs).
+- [x] Ingestion task on `worker_documents` — the first task ever registered on
+      that container. `uploaded → processing → indexed | failed`, with
+      `documents.error` added so a failure says why.
+- [x] **Content hash; unchanged files skip embedding.** Done at *upload*, not
+      just re-ingest: a re-upload creates a new row, which is the case that
+      actually costs money. Returns HTTP 200 with the existing document.
+- [x] Cross-tenant isolation tests, including chunks —
+      `test_chunks_are_isolated_between_orgs`.
 
-> **Gate:** upload a PDF by `curl`, see chunks with vectors in Postgres.
+> **Gate PASSED 2026-08-15.** `curl -F file=@ap-policy.pdf` → 202 → worker →
+> `indexed` with `page_count`, 1536-d vectors in `document_chunks`, chunk text
+> readable through the API. Re-upload returned 200 and spent nothing.
 
 ### Days 6–7 — retrieval and the search tool · ~$0.20
 
@@ -311,6 +317,8 @@ Append as you go, so a future session can pick up mid-sprint.
 | Date | Day | Done | Spend to date |
 |---|---|---|---|
 | 2026-08-15 | 1 | **Gate PASSED.** `embed()` called for the first time — 1536-d, unit-normalised, real vector into `document_chunks`, cosine over HNSW ranked the AP clause 0.51 vs 0.10 for an unrelated one, tenant scoping via `document → knowledge_base` holds. `parse()` proven too (separate code path; days 6–7 feed retrieval into an agent node): structured output correct and `cost_usd` matched `_MODEL_PRICING` to the last digit. Full HITL run end to end on `gpt-4.1-nano` — trigger → agent → **held 18.3s at the gate** → approve → completed, 148/21 tokens, $0.000023 persisted to a real `node_executions` row. | ~$0.00004 |
+
+| 2026-08-15 | 2–5 | **Gate passed.** `knowledge_base` module (CRUD + upload + chunks), `core/storage.py` (first MinIO code), `core/document_text.py` (pypdf/docx extraction, paragraph-packed chunking), `workers/document_tasks.py` (first task ever on `worker_documents`), migration `20260815_kb_ingestion`. Upload-time dedup returns 200 and spends nothing. **389 tests** (337 + 52). Also: test suite now refuses to run outside a `*_test` database, after it destroyed the dev data on day 1. | ~$0.0001 |
 
 ### Day 1 notes — read before day 2
 

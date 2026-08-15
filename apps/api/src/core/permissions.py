@@ -24,6 +24,16 @@ PROMPT_WRITE = "prompt:write"
 TOOL_READ = "tool:read"
 TOOL_WRITE = "tool:write"
 
+# Knowledge-base permissions (Vol. 2 §3.4) — added 2026-08-15 with the ingestion
+# pipeline. Deliberately NOT in WILDCARD_READ_EXEMPT below: a knowledge base
+# holds the org's own policy documents, which is ordinary readable content, and
+# a Viewer who cannot read it cannot see the evidence behind a grounded answer.
+# `knowledge:write` covers uploading and deleting documents as well as the KB
+# itself — an upload spends embedding money, so it belongs with the write grant
+# rather than the read one.
+KNOWLEDGE_READ = "knowledge:read"
+KNOWLEDGE_WRITE = "knowledge:write"
+
 # Execution permissions
 EXECUTION_READ = "execution:read"
 EXECUTION_APPROVE = "execution:approve"

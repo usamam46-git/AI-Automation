@@ -97,8 +97,8 @@ verified via a full read-only orientation pass — see note below.)
   Schedule + webhook triggers, the audit trail and the per-org run quota all
   landed 2026-08-09 (Vol. 2 §5, §667, §700) — see the bullets below.
   The home dashboard + `analytics` module landed 2026-08-10 — see the bullet below.
-  **337 tests pass** (336 + the `started_at` resume guard added 2026-08-15;
-  confirmed clean run 2026-08-15 in 3m54s against the live Docker Postgres).
+  **389 tests pass** (337 + 52 from the knowledge-base ingestion pipeline,
+  2026-08-15; confirmed clean run in 4m40s against `aap_test`).
   Note on running them: `poetry` is not on PATH on every dev machine, and the
   api image installs `--only main`, so `poetry run pytest` from `apps/api/` is
   not universally available. The portable route is inside the container —
@@ -548,6 +548,32 @@ verified via a full read-only orientation pass — see note below.)
   **optically** out of focus, which is what makes the whole approach work.
   **241 frontend tests**; `tsc --noEmit`, `eslint` and `npm run build` clean, and
   verified in a browser at progress 0, 0.085, 0.22, 0.70 and 1.0.
+- **Knowledge base + ingestion pipeline landed 2026-08-15** (Vol. 2 §3.4, days
+  2-5 of the build plan). `knowledge_base` went models-only -> real:
+  `/api/v1/knowledge-bases` with KB CRUD, multipart document upload, document
+  list/detail/delete and a chunk reader. New `src/core/storage.py` (first code
+  ever to touch MinIO) and `src/core/document_text.py` (extraction + chunking,
+  pure). New `src/workers/document_tasks.py` — **the first task ever registered
+  on `worker_documents`**, which had booted with an empty registry since the
+  initial commit. Migration `20260815_kb_ingestion` adds `documents.content_hash`
+  + `documents.error` and grants `knowledge:read`/`knowledge:write` to Admin and
+  Editor. New deps: `pypdf`, `python-docx`, `tiktoken`.
+  Proven end to end against the live stack: `curl -F file=@ap-policy.pdf` -> 202
+  -> worker -> `indexed`, 1536-d vectors in `document_chunks`, chunks readable
+  through the API. Re-uploading the same file returns **200** and spends nothing.
+  Contracts in apps/api/CLAUDE.md's knowledge-base section; the load-bearing
+  ones: dedup happens at **upload** (not just re-ingest, which was the first and
+  wrong implementation), `document_chunks` has no tenant column so the join
+  through `documents` is the only isolation, `passive_deletes=True` is required
+  or deleting a KB raises NotNullViolation, and **workers do not bind-mount
+  `src/`** so a new task module needs an image rebuild.
+- **Test suite now REFUSES to run outside a `*_test` database** (2026-08-15).
+  Truncate-based isolation wipes whatever `DATABASE_URL` names, and on
+  2026-08-15 a run against the dev database destroyed an org, a user, a
+  published workflow and its run history — the only symptom being the next login
+  failing with "system roles not seeded". `conftest.py` now hard-exits unless the
+  DB name ends in `_test`; `AAP_ALLOW_DESTRUCTIVE_TESTS=1` overrides. See
+  apps/api/CLAUDE.md for how to create and target `aap_test`.
 - Next: verify the 3D scene on a real mobile viewport (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
   and a phone crops it hard — see apps/web/CLAUDE.md), wire `embed()` into a real

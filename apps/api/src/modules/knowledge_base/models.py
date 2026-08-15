@@ -66,7 +66,12 @@ class KnowledgeBase(UUIDMixin, TenantMixin, TimestampMixin, Base):
     workspace: Mapped["Workspace"] = relationship(  # type: ignore[name-defined]
         "Workspace", back_populates="knowledge_bases"
     )
-    documents: Mapped[list["Document"]] = relationship("Document", back_populates="knowledge_base")
+    # passive_deletes=True: every child FK here is ON DELETE CASCADE at the
+    # database level, and without this SQLAlchemy "helpfully" loads the
+    # children on delete and sets the FK to NULL first — which is a
+    # NotNullViolationError, because the column is NOT NULL. Deleting a
+    # knowledge base failed outright until this was set.
+    documents: Mapped[list["Document"]] = relationship("Document", back_populates="knowledge_base", passive_deletes=True)
 
 
 class Document(UUIDMixin, TenantMixin, TimestampMixin, Base):
@@ -99,11 +104,27 @@ class Document(UUIDMixin, TenantMixin, TimestampMixin, Base):
         comment="uploaded | processing | indexed | failed",
     )
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "sha256 hex of the uploaded bytes, set once ingestion succeeds. A re-upload whose hash "
+            "matches skips extraction AND embedding — the cost control that makes repeated "
+            "re-indexing during development affordable. See workers/document_tasks.py."
+        ),
+    )
+    error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Why this document is in status='failed'. NULL in every other status.",
+    )
 
     # Relationships
     knowledge_base: Mapped["KnowledgeBase"] = relationship("KnowledgeBase", back_populates="documents")
-    ocr_results: Mapped[list["OCRResult"]] = relationship("OCRResult", back_populates="document")
-    chunks: Mapped[list["DocumentChunk"]] = relationship("DocumentChunk", back_populates="document")
+    # Same reasoning as KnowledgeBase.documents above — the database owns the
+    # cascade, the ORM must not pre-emptively orphan the rows.
+    ocr_results: Mapped[list["OCRResult"]] = relationship("OCRResult", back_populates="document", passive_deletes=True)
+    chunks: Mapped[list["DocumentChunk"]] = relationship("DocumentChunk", back_populates="document", passive_deletes=True)
 
 
 class OCRResult(UUIDMixin, TimestampMixin, Base):
