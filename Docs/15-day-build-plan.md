@@ -27,7 +27,7 @@ real cost tracking · tool registry with `tool_executions` audit · manual, cron
 and HMAC-webhook triggers · immutable audit log · per-org daily run quota · BYOK
 OpenAI keys · execution viewer · marketing landing page.
 
-**336 backend tests, 241 frontend tests.**
+**337 backend tests, 243 frontend tests.**
 
 ### Provisioned but unused — the head start
 
@@ -151,16 +151,28 @@ Ordered by risk, not by comfort.
 
 - [ ] **Set a hard usage limit in the OpenAI dashboard** before the key touches
       any code. The only control that cannot be defeated by a bug in our own software.
+      *(Owner-side, not verifiable from here — confirm it before day 10, where
+      the spend actually starts.)* App-side caps ARE in:
+      `DAILY_RUN_QUOTA_PER_ORG=50` in `infra/.env`.
 - [ ] Re-verify `_MODEL_PRICING` and `_EMBEDDING_MODELS` in `src/core/llm_client.py`
       against the live pricing page. Both are hand-maintained and carry an
-      explicit staleness warning.
-- [ ] Store the key via the BYOK settings page; run one existing agent workflow
-      end to end; confirm tokens and `cost_usd` persist correctly.
-- [ ] **Call `embed()` for the first time.** Assert 1536 dimensions back, and
-      insert a real vector into `document_chunks`.
+      explicit staleness warning. *(Partial: internal consistency proven — a live
+      `parse()` produced `cost_usd` matching the table exactly — and the rates
+      agree with §6. The live pricing page itself is still unchecked.)*
+- [x] Store the key; run an agent workflow end to end; confirm tokens and
+      `cost_usd` persist. Key lives in `infra/.env` (gitignored) rather than
+      BYOK, because probes and seed scripts call `get_llm_client()` with **no
+      organization to resolve a BYOK key against**. BYOK still works and is the
+      better path for app runs; `.env` is the documented fallback for scripts.
+- [x] **Call `embed()` for the first time.** 1536-d confirmed, unit-normalised,
+      real vector in `document_chunks`, cosine ranking semantically correct.
 
 > **Gate:** a real vector in a real row. If `embed()` misbehaves, every later
 > phase changes — better known on day one than day six.
+>
+> **PASSED 2026-08-15.** See the progress log in §8 for what else day 1 turned
+> up — three latent bugs, one of which meant the stack could never boot on a
+> fresh volume.
 
 ### Days 2–5 — ingestion pipeline · ~$0.15
 
@@ -298,4 +310,37 @@ Append as you go, so a future session can pick up mid-sprint.
 
 | Date | Day | Done | Spend to date |
 |---|---|---|---|
-| | | | |
+| 2026-08-15 | 1 | **Gate PASSED.** `embed()` called for the first time — 1536-d, unit-normalised, real vector into `document_chunks`, cosine over HNSW ranked the AP clause 0.51 vs 0.10 for an unrelated one, tenant scoping via `document → knowledge_base` holds. `parse()` proven too (separate code path; days 6–7 feed retrieval into an agent node): structured output correct and `cost_usd` matched `_MODEL_PRICING` to the last digit. Full HITL run end to end on `gpt-4.1-nano` — trigger → agent → **held 18.3s at the gate** → approve → completed, 148/21 tokens, $0.000023 persisted to a real `node_executions` row. | ~$0.00004 |
+
+### Day 1 notes — read before day 2
+
+Four things were found that the plan did not anticipate. All fixed 2026-08-15.
+
+- **The dev stack could never boot on a fresh volume.** `lifespan` seeds system
+  roles but has never run migrations, so the api died with `UndefinedTableError:
+  relation "roles" does not exist` on every first run. Root CLAUDE.md had claimed
+  since 2026-08-08 that the container "migrates-and-seeds itself", which is why
+  it survived a week. Fixed in the `api` service's `command:` — and it must be
+  `python -m alembic`, not bare `alembic`, or `env.py`'s `from src.db.base import
+  Base` fails on sys.path.
+- **BYOK "encryption at rest" was encrypted with a key committed to the repo.**
+  `INTEGRATION_ENCRYPTION_KEY` had a default baked into `docker-compose.yml`.
+  Rotated into a gitignored `infra/.env`. Do this on any new machine *before*
+  storing anything — rotating later invalidates BYOK credentials **and**
+  `webhook_secret_encrypted`.
+- **`started_at` was overwritten on every execution leg**, so a run held at an
+  approval gate reported only the duration of the resume — 0.04s for an 18.3s
+  run, and a weekend-long invoice would read as milliseconds. Fixed with a SQL
+  COALESCE; pinned by `test_started_at_survives_a_resume`.
+- **"Run now" sends an empty `trigger_payload`.** There is no UI to supply one,
+  so a manual-trigger agent node must carry its content in the system prompt.
+  Relevant to days 10–12: the invoice workflow wants the **webhook** trigger, not
+  manual, or it has nothing to extract from.
+
+**Still open from day 1:** re-verify `_MODEL_PRICING` / `_EMBEDDING_MODELS`
+against OpenAI's live pricing page. Only internal consistency and agreement with
+§6 above have been confirmed.
+
+**Environment note:** all of the above ran on the *Windows* machine, not the Mac.
+Docker, the full stack, MinIO round-trips and the 337-test suite all work there —
+see the root CLAUDE.md testing note for how to run pytest without Poetry on PATH.
