@@ -154,11 +154,13 @@ Ordered by risk, not by comfort.
       *(Owner-side, not verifiable from here — confirm it before day 10, where
       the spend actually starts.)* App-side caps ARE in:
       `DAILY_RUN_QUOTA_PER_ORG=50` in `infra/.env`.
-- [ ] Re-verify `_MODEL_PRICING` and `_EMBEDDING_MODELS` in `src/core/llm_client.py`
+- [x] Re-verify `_MODEL_PRICING` and `_EMBEDDING_MODELS` in `src/core/llm_client.py`
       against the live pricing page. Both are hand-maintained and carry an
-      explicit staleness warning. *(Partial: internal consistency proven — a live
-      `parse()` produced `cost_usd` matching the table exactly — and the rates
-      agree with §6. The live pricing page itself is still unchecked.)*
+      explicit staleness warning. **Closed 2026-08-16: all 11 rates match the
+      live page exactly** (gpt-4.1 2.00/0.50/8.00, -mini 0.40/0.10/1.60, -nano
+      0.10/0.025/0.40, embedding-3-small 0.02, -large 0.13), and §6's table
+      agrees. Note the page moved: `platform.openai.com/docs/pricing` now 301s to
+      `developers.openai.com/api/docs/pricing`.
 - [x] Store the key; run an agent workflow end to end; confirm tokens and
       `cost_usd` persist. Key lives in `infra/.env` (gitignored) rather than
       BYOK, because probes and seed scripts call `get_llm_client()` with **no
@@ -345,9 +347,22 @@ Four things were found that the plan did not anticipate. All fixed 2026-08-15.
   Relevant to days 10–12: the invoice workflow wants the **webhook** trigger, not
   manual, or it has nothing to extract from.
 
-**Still open from day 1:** re-verify `_MODEL_PRICING` / `_EMBEDDING_MODELS`
-against OpenAI's live pricing page. Only internal consistency and agreement with
-§6 above have been confirmed.
+**Day 1 is now fully closed.** The pricing re-verification landed 2026-08-16 (see
+the checkbox above). On the spend cap: the owner reports **$5 of prepaid credit
+with auto-recharge disabled**, which is a harder ceiling than a usage limit —
+the API returns `insufficient_quota` when the balance runs out, so it cannot be
+defeated by a bug in our software, which is what the gate asked for. Budget is
+$5 rather than the $8 this plan is written against; projected spend is $3–4, so
+it fits with less slack for prompt iteration in days 10–12.
+
+**The encryption-key trap recurred on the Mac (2026-08-16).** The day-1 fix was
+made on the Windows machine and stored in `infra/.env` — a gitignored file,
+which by construction cannot travel. So the Mac ran on the repo-committed
+`INTEGRATION_ENCRYPTION_KEY` default and encrypted a real BYOK key under it.
+Rotated the same day, and the warning moved to a **committed** `infra/.env.example`
+so the next machine hits it before storing anything. Cost of rotating then: one
+row. Do not let this slip past days 10–12, when demo workflows add webhook
+secrets.
 
 **Environment note:** all of the above ran on the *Windows* machine, not the Mac.
 Docker, the full stack, MinIO round-trips and the 337-test suite all work there —

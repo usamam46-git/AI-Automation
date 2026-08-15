@@ -18,6 +18,29 @@ indexes on `document_chunks`, the `worker_documents` queue and `LLMClient.embed(
 are already provisioned and unused. Keep the plan's progress log at the bottom
 updated as days complete.
 
+## First run on a new machine — do this before storing any credential
+
+```
+cp infra/.env.example infra/.env    # then generate the three secrets it names
+```
+
+`infra/docker-compose.yml` writes every secret as `${VAR:-default}` and those
+defaults are **committed to this repo**. The stack therefore boots on a fresh
+clone with no setup, which is why it is easy to miss that until `infra/.env`
+exists, `INTEGRATION_ENCRYPTION_KEY` is public — and that key is what encrypts
+BYOK API keys and webhook signing secrets at rest. Left at the default,
+"encrypted at rest" is obfuscation, not encryption.
+
+**Do it before storing anything, not after.** AES-GCM authenticates, so rotating
+the key does not degrade old ciphertext, it destroys it: every
+`integrations.credentials` and `workflows.webhook_secret_encrypted` value
+becomes permanently undecryptable and must be re-entered by hand.
+
+This exact trap has now fired twice — once on Windows (day 1) and again on the
+Mac (2026-08-16), because the first fix was recorded in `infra/.env` itself,
+a gitignored file that cannot travel to the next machine. `infra/.env.example`
+is committed precisely so the warning arrives with the clone.
+
 ## Before any non-trivial change
 
 Check the relevant blueprint volume in `Docs/ERP HR Financial System
