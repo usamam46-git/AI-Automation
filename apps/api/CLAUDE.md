@@ -88,6 +88,20 @@ section below for why it lives there and not in `webhooks/`).
 
   `aap_test` needs migrating like any other database, and again after every new
   migration — a fresh one is empty, and the guard only checks the *name*.
+- **The suite must need NOTHING but Postgres and Redis.** Those are the only two
+  services `.github/workflows/ci.yml` provides — there is no MinIO and no broker
+  there. `_stub_object_storage` (autouse, added 2026-08-15) replaces every
+  `core/storage.py` entry point with an in-memory dict, the same shape as
+  `_stub_celery_dispatch`. It exists because nine upload tests passed locally
+  inside the compose network and failed in CI, which is the exact failure mode
+  this rule prevents.
+  To check a change has not reintroduced a dependency, run with object storage
+  pointed somewhere unroutable rather than trusting it:
+  `-e MINIO_ENDPOINT=203.0.113.1:9000` (TEST-NET-3). A green run under that is
+  proof; a green run on a dev machine is not.
+  The stub is an in-memory store, not a mock returning a constant, so an upload
+  followed by an ingestion round-trips the real bytes. `core/storage.py` itself
+  is thin boto3 glue verified by hand against the live service.
 - Every new tenant-scoped endpoint needs an explicit cross-tenant isolation
   test: create two orgs, confirm Org A's token gets a 404 (never a 403,
   never a data leak) on Org B's resources.

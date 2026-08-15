@@ -226,6 +226,63 @@ def _stub_celery_dispatch(celery_calls: list[tuple[str, tuple, dict]]):
         yield
 
 
+@pytest.fixture
+def stored_objects() -> dict[str, bytes]:
+    """The in-memory object store standing in for MinIO. Keyed by object key."""
+    return {}
+
+
+@pytest.fixture(autouse=True)
+def _stub_object_storage(stored_objects: dict[str, bytes]):
+    """
+    Keep document uploads off real object storage.
+
+    Same reasoning as `_stub_celery_dispatch` above, and the same shape: the test
+    suite must not require infrastructure that only exists in the Docker compose
+    stack. **CI runs Postgres and Redis and nothing else** — there is no MinIO
+    service — so every upload test failed there while passing locally inside the
+    compose network. Nine of them, on the first push.
+
+    An in-memory dict rather than per-test mocks, so an upload followed by an
+    ingestion round-trips the real bytes and the pipeline is exercised end to end
+    without the network. `core/storage.py` itself is thin boto3 glue and is
+    verified against the live service by hand, not here.
+    """
+    from src.core import storage
+
+    def _put_sync(key: str, data: bytes, content_type: str) -> None:
+        stored_objects[key] = data
+
+    def _get_sync(key: str) -> bytes:
+        try:
+            return stored_objects[key]
+        except KeyError as exc:
+            raise storage.StorageError(f"Could not read object '{key}': not in the test store") from exc
+
+    def _delete_sync(key: str) -> None:
+        stored_objects.pop(key, None)
+
+    async def _put(key: str, data: bytes, content_type: str) -> None:
+        _put_sync(key, data, content_type)
+
+    async def _get(key: str) -> bytes:
+        return _get_sync(key)
+
+    async def _delete(key: str) -> None:
+        _delete_sync(key)
+
+    with (
+        patch.object(storage, "put_object", _put),
+        patch.object(storage, "get_object", _get),
+        patch.object(storage, "delete_object", _delete),
+        patch.object(storage, "put_object_sync", _put_sync),
+        patch.object(storage, "get_object_sync", _get_sync),
+        patch.object(storage, "delete_object_sync", _delete_sync),
+        patch.object(storage, "ensure_bucket_sync", lambda: None),
+    ):
+        yield
+
+
 @pytest.fixture(autouse=True)
 async def setup_services():
     """Initialize Redis, flush it for test isolation, and seed system roles."""

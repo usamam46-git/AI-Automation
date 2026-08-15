@@ -67,28 +67,28 @@ async def _upload(client: AsyncClient, content: bytes = POLICY_TEXT, name: str =
     return upload.json()["id"], headers
 
 
-async def _run_ingest(document_id: str, embedder: FakeEmbedder, stored: bytes = POLICY_TEXT):
+async def _run_ingest(document_id: str, embedder: FakeEmbedder):
     """
-    Run `_ingest` with storage and the BYOK client factory stubbed out.
+    Run `_ingest` with only the BYOK client factory stubbed.
+
+    Object storage is already an in-memory store for the whole suite (see
+    `_stub_object_storage` in conftest), so the bytes the upload wrote are the
+    bytes this reads back — a real round-trip rather than a mock handing back a
+    constant. A test that needs different content writes to `stored_objects`
+    directly, which is what re-uploading amounts to from the task's view.
 
     Must be `async` and must `await` INSIDE the patch block. A sync helper that
-    returned the un-awaited coroutine would tear the patches down before a single
-    line of `_ingest` ran, and the task would quietly reach the real MinIO and the
-    real OpenAI key — which is exactly what happened on the first attempt: every
-    assertion about the fake embedder failed because it was never called.
+    returned the un-awaited coroutine would tear the patch down before a single
+    line of `_ingest` ran, and the task would reach the real OpenAI key — which
+    is exactly what happened on the first attempt: every assertion about the fake
+    embedder failed because it was never called.
     """
     from src.workers import document_tasks
-
-    async def _fake_get_object(key: str) -> bytes:
-        return stored
 
     async def _fake_factory(_organization_id):
         return lambda: embedder
 
-    with (
-        patch.object(document_tasks.storage, "get_object", _fake_get_object),
-        patch("src.workers.graph_tasks._resolve_llm_client_factory", _fake_factory),
-    ):
+    with patch("src.workers.graph_tasks._resolve_llm_client_factory", _fake_factory):
         return await document_tasks._ingest(uuid.UUID(document_id))
 
 
@@ -181,7 +181,7 @@ async def test_unchanged_content_skips_embedding_entirely(client: AsyncClient, s
 
 
 @pytest.mark.asyncio
-async def test_changed_content_re_embeds_and_replaces_chunks(client: AsyncClient, session):
+async def test_changed_content_re_embeds_and_replaces_chunks(client: AsyncClient, session, stored_objects):
     """Delete-then-insert: a re-ingest replaces its chunks rather than doubling
     them, which is what makes the task safe under `task_acks_late` redelivery."""
     document_id, _ = await _upload(client)
@@ -190,9 +190,13 @@ async def test_changed_content_re_embeds_and_replaces_chunks(client: AsyncClient
     first_hash = (await _read_document(session, document_id)).content_hash
     first_count = len(await _chunks(session, document_id))
 
-    revised = POLICY_TEXT + b"\n\nAmendment: the threshold is now USD 10,000.\n"
+    # Rewrite the stored bytes in place — from the task's point of view that is
+    # exactly what replacing a document's content amounts to.
+    document = await _read_document(session, document_id)
+    stored_objects[document.storage_path] = POLICY_TEXT + b"\n\nAmendment: the threshold is now USD 10,000.\n"
+
     embedder = FakeEmbedder()
-    await _run_ingest(document_id, embedder, stored=revised)
+    await _run_ingest(document_id, embedder)
 
     session.expire_all()
     after = await _read_document(session, document_id)
@@ -205,7 +209,7 @@ async def test_changed_content_re_embeds_and_replaces_chunks(client: AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_a_document_with_no_extractable_text_fails_with_a_reason(client: AsyncClient, session):
+async def test_a_document_with_no_extractable_text_fails_with_a_reason(client: AsyncClient, session, stored_objects):
     """
     The scanned-document case. `status='failed'` carried no reason anywhere
     before `documents.error` existed, which made a failed upload undiagnosable
@@ -215,9 +219,11 @@ async def test_a_document_with_no_extractable_text_fails_with_a_reason(client: A
     from src.workers import document_tasks
 
     document_id, _ = await _upload(client)
+    document = await _read_document(session, document_id)
+    stored_objects[document.storage_path] = b"   \n\n   "
 
     with pytest.raises(UnextractableDocumentError):
-        await _run_ingest(document_id, FakeEmbedder(), stored=b"   \n\n   ")
+        await _run_ingest(document_id, FakeEmbedder())
 
     # The task wrapper records the failure; _ingest itself only raises.
     await document_tasks._set_status(uuid.UUID(document_id), "failed", error="no extractable text")
@@ -248,7 +254,7 @@ async def test_large_documents_are_embedded_in_bounded_batches(client: AsyncClie
     document_id, _ = await _upload(client, content=big, name="big.txt")
 
     embedder = FakeEmbedder()
-    await _run_ingest(document_id, embedder, stored=big)
+    await _run_ingest(document_id, embedder)
 
     chunks = await _chunks(session, document_id)
     assert len(chunks) > EMBED_BATCH_SIZE, "this fixture is meant to exceed one batch"
