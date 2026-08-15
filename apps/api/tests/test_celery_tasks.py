@@ -342,3 +342,66 @@ def test_two_human_approval_nodes_use_separate_keys():
     final_outputs = final_state.values.get("node_outputs", {})
     assert "approve_one" in final_outputs, "approve_one key missing from final state"
     assert "approve_two" in final_outputs, "approve_two key missing from final state"
+
+
+# ---------------------------------------------------------------------------
+# started_at is stamped once per RUN, not once per execution leg
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_started_at_survives_a_resume(client: AsyncClient):
+    """
+    A run's `started_at` must not move when a human_approval resume re-enters
+    `_stream_graph`.
+
+    `_stream_graph` runs once per execution leg, and any approval gate guarantees
+    at least two of them. It used to stamp a bare `datetime.now(UTC)` every time,
+    so the resume overwrote the original — and `completed_at - started_at`, which
+    the Execution Viewer reads as the run's duration, measured only the leg after
+    someone clicked Approve.
+
+    Found on the first real HITL run (2026-08-15): the gate held for 18.3s and
+    the row reported 0.04s. Harmless at that scale, wrong in the direction that
+    matters — an invoice sitting over a weekend would report a three-day run as
+    a few milliseconds, which is precisely the run this product exists to show.
+
+    This test fails against the old bare-now() version.
+    """
+    from sqlalchemy import select
+
+    from src.modules.executions.models import WorkflowRun
+    from src.workers.graph_tasks import _started_at_first_leg_only, _update_run
+
+    created = await _create_real_run(client)
+    run_id = created["run_id"]
+
+    async def _read() -> tuple[str, datetime | None, datetime | None]:
+        async with async_session_maker() as session:
+            row = (await session.execute(select(WorkflowRun).where(WorkflowRun.id == run_id))).scalar_one()
+            return row.status, row.started_at, row.created_at
+
+    # A fresh run has not started yet — nothing to preserve.
+    _, before, created_at = await _read()
+    assert before is None, "a pending run should carry no started_at"
+
+    # Leg 1: the original trigger.
+    await _update_run(run_id, status="running", started_at=_started_at_first_leg_only())
+    status, first_leg, _ = await _read()
+    assert status == "running"
+    assert first_leg is not None, "the first leg must stamp started_at"
+    assert first_leg >= created_at
+
+    # Leg 2: the resume after an approval. Same call, and it must be a no-op for
+    # started_at while still being free to move status.
+    await _update_run(run_id, status="running", started_at=_started_at_first_leg_only())
+    _, second_leg, _ = await _read()
+    assert second_leg == first_leg, (
+        f"started_at moved on the resume leg ({first_leg} -> {second_leg}); "
+        "the run's duration would be measured from the approval, not the trigger"
+    )
+
+    # And a third, because a graph may hold at more than one gate.
+    await _update_run(run_id, status="running", started_at=_started_at_first_leg_only())
+    _, third_leg, _ = await _read()
+    assert third_leg == first_leg

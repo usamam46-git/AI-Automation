@@ -161,6 +161,35 @@ while the UI looks like the bug.
   The test suite cannot catch this: it awaits `_stream_graph()` directly and
   never goes through the Celery task functions.
 
+### `_stream_graph` runs once per LEG, not once per run (fixed 2026-08-15)
+
+This is the mental model to hold before touching anything in that function. A
+`human_approval` interrupt means the task exits and a *second* task later resumes
+the same run — so every statement in `_stream_graph` executes at least twice for
+any workflow with a gate, and N+1 times for N gates.
+
+`started_at` was written as a bare `datetime.now(UTC)` on that path, so the
+resume overwrote the original. `completed_at - started_at` — which the Execution
+Viewer renders as the run's duration — measured only the leg *after* someone
+clicked Approve. Found on the first real HITL run: the gate held 18.3s and the
+row reported 0.04s.
+
+- **`_started_at_first_leg_only()` is the fix**, a SQL
+  `COALESCE(started_at, now())` so the first write wins and later legs are
+  no-ops. Not a read-then-write: two legs of one run cannot overlap, but the
+  racy shape would cost the same and buy nothing.
+- **`created_at` was always the honest trigger time** and still is. Nothing was
+  ever lost; it just was not the column anything read. If you need "queued at"
+  versus "execution began", those are `created_at` and `started_at` respectively
+  — and now they mean that.
+- **Pinned by `test_started_at_survives_a_resume`**, which drives `_update_run`
+  across three simulated legs. Verified to fail against the old bare-`now()`
+  version, so the guard is load-bearing rather than decorative.
+- The same trap applies to anything else you might reach for here: **do not add
+  a "set once at start" side effect to `_stream_graph` without making it
+  idempotent across legs.** Counters, timestamps and audit rows all have this
+  shape.
+
 ## Known temporary gaps (don't silently "fix" these — they're deliberate)
 
 - `prompt_id` references inside node `config` are stored as opaque UUIDs with

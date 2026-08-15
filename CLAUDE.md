@@ -97,9 +97,16 @@ verified via a full read-only orientation pass — see note below.)
   Schedule + webhook triggers, the audit trail and the per-org run quota all
   landed 2026-08-09 (Vol. 2 §5, §667, §700) — see the bullets below.
   The home dashboard + `analytics` module landed 2026-08-10 — see the bullet below.
-  **336 tests pass** (`poetry run pytest` from `apps/api/`, confirmed clean run
-  2026-08-10: 250 + 24 schedule-trigger + 22 webhook-trigger + 16 audit-log
-  + 13 run-quota + 11 analytics).
+  **337 tests pass** (336 + the `started_at` resume guard added 2026-08-15;
+  confirmed clean run 2026-08-15 in 3m54s against the live Docker Postgres).
+  Note on running them: `poetry` is not on PATH on every dev machine, and the
+  api image installs `--only main`, so `poetry run pytest` from `apps/api/` is
+  not universally available. The portable route is inside the container —
+  `docker exec -w /app aap_api poetry install --no-root --with dev` once, then
+  `docker exec -e PYTHONPATH=/app -w /app aap_api python -m pytest -q`. The dev
+  deps do not survive a container rebuild; `tests/` is not in the image or the
+  bind mounts, so `docker cp` it in (delete `/app/tests` first — `docker cp`
+  into an existing directory nests it).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -234,8 +241,18 @@ verified via a full read-only orientation pass — see note below.)
     file bind-mounts `src/` specifically for hot-reload, so without the override
     the mount was silently inert.
   - Full stack (`docker compose up -d --build`, all 8 services) proven end-to-end:
-    `api` container boots, migrates-and-seeds itself via `lifespan`, and answers
+    `api` container boots, seeds system roles via `lifespan`, and answers
     `GET /api/docs` with 200 over the mapped port.
+    **Corrected 2026-08-15 — this used to say "migrates-and-seeds itself", and
+    the migrate half was never true.** `lifespan` in `src/main.py` does exactly
+    two things: `init_redis()` and `seed_system_roles()`. Nothing ran
+    `alembic upgrade head`, so on a *fresh volume* the api tried to seed into a
+    schema-less database and died with `UndefinedTableError: relation "roles"
+    does not exist` → `Application startup failed. Exiting.` — a crash loop on
+    every first run, on every machine. It went unnoticed because a machine with
+    an existing volume never hits it, and because this line claimed the
+    container healed itself. Closed the same day by putting the migration in the
+    `api` service's `command:` — see the bullet below.
   - Test-DB/broker isolation was the one gap found here and **left open**; it was
     closed on 2026-08-08 — see the bullet below.
 - **Test isolation closed 2026-08-08.** `apps/api/tests/conftest.py` now TRUNCATEs

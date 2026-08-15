@@ -4,6 +4,7 @@
 # Start everything: docker compose up -d
 # Run migrations:   docker compose exec api alembic upgrade head
 # Tail logs:        docker compose logs -f api worker
+# Running with env  docker compose -f infra/docker-compose.yml up -d
 
 version: "3.9"
 
@@ -70,10 +71,34 @@ services:
       dockerfile: Dockerfile
     container_name: aap_api
     restart: unless-stopped
-    # Dockerfile's CMD has no --reload (matches the prod-facing blueprint
-    # contract in Vol. 2 §16); this dev compose file bind-mounts src/ below
-    # specifically for hot-reload, so it needs the flag turned on here.
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    # Two overrides of the Dockerfile's prod-facing CMD (Vol. 2 §16), both
+    # dev-only, which is exactly why they live here and not in the image.
+    #
+    # 1. `alembic upgrade head` — WITHOUT this, a fresh Postgres volume is a
+    #    guaranteed crash loop. `lifespan` in src/main.py seeds system roles but
+    #    has never migrated, so the api boots into a schema-less database and
+    #    dies with `UndefinedTableError: relation "roles" does not exist`.
+    #    Hit on 2026-08-15 on a fresh volume; root CLAUDE.md had claimed since
+    #    2026-08-08 that the container "migrates-and-seeds itself", which was
+    #    half wrong and is why nobody noticed.
+    #
+    #    **Only the `api` service migrates.** api/worker_*/beat all build from
+    #    this one image, and Alembic takes no advisory lock — four containers
+    #    racing `upgrade head` against an empty database collide on CREATE.
+    #    The workers issue no query at boot, so starting them unmigrated is
+    #    safe; the api is up long before anything is enqueued.
+    #
+    #    It must be `python -m alembic`, NOT bare `alembic`. `alembic/env.py`
+    #    does `from src.db.base import Base`, and a console-script entry point
+    #    puts /usr/local/bin on sys.path rather than the working directory — so
+    #    bare `alembic` dies with `ModuleNotFoundError: No module named 'src'`
+    #    even with WORKDIR=/app. `-m` prepends cwd, which is the whole fix.
+    #
+    # 2. `--reload` — the Dockerfile deliberately omits it (it matches the
+    #    prod-facing blueprint excerpt verbatim), but this file bind-mounts
+    #    src/ below specifically for hot-reload, so without the flag the mount
+    #    is silently inert.
+    command: sh -c "python -m alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       postgres:
         condition: service_healthy

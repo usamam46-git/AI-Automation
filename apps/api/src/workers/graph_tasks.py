@@ -126,6 +126,32 @@ async def _update_run(run_id: uuid.UUID, **kwargs: Any) -> None:
         await session.commit()
 
 
+def _started_at_first_leg_only() -> Any:
+    """
+    A `started_at` value that stamps now() on the first leg and is a no-op after.
+
+    `_stream_graph` runs once per EXECUTION LEG, not once per run, and a
+    `human_approval` interrupt guarantees at least two: the original trigger, and
+    the resume after someone decides. This used to be a bare `datetime.now(UTC)`,
+    so the resume overwrote the real start and `completed_at - started_at`
+    measured only the leg after approval.
+
+    That is wrong in exactly the direction this product cannot afford. The first
+    HITL run on 2026-08-15 held at the gate for 18.3 seconds and reported 0.04;
+    an invoice left over a weekend would report a three-day run as a handful of
+    milliseconds. The number is read as a duration by the Execution Viewer, so it
+    has to mean "when this run began", not "when its last leg began".
+
+    COALESCE in SQL rather than a read-then-write: two legs of one run cannot
+    overlap in practice, but the read-modify-write shape would be racy for no
+    benefit and this is the same cost.
+
+    `created_at` was always the honest trigger time and still is — nothing was
+    lost, it just was not what anything read.
+    """
+    return func.coalesce(WorkflowRun.started_at, datetime.now(UTC))
+
+
 async def _insert_node_execution(
     *,
     workflow_run_id: uuid.UUID,
@@ -331,8 +357,13 @@ async def _stream_graph(
 
     config = {"configurable": {"thread_id": str(run_id)}}
 
-    # Mark run as running
-    await _update_run(run_id, status="running", started_at=datetime.now(UTC))
+    # Mark run as running. `started_at` is stamped on the FIRST leg only — see
+    # the note on `_started_at_first_leg_only`.
+    await _update_run(
+        run_id,
+        status="running",
+        started_at=_started_at_first_leg_only(),
+    )
 
     node_start_time = time.monotonic()
     interrupted = False
