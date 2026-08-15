@@ -208,7 +208,14 @@ _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 # Vol. 2 §7.2 defines four tool types. `python_function` (sandboxed pre-registered
 # callables) and `mcp` are not built yet and are rejected by name rather than
 # silently falling through to a generic branch.
-_TOOL_TYPES = frozenset({"http_request", "erp_connector"})
+#
+# `knowledge_search` (days 6-7) is a FIFTH type the blueprint does not list. It
+# ships as a tool rather than as a new `NodeType` on purpose: a node type would
+# touch the backend enum, this dispatcher, the frontend node catalog, a config
+# form AND `lib/graph-validation.ts`, which reimplements the backend rules in a
+# second language. A tool type touches this function, and inherits the registry
+# picker and `tool_executions` auditing already built.
+_TOOL_TYPES = frozenset({"http_request", "erp_connector", "knowledge_search"})
 
 # Mock ERP actions and the payload fields each one requires. `erp_connector` makes
 # no network call — it exists so the mutating-tool mechanism (and Vol. 5's ERP
@@ -335,6 +342,54 @@ def _erp_connector_config(config: dict[str, Any], node_key: str) -> dict[str, An
     }
 
 
+def _knowledge_search_config(config: dict[str, Any], node_key: str) -> dict[str, Any]:
+    """
+    Validate a `knowledge_search` node's config.
+
+    `knowledge_base_id` is required and is the retrieval TARGET — the direct
+    analogue of `http_request`'s `url`, and registry-owned for the same reason
+    (see `ToolService.NODE_OVERRIDABLE_KEYS`). The per-usage wiring is the query
+    text: a static `query`, or `query_fields` resolving it from graph state via
+    the same dotted-path DSL the rest of the graph uses.
+    """
+    raw_kb_id = config.get("knowledge_base_id")
+    if not raw_kb_id or not isinstance(raw_kb_id, str):
+        raise ToolNodeConfigError(f"Tool node '{node_key}' (knowledge_search) has no usable 'knowledge_base_id' in its config.")
+    try:
+        knowledge_base_id = uuid.UUID(raw_kb_id)
+    except ValueError as exc:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (knowledge_search) has a malformed 'knowledge_base_id' {raw_kb_id!r} — expected a UUID."
+        ) from exc
+
+    query = config.get("query") or ""
+    if not isinstance(query, str):
+        raise ToolNodeConfigError(f"Tool node '{node_key}' (knowledge_search) has a malformed 'query' — expected a string.")
+
+    query_fields = _field_map(config, "query_fields", node_key)
+    if not query.strip() and not query_fields:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (knowledge_search) has neither a static 'query' nor 'query_fields' to resolve one "
+            f'from state, e.g. {{"query": "node_outputs.extract.description"}}.'
+        )
+
+    top_k = config.get("top_k")
+    if top_k is not None and (not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1):
+        raise ToolNodeConfigError(f"Tool node '{node_key}' (knowledge_search) has a malformed 'top_k' — expected a positive integer.")
+
+    score_floor = config.get("score_floor")
+    if score_floor is not None and (not isinstance(score_floor, int | float) or isinstance(score_floor, bool) or not 0.0 <= score_floor <= 1.0):
+        raise ToolNodeConfigError(f"Tool node '{node_key}' (knowledge_search) has a malformed 'score_floor' — expected a number between 0 and 1.")
+
+    return {
+        "knowledge_base_id": str(knowledge_base_id),
+        "query": query,
+        "query_fields": query_fields,
+        "top_k": top_k,
+        "score_floor": score_floor,
+    }
+
+
 def _tool_config(config: dict[str, Any] | None, node_key: str) -> dict[str, Any]:
     """
     Validate a tool node's inline config.
@@ -376,9 +431,21 @@ def _tool_config(config: dict[str, Any] | None, node_key: str) -> dict[str, Any]
             f"The publish-time approval guardrail only recognises a literal true."
         )
 
+    # Retrieval reads; it cannot write anywhere. Accepting is_mutating=true would
+    # demand a human_approval gate upstream of a pure read at publish time, which
+    # devalues the gate by making it routine — the guardrail only means something
+    # while every node it fires on genuinely writes to a real system.
+    if tool_type == "knowledge_search" and is_mutating:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (knowledge_search) sets 'is_mutating': true, but retrieval is read-only. "
+            f"Remove the flag — it would force an approval gate upstream of a read."
+        )
+
     common = {"tool_type": tool_type, "is_mutating": is_mutating}
     if tool_type == "http_request":
         return {**common, **_http_request_config(config, node_key)}
+    if tool_type == "knowledge_search":
+        return {**common, **_knowledge_search_config(config, node_key)}
     return {**common, **_erp_connector_config(config, node_key)}
 
 
@@ -520,6 +587,98 @@ def _run_erp_connector(cfg: dict[str, Any], state: dict[str, Any], node_key: str
     return {"posted": True, "confirmation_id": confirmation_id, "action": cfg["action"], "payload": payload}
 
 
+def _run_knowledge_search(
+    cfg: dict[str, Any],
+    state: dict[str, Any],
+    node_key: str,
+    *,
+    llm_client_factory: Callable[..., Any],
+    search: Callable[..., Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Retrieve chunks from a knowledge base. Returns (node_output, usage).
+
+    Unlike the other two runners this returns usage as well, because embedding
+    the query is a real billable OpenAI call. See `tool_handler` for why that
+    breaks a previously-documented invariant deliberately.
+
+    **`organization_id` is read from graph state, never from `cfg`.** State is
+    seeded by `initial_state_from_trigger` from the run row, which came from the
+    authenticated request — so it carries the same provenance guarantee as any
+    router's `get_current_org`, while a node config is author-supplied text on a
+    canvas. A retrieval node must not be able to name another tenant's org.
+    """
+    raw_org_id = state.get("organization_id")
+    if not raw_org_id:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (knowledge_search) ran with no organization_id in graph state. "
+            f"State must be built by initial_state_from_trigger, which seeds it from the run row."
+        )
+
+    query = cfg["query"]
+    resolved = _resolve_field_map(state, cfg["query_fields"])
+    # A resolved value wins over the static one: `query` is the fallback an
+    # author types while wiring the node, `query_fields` is the live value.
+    for value in resolved.values():
+        if value is not None and str(value).strip():
+            query = str(value)
+            break
+
+    if not query.strip():
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (knowledge_search) resolved an empty query from {sorted(cfg['query_fields'].values())!r} "
+            f"and has no static 'query' fallback."
+        )
+
+    try:
+        result = search(
+            organization_id=uuid.UUID(str(raw_org_id)),
+            knowledge_base_id=uuid.UUID(cfg["knowledge_base_id"]),
+            query=query,
+            top_k=cfg.get("top_k"),
+            score_floor=cfg.get("score_floor"),
+            client_factory=llm_client_factory,
+        )
+    except LookupError as exc:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (knowledge_search) references knowledge base {cfg['knowledge_base_id']}, "
+            f"which does not exist in this organization."
+        ) from exc
+
+    # An empty hit list is a RESULT, not an error. A query with no match above
+    # the floor means the corpus does not answer it, and the agent downstream
+    # should be told exactly that so it can say so — raising here would fail the
+    # whole run over a question the knowledge base legitimately cannot answer.
+    output = {
+        "query": query,
+        "hit_count": len(result.hits),
+        "hits": [
+            {
+                "document_id": str(hit.document_id),
+                "document_name": hit.document_name,
+                "chunk_index": hit.chunk_index,
+                "content": hit.content,
+                "score": round(hit.score, 6),
+            }
+            for hit in result.hits
+        ],
+    }
+    usage = {
+        "tokens_prompt": result.tokens,
+        "tokens_completion": 0,
+        "cost_usd": result.cost_usd,
+        "model": result.model,
+    }
+    logger.info(
+        "Tool node '%s' knowledge_search → %d hit(s), %d tokens, $%.8f",
+        node_key,
+        len(result.hits),
+        result.tokens,
+        result.cost_usd,
+    )
+    return output, usage
+
+
 def _audit_input(cfg: dict[str, Any]) -> dict[str, Any]:
     """
     The intent snapshot written to `tool_executions.input`.
@@ -541,6 +700,16 @@ def _audit_input(cfg: dict[str, Any]) -> dict[str, Any]:
             "body_fields": cfg["body_fields"],
             "is_mutating": cfg["is_mutating"],
         }
+    if cfg["tool_type"] == "knowledge_search":
+        # The resolved query is NOT recorded here, for the same reason body/payload
+        # values are not: the intent row is written before anything can fail, and
+        # resolving means reading state. It lands in `output` on the way back.
+        return {
+            "tool_type": "knowledge_search",
+            "knowledge_base_id": cfg["knowledge_base_id"],
+            "query_fields": cfg["query_fields"],
+            "is_mutating": cfg["is_mutating"],
+        }
     return {
         "tool_type": "erp_connector",
         "action": cfg["action"],
@@ -555,6 +724,8 @@ def tool_handler(
     node_key: str,
     config: dict[str, Any] | None = None,
     client_factory: Callable[..., httpx.Client] = get_http_client,
+    llm_client_factory: Callable[..., Any] = get_llm_client,
+    search: Callable[..., Any] | None = None,
     max_attempts: int = 3,
     retry_base_delay: float = 1.0,
     tool_log: Any | None = None,
@@ -566,9 +737,18 @@ def tool_handler(
     The result is written directly to `node_outputs[node_key]`, same as `agent_handler`,
     so conditional edges can route on paths like `node_outputs.get_vendor.status_code`.
 
-    Deliberately returns NO `node_usage` entry: tool nodes have no LLM token or cost
-    bookkeeping, and `_usage_for_node` in the execution engine therefore leaves
-    tokens_prompt/tokens_completion/cost_usd NULL on the node_executions row.
+    **Usage reporting is per tool type, and used not to be.** `http_request` and
+    `erp_connector` still emit no `node_usage`, so `_usage_for_node` leaves
+    tokens/cost NULL on their `node_executions` rows — they spend no LLM money.
+    `knowledge_search` DOES: it embeds the query on every call. Reporting NULL
+    there would make every RAG run under-report its own cost, and per-run cost is
+    a governance claim this product makes out loud. The invariant was a
+    description of the two tools that existed, not a principle.
+
+    `client_factory` is the **httpx** factory for `http_request`;
+    `llm_client_factory` is the separate OpenAI one, threaded through so a BYOK
+    org embeds with its own key. `search` is injected for testability and
+    defaults to the real synchronous retrieval path.
 
     `tool_log`/`tool_id` are supplied together, by the compiler, and only for a node
     the tools registry actually resolved — both are None for inline config and for
@@ -593,6 +773,7 @@ def tool_handler(
         execution_id = tool_log.begin(tool_id, _audit_input(cfg))
 
     started = time.monotonic()
+    usage: dict[str, Any] | None = None
     try:
         if cfg["tool_type"] == "http_request":
             result = _run_http_request(
@@ -602,6 +783,14 @@ def tool_handler(
                 client_factory=client_factory,
                 max_attempts=max_attempts,
                 retry_base_delay=retry_base_delay,
+            )
+        elif cfg["tool_type"] == "knowledge_search":
+            result, usage = _run_knowledge_search(
+                cfg,
+                state,
+                node_key,
+                llm_client_factory=llm_client_factory,
+                search=search or _default_search,
             )
         else:
             result = _run_erp_connector(cfg, state, node_key)
@@ -616,7 +805,25 @@ def tool_handler(
     update: dict[str, Any] = {"node_outputs": {**state.get("node_outputs", {}), node_key: result}}
     if execution_id is not None:
         update["node_tool_calls"] = {**state.get("node_tool_calls", {}), node_key: [str(execution_id)]}
+    if usage is not None:
+        update["node_usage"] = {**state.get("node_usage", {}), node_key: usage}
+        update["current_cost_usd"] = state.get("current_cost_usd", 0.0) + usage["cost_usd"]
     return update
+
+
+def _default_search(**kwargs: Any) -> Any:
+    """
+    Late-bound import of the real retrieval path.
+
+    Imported inside the call rather than at module scope to keep the
+    `graphs -> modules.knowledge_base -> db.sync_database` edge out of import
+    time. `modules/tools/service.py` already imports this module for
+    `validate_tool_config`, and a module-scope import here would drag a second
+    database engine into every process that merely validates a tool config.
+    """
+    from src.modules.knowledge_base.service import search_knowledge_base_sync
+
+    return search_knowledge_base_sync(**kwargs)
 
 
 def _finish_quietly(

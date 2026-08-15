@@ -715,6 +715,68 @@ worker extracts, chunks, embeds → `indexed` with `page_count`, chunks carrying
   while wiring this up. `docker compose build worker_documents` after any change
   under `src/workers/`.
 
+## Retrieval / `knowledge_search` (landed 2026-08-16)
+
+Days 6–7. Cosine search over the HNSW index that shipped in the initial schema
+and had never been queried. **No migration** — the index and both vector columns
+already existed. `POST /api/v1/knowledge-bases/{id}/search` (the retrieval
+playground's endpoint, built ahead of its UI) and a `knowledge_search` tool type.
+
+**It is a tool type, not a `NodeType`.** A node type would touch the backend
+enum, `node_handlers.py`, the frontend `node-catalog.ts`, a config form AND
+`lib/graph-validation.ts`, which reimplements the backend rules in a second
+language. A tool type touches one dispatcher and inherits the registry picker
+and `tool_executions` auditing already built.
+
+Five things to know:
+
+- **ORDER BY is the raw cosine DISTANCE, never the similarity score.** pgvector
+  only matches an HNSW index on `<=>` ascending. Ordering by `1 - distance`
+  descending is algebraically identical, returns the same rows in the same
+  order, and silently degrades to a sequential scan over every chunk in the org.
+  For the same reason the **score floor is applied in Python**, not as a SQL
+  `WHERE` on the derived score — it trims at most `MAX_TOP_K` rows, so it is
+  free there and costly in the query.
+- **`build_chunk_search_stmt` is shared, and that is deliberate.** There are two
+  callers with irreconcilable session types: the async API route, and the sync
+  tool node (`tool_handler` runs inside a LangGraph superstep with nothing to
+  await). Both execute the same statement object. Writing the query twice is how
+  the sync copy quietly loses the `organization_id` filter — and the join
+  through `documents` is the ONLY tenant defence chunks have.
+- **`organization_id` comes from graph state, never from node config.** State is
+  seeded by `initial_state_from_trigger` from the run row, so it carries the
+  same provenance as a router's `get_current_org`; node config is author-typed
+  text on a canvas. `test_the_organization_comes_from_state_not_from_node_config`
+  pins it, and a missing org in state raises rather than searching unscoped.
+- **`knowledge_search` emits `node_usage`; `http_request` and `erp_connector`
+  still do not.** This breaks a previously-documented invariant on purpose —
+  retrieval embeds the query and therefore spends real money, and a NULL there
+  would make every RAG run under-report its own cost. The old rule described the
+  two tools that existed, not a principle. Known limitation: `cost_usd` is
+  `Numeric(12,6)` and a query embedding is ~$0.0000002, so the **per-node**
+  column rounds to 0.000000. Tokens are recorded and `current_cost_usd`
+  accumulates as a float before storage, so the run total is correct.
+- **`knowledge_base_id` is registry-owned; only `query`/`query_fields` are
+  node-overridable.** The KB is the retrieval TARGET — the direct analogue of
+  `http_request`'s `url`, and swapping the corpus under a reviewed tool is the
+  same hole in a different coat. `top_k`/`score_floor` are registry-owned too: a
+  node quietly widening the floor to 0 turns curated retrieval into a noise
+  generator that still looks approved. `is_mutating: true` is **rejected** on
+  this type — a read that forces an approval gate upstream devalues the gate.
+
+Two smaller notes. An empty hit list is a **result, not an error**: a corpus that
+cannot answer a question should tell the agent so, not fail the run. And
+`_default_search` imports the retrieval path **inside the call**, keeping the
+`graphs → modules.knowledge_base → db.sync_database` edge out of import time —
+`modules/tools/service.py` imports `node_handlers` for `validate_tool_config`,
+and a module-scope import would drag a second DB engine into every process that
+merely validates a config.
+
+**Watch for default-argument binding here.** `client_factory: Callable = get_llm_client`
+as a signature default binds the function object once at import, which defeats
+monkeypatching and any later re-binding — it cost five failing tests during the
+build. Both search paths take `None` and resolve inside the body instead.
+
 ## Deliberate design decisions (not bugs)
 
 - `compile_graph()` bypasses the Redis compiled-graph cache entirely when

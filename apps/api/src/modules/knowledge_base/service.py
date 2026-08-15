@@ -15,11 +15,14 @@ and nothing else.
 """
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from src.core import storage
 from src.core.document_text import (
@@ -28,8 +31,16 @@ from src.core.document_text import (
     content_hash,
     resolve_mime_type,
 )
+from src.core.llm_client import LLMClient, get_llm_client
+from src.db.sync_database import get_sync_session_maker
 from src.modules.knowledge_base.models import Document, KnowledgeBase
-from src.modules.knowledge_base.repository import KnowledgeBaseRepository
+from src.modules.knowledge_base.repository import (
+    DEFAULT_SCORE_FLOOR,
+    DEFAULT_TOP_K,
+    MAX_TOP_K,
+    KnowledgeBaseRepository,
+    build_chunk_search_stmt,
+)
 from src.modules.knowledge_base.schemas import KnowledgeBaseCreate, KnowledgeBaseUpdate
 from src.modules.workspaces.models import Workspace
 
@@ -40,6 +51,159 @@ from src.modules.workspaces.models import Workspace
 #: an unbounded embedding bill. 20 MB is far above any policy document — the
 #: plan's reference corpus is 40-page PDFs at well under 1 MB.
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class RetrievalHit:
+    """One retrieved chunk, carrying everything an agent needs to cite it."""
+
+    document_id: uuid.UUID
+    document_name: str
+    chunk_index: int
+    content: str
+    score: float
+
+
+@dataclass(frozen=True)
+class RetrievalResult:
+    """
+    Hits plus the bookkeeping for the one embedding call that produced them.
+
+    The cost is carried out of here rather than swallowed because a
+    `knowledge_search` node reports it on the `node_usage` channel — a RAG run
+    whose per-run cost omitted its retrieval spend would under-report, and
+    per-run cost is a governance claim this product makes explicitly.
+    """
+
+    hits: list[RetrievalHit]
+    model: str
+    tokens: int
+    cost_usd: float
+
+
+def _shape_hits(rows: Sequence[Any], score_floor: float) -> list[RetrievalHit]:
+    """
+    Trim the ranked rows to those clearing the floor.
+
+    Applied here rather than in SQL so the ORDER BY can stay on raw cosine
+    distance and keep using the HNSW index — see `build_chunk_search_stmt`.
+    Rows arrive already sorted best-first, so this preserves rank.
+    """
+    return [
+        RetrievalHit(
+            document_id=row.document_id,
+            document_name=row.file_name,
+            chunk_index=row.chunk_index,
+            content=row.content,
+            score=float(row.score),
+        )
+        for row in rows
+        if float(row.score) >= score_floor
+    ]
+
+
+def _clamp_top_k(top_k: int | None) -> int:
+    if top_k is None:
+        return DEFAULT_TOP_K
+    return max(1, min(int(top_k), MAX_TOP_K))
+
+
+class EmptyQueryError(ValueError):
+    """Raised for a blank search query, before any billable call is made."""
+
+
+@dataclass(frozen=True)
+class _QueryEmbedding:
+    vector: list[float]
+    model: str
+    tokens: int
+    cost_usd: float
+
+
+def _embed_query(*, query: str, model: str, client_factory: Callable[..., LLMClient] | None = None) -> _QueryEmbedding:
+    """
+    Embed one search query. Synchronous — `LLMClient` deliberately is.
+
+    The blank check is here rather than left to `embed()` so the failure is a
+    named error at the boundary instead of an OpenAI 400 surfacing from three
+    frames down, and so no request is billed for embedding whitespace.
+
+    `client_factory` defaults to None and is resolved to `get_llm_client` HERE
+    rather than in the signature. A `= get_llm_client` default binds the
+    function object once at import, which silently defeats both monkeypatching
+    in tests and any future re-binding of the module attribute.
+    """
+    text = (query or "").strip()
+    if not text:
+        raise EmptyQueryError("Search query is empty.")
+
+    factory = client_factory or get_llm_client
+    result = factory().embed(texts=[text], model=model)
+    return _QueryEmbedding(
+        vector=result.vectors[0],
+        model=result.model,
+        tokens=result.tokens,
+        cost_usd=result.cost_usd,
+    )
+
+
+def search_knowledge_base_sync(
+    *,
+    organization_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    query: str,
+    top_k: int | None = None,
+    score_floor: float | None = None,
+    client_factory: Callable[..., LLMClient] | None = None,
+    session_factory: Callable[[], Any] | None = None,
+) -> RetrievalResult:
+    """
+    The synchronous twin of `KnowledgeBaseService.search`, for the tool node.
+
+    It exists because `tool_handler` runs inside a LangGraph superstep: it is a
+    sync function with no event loop to await on and no session handed to it.
+    This is the same constraint that produced `ToolExecutionLogger`, and it
+    takes the same answer — `src/db/sync_database.py`, a second psycopg2 engine
+    pooled with NullPool. Do not "unify" this with the async path by running a
+    loop inside the handler; a nested `asyncio.run` inside a LangGraph node
+    deadlocks against the executor already driving the graph.
+
+    `organization_id` is supplied by the caller from the run row and is never
+    read from node config — a workflow author must not be able to point a
+    retrieval node at another tenant's corpus by editing a UUID on the canvas.
+
+    Raises `LookupError` when the KB does not exist **in this org**; the two
+    cases are deliberately indistinguishable, matching the 404-never-403 rule
+    the HTTP layer follows.
+    """
+    maker = session_factory or get_sync_session_maker()
+    with maker() as session:
+        kb = session.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.id == knowledge_base_id,
+                KnowledgeBase.organization_id == organization_id,
+            )
+        ).scalar_one_or_none()
+        if kb is None:
+            raise LookupError(f"Knowledge base {knowledge_base_id} not found.")
+
+        embedded = _embed_query(query=query, model=kb.embedding_model, client_factory=client_factory)
+        rows = session.execute(
+            build_chunk_search_stmt(
+                organization_id=organization_id,
+                knowledge_base_id=knowledge_base_id,
+                query_vector=embedded.vector,
+                top_k=_clamp_top_k(top_k),
+            )
+        ).all()
+
+    floor = DEFAULT_SCORE_FLOOR if score_floor is None else score_floor
+    return RetrievalResult(
+        hits=_shape_hits(rows, floor),
+        model=embedded.model,
+        tokens=embedded.tokens,
+        cost_usd=embedded.cost_usd,
+    )
 
 
 class KnowledgeBaseService:
@@ -241,6 +405,43 @@ class KnowledgeBaseService:
     ) -> Sequence:
         await self._require_document(organization_id, kb_id, document_id)
         return await self.repo.list_chunks(organization_id, document_id, offset, limit)
+
+    # ------------------------------------------------------------ retrieval
+
+    async def search(
+        self,
+        organization_id: uuid.UUID,
+        kb_id: uuid.UUID,
+        query: str,
+        *,
+        top_k: int | None = None,
+        score_floor: float | None = None,
+        client_factory: Callable[..., LLMClient] | None = None,
+    ) -> RetrievalResult:
+        """
+        Semantic search over one knowledge base. Backs the retrieval playground.
+
+        The query is embedded with **the KB's own `embedding_model`**, never a
+        default. Comparing a query embedded by one model against a corpus built
+        with another returns plausible cosine numbers and meaningless rankings,
+        and nothing raises — `embed()` requires an explicit model for exactly
+        this reason, and the authority is this row.
+        """
+        kb = await self._require_kb(organization_id, kb_id)
+        result = await run_in_threadpool(
+            _embed_query,
+            query=query,
+            model=kb.embedding_model,
+            client_factory=client_factory,
+        )
+        rows = await self.repo.search_chunks(organization_id, kb_id, result.vector, _clamp_top_k(top_k))
+        floor = DEFAULT_SCORE_FLOOR if score_floor is None else score_floor
+        return RetrievalResult(
+            hits=_shape_hits(rows, floor),
+            model=result.model,
+            tokens=result.tokens,
+            cost_usd=result.cost_usd,
+        )
 
     # -------------------------------------------------------------- internal
 

@@ -12,20 +12,23 @@ it inside the service.
 import uuid
 from collections.abc import Sequence
 
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dependencies import get_current_org, require_permission
 from src.core.permissions import KNOWLEDGE_READ, KNOWLEDGE_WRITE
 from src.db.database import get_db_session
 from src.modules.knowledge_base.schemas import (
+    ChunkSearchRequest,
+    ChunkSearchResponse,
     DocumentChunkResponse,
     DocumentResponse,
     KnowledgeBaseCreate,
     KnowledgeBaseResponse,
     KnowledgeBaseUpdate,
+    RetrievalHitResponse,
 )
-from src.modules.knowledge_base.service import KnowledgeBaseService
+from src.modules.knowledge_base.service import EmptyQueryError, KnowledgeBaseService
 
 router = APIRouter(tags=["knowledge-bases"])
 
@@ -190,3 +193,52 @@ async def list_document_chunks(
     cannot page them. Never returns the embedding; see `DocumentChunkResponse`.
     """
     return await service.list_chunks(organization_id, kb_id, document_id, offset, limit)
+
+
+# ---------------------------------------------------------------------------
+# Retrieval
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{kb_id}/search",
+    response_model=ChunkSearchResponse,
+    dependencies=[require_permission(KNOWLEDGE_READ)],
+)
+async def search_knowledge_base(
+    kb_id: uuid.UUID,
+    data: ChunkSearchRequest,
+    organization_id: uuid.UUID = Depends(get_current_org),
+    service: KnowledgeBaseService = Depends(get_kb_service),
+) -> ChunkSearchResponse:
+    """
+    Semantic search over one knowledge base — the retrieval playground's endpoint.
+
+    POST rather than GET despite being read-only: the query is free text that
+    would otherwise sit in a URL, and putting a user's question into a query
+    string writes it to every access log and proxy in the path. It is gated on
+    `knowledge:read` for the same reason — it returns chunk text that permission
+    already exposes through the chunk reader.
+
+    Each call embeds the query and is therefore billable, which is why the
+    response carries `tokens` and `cost_usd` back to the caller.
+    """
+    try:
+        result = await service.search(
+            organization_id,
+            kb_id,
+            data.query,
+            top_k=data.top_k,
+            score_floor=data.score_floor,
+        )
+    except EmptyQueryError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    return ChunkSearchResponse(
+        query=data.query,
+        hits=[RetrievalHitResponse(**vars(hit)) for hit in result.hits],
+        hit_count=len(result.hits),
+        embedding_model=result.model,
+        tokens=result.tokens,
+        cost_usd=result.cost_usd,
+    )

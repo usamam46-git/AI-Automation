@@ -228,7 +228,16 @@ class ToolService:
     #: reviewed and marked non-mutating at an arbitrary endpoint, while the
     #: publish-time approval gate went on reading `is_mutating=false` off the
     #: registry row it no longer describes.
-    NODE_OVERRIDABLE_KEYS = frozenset({"body", "body_fields", "payload", "payload_fields"})
+    #:
+    #: `query`/`query_fields` join the set for `knowledge_search` (days 6-7) —
+    #: the question asked is per-usage, exactly like a request body.
+    #: `knowledge_base_id` pointedly does NOT: it is the retrieval target, the
+    #: direct analogue of `url`, and letting a node swap the corpus underneath a
+    #: reviewed tool is the same hole in a different coat. `top_k` and
+    #: `score_floor` stay registry-owned too — they are the tuning an org
+    #: reviewed, and a node quietly widening the floor to 0 turns a curated
+    #: retrieval into a noise generator that still looks approved.
+    NODE_OVERRIDABLE_KEYS = frozenset({"body", "body_fields", "payload", "payload_fields", "query", "query_fields"})
 
     async def resolve_node_configs(
         self,

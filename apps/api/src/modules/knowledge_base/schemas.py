@@ -13,6 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.core.llm_client import SUPPORTED_EMBEDDING_MODELS
+from src.modules.knowledge_base.repository import MAX_TOP_K
 
 #: What a new knowledge base gets when the caller does not choose.
 #:
@@ -120,3 +121,47 @@ class DocumentChunkResponse(BaseModel):
     token_count: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ChunkSearchRequest(BaseModel):
+    """
+    A retrieval query.
+
+    Deliberately has no `embedding_model` — the model is the owning knowledge
+    base's, and letting a caller choose per query would silently produce
+    cross-model cosine scores that rank meaninglessly without raising.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(..., min_length=1, max_length=4000)
+    top_k: int | None = Field(None, ge=1, le=MAX_TOP_K)
+    #: 0 returns the raw top-k unfiltered, which is what makes the playground
+    #: useful for calibrating the floor against a real corpus.
+    score_floor: float | None = Field(None, ge=0.0, le=1.0)
+
+
+class RetrievalHitResponse(BaseModel):
+    """One ranked chunk. `document_name` and `chunk_index` are the citation."""
+
+    document_id: uuid.UUID
+    document_name: str
+    chunk_index: int
+    content: str
+    score: float
+
+
+class ChunkSearchResponse(BaseModel):
+    """
+    Ranked hits plus what the one embedding call cost.
+
+    The cost is surfaced rather than hidden because the playground is a place a
+    developer will run hundreds of queries while tuning, and each is billable.
+    """
+
+    query: str
+    hits: list[RetrievalHitResponse]
+    hit_count: int
+    embedding_model: str
+    tokens: int
+    cost_usd: float

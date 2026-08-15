@@ -201,17 +201,43 @@ Ordered by risk, not by comfort.
 
 ### Days 6–7 — retrieval and the search tool · ~$0.20
 
-- [ ] Retrieval service: embed the query with the KB's **own** model (never a
+- [x] Retrieval service: embed the query with the KB's **own** model (never a
       default — cross-model cosine returns plausible numbers and meaningless
       rankings), cosine search over HNSW, top-*k* with a score floor.
+      `build_chunk_search_stmt` in `knowledge_base/repository.py` is shared by an
+      async path (the API) and a sync one (the tool node), because those two
+      callers have irreconcilable session types and duplicating the query is how
+      the sync copy quietly loses its tenant filter.
 - [ ] *Optional:* keyword leg over the existing GIN index, fused with reciprocal
-      rank. The index is already there; only the query is missing.
-- [ ] Add `knowledge_search` to the tool dispatcher and the registry's accepted
+      rank. **Deliberately deferred** (it is cut #1 in §7, and the index waits).
+- [x] Add `knowledge_search` to the tool dispatcher and the registry's accepted
       types. Return chunk text **plus** document name and chunk index so the
       agent can cite.
-- [ ] Tests — including a query against an empty KB returning nothing rather than raising.
+- [x] Tests — including a query against an empty KB returning nothing rather than raising.
+      **408 backend tests** (389 + 19).
 
-> **Gate:** a published workflow whose tool node returns real chunks into graph state.
+> **Gate PASSED 2026-08-16.** Live, against the real stack, in the org holding
+> the BYOK key: AP policy ingested through `worker_documents` → `indexed`,
+> 1536-d. Published `start → knowledge_search → agent → end`, triggered through
+> the real Celery worker → `completed`. The tool node returned a real chunk at
+> **cosine 0.5589** into graph state, and the agent answered from it and cited
+> `ap-policy.txt`. Run cost $0.000051.
+>
+> Three decisions settled during the build, none of them in the plan beforehand:
+> **cost is attributed** to `knowledge_search` (it emits `node_usage`, breaking
+> the old "tool nodes never report usage" invariant, which described the two
+> tools that existed rather than a principle); **`knowledge_base_id` is
+> registry-owned, not node-overridable** (it is the analogue of `url` — only
+> `query`/`query_fields` joined `NODE_OVERRIDABLE_KEYS`); and
+> **`is_mutating: true` is rejected on retrieval**, since a read that demands an
+> approval gate upstream devalues the gate.
+>
+> One measured limitation: `cost_usd` is `Numeric(12,6)`, and a query embedding
+> costs ~$0.0000002, so the **per-node** cost column rounds to 0.000000. The
+> tokens are recorded (10/0) and the run total is right — `current_cost_usd`
+> accumulates as a float before it is stored — so nothing is lost in aggregate.
+> Widening the column is not worth a migration at this scale; revisit if
+> retrieval volume ever makes per-node retrieval cost a figure anyone reads.
 
 ### Days 8–9 — knowledge base UI · ~$0.30
 
@@ -319,6 +345,8 @@ Append as you go, so a future session can pick up mid-sprint.
 | Date | Day | Done | Spend to date |
 |---|---|---|---|
 | 2026-08-15 | 1 | **Gate PASSED.** `embed()` called for the first time — 1536-d, unit-normalised, real vector into `document_chunks`, cosine over HNSW ranked the AP clause 0.51 vs 0.10 for an unrelated one, tenant scoping via `document → knowledge_base` holds. `parse()` proven too (separate code path; days 6–7 feed retrieval into an agent node): structured output correct and `cost_usd` matched `_MODEL_PRICING` to the last digit. Full HITL run end to end on `gpt-4.1-nano` — trigger → agent → **held 18.3s at the gate** → approve → completed, 148/21 tokens, $0.000023 persisted to a real `node_executions` row. | ~$0.00004 |
+
+| 2026-08-16 | 6–7 | **Gate passed.** `knowledge_search` ships as a TOOL TYPE (not a node type, per §4): `build_chunk_search_stmt` shared by an async API path and a sync tool-node path, `POST /knowledge-bases/{id}/search` built early so days 8–9 are pure frontend, `NODE_OVERRIDABLE_KEYS` extended with `query`/`query_fields` only. Proven live end to end — retrieved chunk at cosine 0.5589 into graph state, agent answered from it and cited the document, run cost $0.000051. Hybrid keyword search deferred (cut #1). **408 tests** (389 + 19). Also closed day 1's last open item (live pricing re-verified, all 11 rates match) and rotated `INTEGRATION_ENCRYPTION_KEY` off the repo-committed default on the Mac. | ~$0.0002 |
 
 | 2026-08-15 | 2–5 | **Gate passed.** `knowledge_base` module (CRUD + upload + chunks), `core/storage.py` (first MinIO code), `core/document_text.py` (pypdf/docx extraction, paragraph-packed chunking), `workers/document_tasks.py` (first task ever on `worker_documents`), migration `20260815_kb_ingestion`. Upload-time dedup returns 200 and spends nothing. **389 tests** (337 + 52). Also: test suite now refuses to run outside a `*_test` database, after it destroyed the dev data on day 1. | ~$0.0001 |
 

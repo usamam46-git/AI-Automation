@@ -590,6 +590,26 @@ verified via a full read-only orientation pass — see note below.)
   through `documents` is the only isolation, `passive_deletes=True` is required
   or deleting a KB raises NotNullViolation, and **workers do not bind-mount
   `src/`** so a new task module needs an image rebuild.
+- **Retrieval + the `knowledge_search` tool landed 2026-08-16** (days 6–7).
+  `knowledge_search` is a **tool type, not a node type** — it slots into the
+  existing dispatcher and inherits the registry picker and `tool_executions`
+  auditing, instead of touching the backend enum, the frontend node catalog, a
+  config form and `lib/graph-validation.ts`. No migration: the HNSW index was
+  already there.
+  New: `build_chunk_search_stmt` in `knowledge_base/repository.py`,
+  `KnowledgeBaseService.search()` (async) + `search_knowledge_base_sync()`
+  (sync, for the node), `POST /api/v1/knowledge-bases/{id}/search`.
+  **408 backend tests** (389 + 19).
+  Proven live end to end: published `start → knowledge_search → agent → end`
+  ran through the real Celery worker to `completed`, the tool node put a real
+  chunk (cosine 0.5589) into graph state, and the agent answered from it and
+  cited the document.
+  Four contracts in apps/api/CLAUDE.md's retrieval section; the load-bearing
+  ones: **ORDER BY is raw cosine distance, never `1 - distance` descending**
+  (algebraically identical, and it silently defeats the HNSW index);
+  `organization_id` comes from **graph state**, never node config; and
+  `knowledge_search` **emits `node_usage`** while the other two tool types still
+  do not — a deliberate, documented break with the old invariant.
 - **Test suite now REFUSES to run outside a `*_test` database** (2026-08-15).
   Truncate-based isolation wipes whatever `DATABASE_URL` names, and on
   2026-08-15 a run against the dev database destroyed an org, a user, a

@@ -31,7 +31,7 @@ class ToolCreate(BaseModel):
 
     workspace_id: uuid.UUID = Field(..., description="Owning workspace; must belong to the caller's org.")
     name: str = Field(..., pattern=TOOL_NAME_PATTERN, description="Function name exposed to the LLM. Unique within the workspace.")
-    tool_type: str = Field(..., description="http_request | erp_connector. Immutable after create.")
+    tool_type: str = Field(..., description="http_request | erp_connector | knowledge_search. Immutable after create.")
     description: str | None = Field(None, description="What the tool does, in the model's words (Vol. 4 §4.2).")
     input_schema: dict[str, Any] | None = Field(None, description="JSON Schema sent to the LLM as the function's parameters.")
     config: dict[str, Any] | None = Field(None, description="Type-specific settings: url/method/headers for http_request, action for erp_connector.")

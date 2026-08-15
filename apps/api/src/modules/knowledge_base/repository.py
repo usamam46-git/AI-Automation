@@ -15,11 +15,77 @@ Tenant scoping differs per table, and the difference is the thing to get right:
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import Select, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.knowledge_base.models import Document, DocumentChunk, KnowledgeBase
+
+# Retrieval defaults (days 6-7). `TOP_K` matches the five-chunk RAG call the
+# build plan's budget model is costed against.
+#
+# `SCORE_FLOOR` is empirical, not a guess: the day-1 embedding probe measured
+# 0.51 cosine similarity for the AP clause that answered the query against 0.10
+# for an unrelated clause in the same corpus. 0.3 sits in that gap. It is a
+# floor on RELEVANCE, and returning nothing is a valid, useful answer — an agent
+# told "no matching policy" can say so, whereas one handed a 0.1-similarity
+# chunk will cheerfully reason from it.
+DEFAULT_TOP_K = 5
+DEFAULT_SCORE_FLOOR = 0.3
+MAX_TOP_K = 20
+
+
+def build_chunk_search_stmt(
+    *,
+    organization_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    query_vector: Sequence[float],
+    top_k: int,
+) -> Select:
+    """
+    The vector-search statement, shared by the async and sync callers.
+
+    There are two callers with irreconcilable session types — the retrieval API
+    route (async) and the `knowledge_search` tool node (sync, because
+    `tool_handler` runs inside a LangGraph superstep with nothing to await). The
+    ranking, the tenant join and the ordering must be identical for both, so the
+    statement is built once here and executed by whichever session the caller
+    holds. Duplicating this query in two places is how the sync path quietly
+    loses the `organization_id` filter.
+
+    Three things that are load-bearing:
+
+    - **The join through `documents` is the entire tenant defence.**
+      `document_chunks` has no `organization_id` and is not in the RLS policy
+      set, so a missing filter here is a silent cross-tenant read.
+    - **ORDER BY is the raw cosine DISTANCE, not the similarity score.** pgvector
+      matches an HNSW index on `<=>` ascending; ordering by `1 - distance`
+      descending is algebraically identical and defeats the index, degrading to
+      a sequential scan over every chunk in the org.
+    - **The score floor is NOT applied here.** Filtering on the derived score in
+      SQL would also cost the index. The caller trims the returned top-k in
+      Python, where it is free — k is at most MAX_TOP_K rows.
+    """
+    distance = DocumentChunk.embedding.cosine_distance(query_vector)
+    return (
+        select(
+            DocumentChunk.id,
+            DocumentChunk.content,
+            DocumentChunk.chunk_index,
+            DocumentChunk.token_count,
+            Document.id.label("document_id"),
+            Document.file_name,
+            (1 - distance).label("score"),
+        )
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .where(
+            Document.organization_id == organization_id,
+            Document.knowledge_base_id == knowledge_base_id,
+        )
+        .order_by(distance)
+        .limit(top_k)
+    )
 
 
 class KnowledgeBaseRepository:
@@ -159,6 +225,22 @@ class KnowledgeBaseRepository:
             .limit(limit)
         )
         return (await self.db.execute(stmt)).scalars().all()
+
+    async def search_chunks(
+        self,
+        organization_id: uuid.UUID,
+        knowledge_base_id: uuid.UUID,
+        query_vector: Sequence[float],
+        top_k: int,
+    ) -> Sequence[Any]:
+        """Execute `build_chunk_search_stmt` on this async session. Rows, not ORM objects."""
+        stmt = build_chunk_search_stmt(
+            organization_id=organization_id,
+            knowledge_base_id=knowledge_base_id,
+            query_vector=query_vector,
+            top_k=top_k,
+        )
+        return (await self.db.execute(stmt)).all()
 
     async def count_chunks(self, document_id: uuid.UUID) -> int:
         stmt = select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document_id)

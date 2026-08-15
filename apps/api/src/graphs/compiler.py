@@ -132,7 +132,19 @@ def _bind_node_handler(
         audit_log = tool_log if audit_tool_id is not None else None
 
         def _tool(state: dict[str, Any]) -> dict[str, Any]:
-            return tool_handler(state, node_key=node_key, config=tool_config, tool_log=audit_log, tool_id=audit_tool_id)
+            # `client_factory` is the LLM factory, needed only by knowledge_search
+            # (it embeds the query) but bound unconditionally so BYOK resolution
+            # reaches every tool type that grows an LLM call later. The httpx
+            # factory used by http_request is a separate parameter with its own
+            # default inside the handler.
+            return tool_handler(
+                state,
+                node_key=node_key,
+                config=tool_config,
+                llm_client_factory=client_factory,
+                tool_log=audit_log,
+                tool_id=audit_tool_id,
+            )
 
         return _tool
     if node_type == "subgraph":
