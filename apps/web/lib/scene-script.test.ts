@@ -11,6 +11,7 @@ import {
   DESK_FAR_Z,
   DESK_FORESHORTEN,
   DESK_NEAR_Z,
+  DESK_STACK_STEP,
   DESK_Y,
   LIFTOFF_END,
   PLATE_DESK_EDGE_NDC,
@@ -959,10 +960,45 @@ describe("the desk opening", () => {
     // Laying a card at exactly DESK_Y centres its 0.06 depth in the desk's top
     // face, so half of it is below the surface and the two coplanar faces
     // fight — a document ends up looking sliced off inside the table.
+    const top = CARD_REST_Y + (SCENE_NODES.length - 1) * DESK_STACK_STEP;
     for (const node of SCENE_NODES) {
-      expect(node.desk[1]).toBeCloseTo(CARD_REST_Y, 5);
+      expect(node.desk[1]).toBeGreaterThanOrEqual(CARD_REST_Y);
+      expect(node.desk[1]).toBeLessThanOrEqual(top);
       expect(node.desk[1]).toBeGreaterThan(DESK_Y);
     }
+    // The whole pile is a fraction of a card's own thickness tall. Documents
+    // lying on a desk, not a staircase.
+    expect(top - CARD_REST_Y).toBeLessThan(0.1);
+  });
+
+  it("never leaves two overlapping sheets on the same plane", () => {
+    // The opening frame's flicker. Desk documents are ALLOWED to overlap —
+    // DESK_OVERLAP is what makes the shot read as a desk in use — but they used
+    // to share one exact rest height, so every overlapping pair had precisely
+    // coplanar printed faces and the depth buffer flipped between them as the
+    // camera damping moved the view. The text on those cards blinked.
+    for (let i = 0; i < SCENE_NODES.length; i += 1) {
+      for (let j = i + 1; j < SCENE_NODES.length; j += 1) {
+        const a = SCENE_NODES[i];
+        const b = SCENE_NODES[j];
+        const overlaps =
+          Math.abs(a.desk[0] - b.desk[0]) < (CARD_WORLD_WIDTH * (a.scale + b.scale)) / 2 &&
+          Math.abs(a.desk[2] - b.desk[2]) < (CARD_WORLD_HEIGHT * (a.scale + b.scale)) / 2;
+        if (!overlaps) continue;
+        // A whole step apart at least, which is ~60 depth-buffer quanta at this
+        // distance — see DESK_STACK_STEP.
+        expect(Math.abs(a.desk[1] - b.desk[1])).toBeGreaterThanOrEqual(DESK_STACK_STEP * 0.999);
+      }
+    }
+  });
+
+  it("keeps the nearest, most readable sheets on top of the pile", () => {
+    // Near cards are the large legible ones. A small distant sheet lying over
+    // an invoice the frame is asking you to read is the wrong way up.
+    const sorted = [...SCENE_NODES].sort((a, b) => b.desk[2] - a.desk[2]);
+    const nearest = sorted[0];
+    const furthest = sorted[sorted.length - 1];
+    expect(nearest.desk[1]).toBeGreaterThan(furthest.desk[1]);
   });
 
   it("starts on the desk and is fully airborne by liftoff", () => {

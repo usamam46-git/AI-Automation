@@ -507,7 +507,7 @@ now load-bearing — see below. **Deleted 2026-08-14:**
 `components/marketing/scene/wood-texture.ts`, unreferenced once the modelled
 desk became a plate.
 
-**241 frontend tests** (108 over `scene-script` alone); `tsc --noEmit`, `eslint`
+**243 frontend tests** (110 over `scene-script` alone); `tsc --noEmit`, `eslint`
 and `npm run build` clean.
 
 ### The room is a PHOTOGRAPH now (2026-08-14)
@@ -559,6 +559,24 @@ Read this section before touching the opening. Several of the rules below
   downward, where a transparent plane is invisible. Also `shadow-normalBias`,
   not a big `shadow-bias`: normal-offset is the right tool for thin flat
   geometry and does not peter-pan the shadows the scene depends on.
+- **The desk documents are a PILE, not one plane — `DESK_STACK_STEP` (2026-08-15).**
+  Desk sheets are allowed to overlap (`DESK_OVERLAP`, which is what makes the
+  shot read as a desk in use), but every one of them used to sit at exactly
+  `CARD_REST_Y`. About **fifty of the roster's pairs overlap**, so those pairs
+  had *precisely coplanar* printed faces and the depth buffer had no basis to
+  pick one — their text flickered between the two documents on the opening frame
+  as the camera damping and the pointer sway moved the view by a fraction of a
+  pixel. Same failure `CARD_REST_Y` already fixes for card-versus-desk; this is
+  card-versus-card. Fixed with a real height rather than a depth bias, because
+  paper stacks: each sheet is raised `0.004` above the one below, so the pile
+  sorts itself, casts correct contact shadows and cannot fight on any renderer.
+  **Measured, not assumed** — with the step at 0 a progress delta of 0.0004
+  (sub-pixel) flipped **552 pixels** spread right across the pile; with the step
+  in, **0**. The step is threaded into `placeOnDesk` rather than added
+  afterwards, so the far-edge rule is checked at the sheet's true height, and
+  `byDepth` is walked in reverse so the **near, readable sheets end up on top**.
+  Keep it tiny: raising a sheet climbs it up the frame toward
+  `PLATE_DESK_EDGE_NDC` and slides its contact shadow out from under it.
 - **The key light is on the LEFT and warm, bounded to the plate's lifetime.**
   This is a **deliberate, scoped divergence from "the lights were the beige"**
   below. That rule diagnosed a warm key multiplying a near-white *modelled* room;
