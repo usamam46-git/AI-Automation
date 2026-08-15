@@ -190,6 +190,31 @@ export const DESK_Y = -5;
  */
 export const CARD_REST_Y = DESK_Y + 0.05;
 /**
+ * How much each sheet is raised above the one below it in the pile.
+ *
+ * **Desk documents are allowed to overlap** (`DESK_OVERLAP`) — that is what
+ * makes the opening read as a desk in use. But every sheet used to sit at
+ * exactly `CARD_REST_Y`, so the printed faces of two overlapping cards were
+ * *precisely coplanar*, and the depth buffer had no way to decide which one it
+ * was looking at. About fifty of the roster's pairs overlap, and wherever one
+ * did, its text flickered between the two documents on the opening frame as the
+ * camera damping and the pointer sway moved the view by a fraction of a pixel.
+ * That is the classic z-fight, and it is the same failure `CARD_REST_Y` above
+ * already fixes for card-versus-desk — this is card-versus-card.
+ *
+ * Paper on a desk *stacks*, so the honest fix is a real height rather than a
+ * depth bias: give each sheet its own plane and the pile sorts itself, casts
+ * correct contact shadows, and cannot fight on any renderer.
+ *
+ * The step is deliberately tiny. At the opening camera a vertical offset maps
+ * to roughly 4× as much separation along the view ray, so 0.004 buys ~0.016
+ * world units where a 24-bit buffer at this distance resolves ~0.00024 — about
+ * sixty quanta, with the whole twenty-sheet pile still under 0.08 tall. Anything
+ * larger starts to show: the sheets are lifted, so they climb the frame, and
+ * their contact shadows slide out from under them.
+ */
+export const DESK_STACK_STEP = 0.004;
+/**
  * The room the desk stands in — now a photograph, not geometry.
  *
  * `FLOOR_Y` and `WALL_Z` used to position a modelled floor and back wall in
@@ -1007,8 +1032,19 @@ function placeVisible(
  * Left and right straddling is still rejected — the table runs the full width of
  * the plate, but a sheet half-cut by the side of the *viewport* has no such
  * excuse, and there is ample room in x without it.
+ *
+ * `restY` is the sheet's own height in the pile (see `DESK_STACK_STEP`) and is
+ * used for the projection as well as the result, so the far-edge rule is checked
+ * against where the document actually lands rather than against the base plane.
+ * A card raised a fraction climbs the frame by a fraction, and that is exactly
+ * the direction the table's edge is in.
  */
-function placeOnDesk(rand: () => number, placed: ScreenPoint[], scale: number): Vec3 | null {
+function placeOnDesk(
+  rand: () => number,
+  placed: ScreenPoint[],
+  scale: number,
+  restY: number,
+): Vec3 | null {
   const tanHalf = Math.tan((CAMERA_FOV_DEG * Math.PI) / 360);
 
   // Two passes. The first tries to seat the document on the visible tabletop
@@ -1021,7 +1057,7 @@ function placeOnDesk(rand: () => number, placed: ScreenPoint[], scale: number): 
     // desk recedes, so a box in world x covers a shrinking slice of frame as it
     // goes back and piles everything into the foreground.
     const z = DESK_NEAR_Z - rand() * (DESK_NEAR_Z - DESK_FAR_Z);
-    const probe = projectAtProgress([0, CARD_REST_Y, z], 0);
+    const probe = projectAtProgress([0, restY, z], 0);
     if (probe.depth <= 2) continue;
     const halfWidth = probe.depth * tanHalf * COMPOSE_ASPECT;
 
@@ -1032,7 +1068,7 @@ function placeOnDesk(rand: () => number, placed: ScreenPoint[], scale: number): 
       ? (rand() * 2 - 1) * halfWidth * 0.95
       : (rand() < 0.5 ? -1 : 1) * halfWidth * (1.5 + rand() * 0.8);
 
-    const candidate: Vec3 = [x, CARD_REST_Y, z];
+    const candidate: Vec3 = [x, restY, z];
     const raw = projectAtProgress(candidate, 0);
     if (raw.depth <= 2) continue;
 
@@ -1182,7 +1218,7 @@ function buildNodes(seed: number): readonly SceneNode[] {
   const desks = new Map<string, Vec3>();
   const scales = new Map<string, number>();
 
-  for (const entry of byDepth) {
+  byDepth.forEach((entry, order) => {
     const slot = slotFor.get(entry.id)!;
     // Near cards are held closer to their nominal size: a 0.75 scale on the one
     // card meant to be readable throws away the whole point of the slot.
@@ -1200,7 +1236,19 @@ function buildNodes(seed: number): readonly SceneNode[] {
     scattered.set(entry.id, position);
     scales.set(entry.id, scale);
 
-    const onDesk = placeOnDesk(randDesk, deskPlaced, scale);
+    /**
+     * Where this sheet sits in the pile.
+     *
+     * `byDepth` runs near-to-far, and the stack is built the other way up, so
+     * the NEAR documents end up on top. That is the important half: near cards
+     * are the large, readable ones, and a small distant sheet lying over the
+     * top of an invoice you are meant to read is worse than the reverse. It
+     * also puts the largest offsets where they are harmless — the far-edge rule
+     * bites at the back of the table, and the back of the table is the bottom
+     * of the pile, offset by nothing.
+     */
+    const restY = CARD_REST_Y + (byDepth.length - 1 - order) * DESK_STACK_STEP;
+    const onDesk = placeOnDesk(randDesk, deskPlaced, scale, restY);
     if (!onDesk) {
       throw new Error(
         `Could not place "${entry.id}" on the desk after 800 attempts — ` +
@@ -1208,7 +1256,7 @@ function buildNodes(seed: number): readonly SceneNode[] {
       );
     }
     desks.set(entry.id, onDesk);
-  }
+  });
 
   // Ring index within each cluster, assigned in roster order so the arrangement
   // is stable and every member gets its own seat.
