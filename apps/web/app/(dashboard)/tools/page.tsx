@@ -29,12 +29,13 @@ import { useAuthStore } from "@/stores/auth-store";
  * workspace, not per org), so browsing across workspaces here would show tools
  * that the workflow you're building cannot reference.
  */
-const toolTypes: Array<ToolType | "all"> = ["all", "http_request", "erp_connector"];
+const toolTypes: Array<ToolType | "all"> = ["all", "http_request", "erp_connector", "knowledge_search"];
 
 const typeLabels: Record<string, string> = {
   all: "All",
   http_request: "HTTP",
   erp_connector: "ERP",
+  knowledge_search: "Knowledge",
 };
 
 function ToolRowsSkeleton() {

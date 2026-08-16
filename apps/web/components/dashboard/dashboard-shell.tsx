@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Bot, ChevronDown, FolderKanban, LayoutDashboard, LayoutGrid, LogOut, Plus, Settings, Workflow, Wrench } from "lucide-react";
+import { Activity, BookText, Bot, ChevronDown, LayoutDashboard, LayoutGrid, LogOut, Plus, Settings, Workflow, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,13 +26,13 @@ const navItems = [
   { label: "Workflows", href: "/workflows", icon: Workflow },
   { label: "Executions", href: "/executions", icon: Activity },
   { label: "Tools", href: "/tools", icon: Wrench },
+  { label: "Knowledge", href: "/knowledge", icon: BookText },
   { label: "Workspaces", href: "/workspaces", icon: LayoutGrid },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
 const soonItems = [
   { label: "Agents", icon: Bot },
-  { label: "Knowledge Base", icon: FolderKanban },
 ];
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -55,8 +55,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const workspaces = workspacesQuery.data ?? [];
   const currentWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId) ?? workspaces[0] ?? null;
 
+  // Reconcile the (persisted) selection with what the org actually has. This
+  // handles two cases with one line, and the second is why it is not just a
+  // null check: a STORED id that no longer resolves — workspace archived, or a
+  // different user on the same browser — would otherwise sit in the store while
+  // the header displayed `workspaces[0]`, so every list filtered by an id the
+  // API never matches and the whole app looked empty. Nothing runs while the
+  // list is still loading, since `currentWorkspace` is null until it arrives.
   React.useEffect(() => {
-    if (!currentWorkspaceId && currentWorkspace) setCurrentWorkspaceId(currentWorkspace.id);
+    if (currentWorkspace && currentWorkspace.id !== currentWorkspaceId) setCurrentWorkspaceId(currentWorkspace.id);
   }, [currentWorkspace, currentWorkspaceId, setCurrentWorkspaceId]);
 
   const activeNavItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
@@ -69,6 +76,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       toast.error(getApiErrorMessage(error, "Logout failed"));
     } finally {
       clearAuth();
+      // The workspace selection outlives the session now that it is persisted,
+      // so clear it here too — the next account on this browser must not start
+      // inside the previous one's workspace id.
+      setCurrentWorkspaceId(null);
       queryClient.clear();
       router.replace("/login");
     }

@@ -78,7 +78,7 @@ export default function DashboardPage() {
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">{greeting()} 👋</h1>
+        <h1 className="text-xl font-semibold tracking-tight">{greeting()}</h1>
         <p className="text-sm text-muted-foreground">Here&apos;s what your automation has been doing.</p>
       </div>
 

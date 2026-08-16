@@ -11,7 +11,7 @@ import { ConfigNote, Field, FieldGroup } from "@/components/workflow-builder/con
 import { FieldMapEditor } from "@/components/workflow-builder/field-map-editor";
 import { JsonObjectEditor } from "@/components/workflow-builder/json-object-editor";
 import { KeyValueEditor } from "@/components/workflow-builder/key-value-editor";
-import type { Tool } from "@/lib/api";
+import type { KnowledgeBase, Tool } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -41,6 +41,7 @@ import { cn } from "@/lib/utils";
 const TOOL_TYPES = [
   { value: "http_request", label: "HTTP request" },
   { value: "erp_connector", label: "ERP connector" },
+  { value: "knowledge_search", label: "Knowledge search" },
 ] as const;
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
@@ -51,8 +52,27 @@ const ERP_ACTIONS = ["create_journal_entry", "post_journal_entry"] as const;
 
 const ERP_REQUIRED_PAYLOAD = ["vendor", "amount", "account_code"] as const;
 
-/** Keys the registry owns. Cleared when a node moves onto a registry tool. */
-const REGISTRY_OWNED_KEYS = ["tool_type", "url", "method", "headers", "timeout_seconds", "action", "is_mutating"] as const;
+/**
+ * Keys the registry owns. Cleared when a node moves onto a registry tool.
+ *
+ * `knowledge_base_id`/`top_k`/`score_floor` are here rather than in the
+ * overridable set on purpose, mirroring `ToolService.NODE_OVERRIDABLE_KEYS`: the
+ * knowledge base is the retrieval TARGET, the direct analogue of `url`, and a
+ * node that could swap the corpus under a reviewed tool is the same hole as one
+ * that could re-point its endpoint. Only the question asked is per-usage.
+ */
+const REGISTRY_OWNED_KEYS = [
+  "tool_type",
+  "url",
+  "method",
+  "headers",
+  "timeout_seconds",
+  "action",
+  "is_mutating",
+  "knowledge_base_id",
+  "top_k",
+  "score_floor",
+] as const;
 
 type ToolSource = "registry" | "inline";
 
@@ -73,11 +93,14 @@ export function ToolConfigForm({
   config,
   onChange,
   tools,
+  knowledgeBases,
 }: {
   config: Record<string, unknown>;
   onChange: (next: Record<string, unknown>) => void;
   /** The workspace's registry tools. `undefined` while they are still loading. */
   tools?: Tool[];
+  /** The workspace's knowledge bases, for the retrieval picker. `undefined` while loading. */
+  knowledgeBases?: KnowledgeBase[];
 }) {
   const source = sourceOf(config);
 
@@ -127,9 +150,9 @@ export function ToolConfigForm({
       </FieldGroup>
 
       {source === "registry" ? (
-        <RegistryFields config={config} patch={patch} tools={tools} />
+        <RegistryFields config={config} patch={patch} tools={tools} knowledgeBases={knowledgeBases} />
       ) : (
-        <InlineFields config={config} patch={patch} />
+        <InlineFields config={config} patch={patch} knowledgeBases={knowledgeBases} />
       )}
     </div>
   );
@@ -139,14 +162,38 @@ export function ToolConfigForm({
 // Registry mode
 // ---------------------------------------------------------------------------
 
+/**
+ * The one-line "what does this tool actually do" summary under the picker.
+ *
+ * A retrieval tool has no endpoint to print, so it shows the corpus it searches
+ * and the two knobs a node cannot touch. The knowledge base falls back to its
+ * raw id rather than rendering blank: an id at least identifies the row when the
+ * list has not loaded, or when the KB was deleted out from under the tool.
+ */
+function registrySummary(toolType: string, toolConfig: Record<string, unknown>, knowledgeBases?: KnowledgeBase[]): string {
+  if (toolType === "http_request") {
+    const method = typeof toolConfig.method === "string" ? toolConfig.method : "GET";
+    return `${method} ${typeof toolConfig.url === "string" ? toolConfig.url : ""}`;
+  }
+  if (toolType === "erp_connector") return typeof toolConfig.action === "string" ? toolConfig.action : "";
+
+  const kbId = typeof toolConfig.knowledge_base_id === "string" ? toolConfig.knowledge_base_id : "";
+  const kbName = knowledgeBases?.find((kb) => kb.id === kbId)?.name ?? kbId;
+  const topK = typeof toolConfig.top_k === "number" ? toolConfig.top_k : 5;
+  const floor = typeof toolConfig.score_floor === "number" ? toolConfig.score_floor : 0.3;
+  return `${kbName} · top ${topK} · score ≥ ${floor}`;
+}
+
 function RegistryFields({
   config,
   patch,
   tools,
+  knowledgeBases,
 }: {
   config: Record<string, unknown>;
   patch: (next: Record<string, unknown>) => void;
   tools?: Tool[];
+  knowledgeBases?: KnowledgeBase[];
 }) {
   const toolId = typeof config.tool_id === "string" ? config.tool_id : "";
   const selected = tools?.find((tool) => tool.id === toolId) ?? null;
@@ -193,19 +240,16 @@ function RegistryFields({
         {selected ? (
           <div className="flex flex-col gap-1.5 rounded-xl border border-border p-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="truncate text-xs font-medium">{selected.tool_type === "http_request" ? "HTTP request" : "ERP connector"}</p>
+              <p className="truncate text-xs font-medium">{TOOL_TYPES.find((type) => type.value === selected.tool_type)?.label ?? selected.tool_type}</p>
               {selected.is_mutating ? <Badge variant="mutating">Writes</Badge> : null}
             </div>
             <p className="break-all font-mono text-[11px] leading-snug text-muted-foreground">
-              {selected.tool_type === "http_request"
-                ? `${typeof toolConfig.method === "string" ? toolConfig.method : "GET"} ${typeof toolConfig.url === "string" ? toolConfig.url : ""}`
-                : typeof toolConfig.action === "string"
-                  ? toolConfig.action
-                  : ""}
+              {registrySummary(selected.tool_type, toolConfig, knowledgeBases)}
             </p>
             <p className="text-[11px] leading-snug text-muted-foreground">
-              The endpoint, headers and write flag are set once in the registry and cannot be changed per node — only the values
-              below are per-node.
+              {selected.tool_type === "knowledge_search"
+                ? "The knowledge base, passage count and score floor are set once in the registry and cannot be changed per node — only the question below is per-node."
+                : "The endpoint, headers and write flag are set once in the registry and cannot be changed per node — only the values below are per-node."}
             </p>
             <Link href="/tools" className="inline-flex items-center gap-1 text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground">
               Manage in Tools
@@ -219,6 +263,7 @@ function RegistryFields({
           only appear once a tool actually resolves. */}
       {selected?.tool_type === "http_request" ? <BodyFields config={config} patch={patch} /> : null}
       {selected?.tool_type === "erp_connector" ? <PayloadFields config={config} patch={patch} /> : null}
+      {selected?.tool_type === "knowledge_search" ? <QueryFields config={config} patch={patch} /> : null}
     </>
   );
 }
@@ -227,9 +272,20 @@ function RegistryFields({
 // Inline mode — unchanged shapes, matching `_tool_config` in node_handlers.py
 // ---------------------------------------------------------------------------
 
-function InlineFields({ config, patch }: { config: Record<string, unknown>; patch: (next: Record<string, unknown>) => void }) {
+function InlineFields({
+  config,
+  patch,
+  knowledgeBases,
+}: {
+  config: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  knowledgeBases?: KnowledgeBase[];
+}) {
   const toolType = typeof config.tool_type === "string" ? config.tool_type : "http_request";
   const isMutating = config.is_mutating === true;
+  // Retrieval is read-only, and the backend rejects `is_mutating: true` on it
+  // outright — a read that forces an approval gate upstream devalues the gate.
+  const canMutate = toolType !== "knowledge_search";
 
   return (
     <>
@@ -241,7 +297,14 @@ function InlineFields({ config, patch }: { config: Record<string, unknown>; patc
         <Field label="Type" required>
           {/* Only the two implemented types. Vol. 2 §7.2's `python_function` and
               `mcp` are rejected by name at the backend and must not be offered. */}
-          <Select value={toolType} onValueChange={(next) => patch({ tool_type: next })}>
+          <Select
+            value={toolType}
+            onValueChange={(next) =>
+              // Switching to retrieval must drop a leftover `is_mutating: true`,
+              // or the node saves fine and then 422s at publish on a read node.
+              patch(next === "knowledge_search" ? { tool_type: next, is_mutating: false } : { tool_type: next })
+            }
+          >
             <SelectTrigger className="h-8 text-xs" aria-label="Tool type">
               <SelectValue />
             </SelectTrigger>
@@ -255,21 +318,27 @@ function InlineFields({ config, patch }: { config: Record<string, unknown>; patc
           </Select>
         </Field>
 
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-border p-3">
-          <div className="min-w-0">
-            <p className="text-xs font-medium">Writes to an external system</p>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-              ERP writes, payments, anything with a side effect. Publishing is blocked unless a Human Approval node sits
-              somewhere upstream.
-            </p>
+        {canMutate ? (
+          <div className="flex items-start justify-between gap-3 rounded-xl border border-border p-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium">Writes to an external system</p>
+              <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                ERP writes, payments, anything with a side effect. Publishing is blocked unless a Human Approval node sits
+                somewhere upstream.
+              </p>
+            </div>
+            {/* Must be a real JSON boolean. A string "true" is rejected at invoke
+                time and would read as non-mutating in the publish-time gate. */}
+            <Switch aria-label="Writes to an external system" checked={isMutating} onCheckedChange={(checked) => patch({ is_mutating: checked })} />
           </div>
-          {/* Must be a real JSON boolean. A string "true" is rejected at invoke
-              time and would read as non-mutating in the publish-time gate. */}
-          <Switch aria-label="Writes to an external system" checked={isMutating} onCheckedChange={(checked) => patch({ is_mutating: checked })} />
-        </div>
+        ) : (
+          <ConfigNote>Retrieval only reads. It never needs an approval gate upstream.</ConfigNote>
+        )}
       </FieldGroup>
 
-      {toolType === "http_request" ? <HttpRequestFields config={config} patch={patch} /> : <ErpConnectorFields config={config} patch={patch} />}
+      {toolType === "http_request" ? <HttpRequestFields config={config} patch={patch} /> : null}
+      {toolType === "erp_connector" ? <ErpConnectorFields config={config} patch={patch} /> : null}
+      {toolType === "knowledge_search" ? <KnowledgeSearchFields config={config} patch={patch} knowledgeBases={knowledgeBases} /> : null}
     </>
   );
 }
@@ -409,6 +478,127 @@ function PayloadFields({ config, patch }: { config: Record<string, unknown>; pat
         error={missing.length > 0 ? `Missing at run time: ${missing.join(", ")}. Supply each in the payload or map it from state.` : null}
       >
         <FieldMapEditor value={payloadFields} onChange={(next) => patch({ payload_fields: next })} />
+      </Field>
+    </FieldGroup>
+  );
+}
+
+/**
+ * Inline `knowledge_search` config.
+ *
+ * The knowledge base is picked from the workspace's own list rather than typed
+ * as a UUID: the backend resolves it against `organization_id` taken from the
+ * run row, so a hand-typed id from another tenant fails at execution with a
+ * config error rather than leaking anything — but failing at run time is a poor
+ * substitute for not offering the mistake.
+ */
+function KnowledgeSearchFields({
+  config,
+  patch,
+  knowledgeBases,
+}: {
+  config: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  knowledgeBases?: KnowledgeBase[];
+}) {
+  const kbId = typeof config.knowledge_base_id === "string" ? config.knowledge_base_id : "";
+  const topK = typeof config.top_k === "number" ? config.top_k : undefined;
+
+  // `undefined` means still loading; an empty array means none exist. Treating
+  // the two the same would flash "create one first" on every panel open.
+  const loading = knowledgeBases === undefined;
+  const unresolved = Boolean(kbId) && !loading && !knowledgeBases?.some((kb) => kb.id === kbId);
+
+  return (
+    <>
+      <FieldGroup title="Knowledge base">
+        <Field
+          label="Search in"
+          required
+          error={kbId ? (unresolved ? "This knowledge base no longer exists in this workspace." : null) : "Required."}
+        >
+          {loading ? (
+            <div className="h-8 animate-pulse rounded-lg bg-muted" />
+          ) : knowledgeBases?.length ? (
+            <Select value={kbId || undefined} onValueChange={(next) => patch({ knowledge_base_id: next })}>
+              <SelectTrigger className="h-8 text-xs" aria-label="Knowledge base">
+                <SelectValue placeholder="Choose a knowledge base" />
+              </SelectTrigger>
+              <SelectContent>
+                {knowledgeBases.map((kb) => (
+                  <SelectItem key={kb.id} value={kb.id} className="text-xs">
+                    {kb.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <ConfigNote>
+              No knowledge bases in this workspace yet.{" "}
+              <Link href="/knowledge" className="underline underline-offset-2 hover:text-foreground">
+                Create one
+              </Link>
+              , then add a document.
+            </ConfigNote>
+          )}
+        </Field>
+
+        <Field label="Passages to retrieve" hint="Defaults to 5. Higher means more context and a larger prompt.">
+          <Input
+            className="h-8 text-xs"
+            type="number"
+            min={1}
+            max={20}
+            value={topK ?? ""}
+            placeholder="5"
+            onChange={(event) => {
+              const raw = event.target.value;
+              // Omit the key entirely when blank so the backend default applies,
+              // rather than sending 0 and clamping to a single passage.
+              if (raw === "") {
+                const next = { ...config };
+                delete next.top_k;
+                patch(next);
+                return;
+              }
+              patch({ top_k: Math.max(1, Math.min(20, Number(raw))) });
+            }}
+          />
+        </Field>
+      </FieldGroup>
+
+      <QueryFields config={config} patch={patch} />
+    </>
+  );
+}
+
+/**
+ * The question asked. Split out because it is the ONE part of a retrieval tool
+ * a node may override on a registry row (`query`/`query_fields`), so registry
+ * mode renders exactly this and nothing else.
+ */
+function QueryFields({ config, patch }: { config: Record<string, unknown>; patch: (next: Record<string, unknown>) => void }) {
+  const query = typeof config.query === "string" ? config.query : "";
+  const queryFields = (config.query_fields ?? {}) as Record<string, string>;
+  const hasSource = query.trim().length > 0 || Object.keys(queryFields).length > 0;
+
+  return (
+    <FieldGroup title="Query">
+      <Field
+        label="Static question"
+        hint="Used when nothing is mapped from state."
+        error={hasSource ? null : "Set a static question or map one from state."}
+      >
+        <Input
+          className="h-8 text-xs"
+          value={query}
+          placeholder="What approval is required for this invoice?"
+          onChange={(event) => patch({ query: event.target.value })}
+        />
+      </Field>
+
+      <Field label="Question from state" hint="A resolved value wins over the static question above.">
+        <FieldMapEditor value={queryFields} onChange={(next) => patch({ query_fields: next })} />
       </Field>
     </FieldGroup>
   );

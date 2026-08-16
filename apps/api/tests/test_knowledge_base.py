@@ -347,3 +347,122 @@ async def test_deleting_a_knowledge_base_removes_its_documents(client: AsyncClie
     deleted = await client.delete(f"/api/v1/knowledge-bases/{kb['id']}", headers=headers)
     assert deleted.status_code == 204
     assert (await client.get(f"/api/v1/knowledge-bases/{kb['id']}", headers=headers)).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Delete is blocked while something still searches the corpus
+#
+# The same rule `ToolService.delete_tool` applies to a tool a published version
+# references, and it inherits that rule's asymmetry: published references block,
+# draft ones do not. Retrieval has two shapes of reference — a registry
+# `knowledge_search` tool, and a node carrying `knowledge_base_id` inline — and
+# both are checked, because both resolve the id at RUN time.
+# ---------------------------------------------------------------------------
+
+
+async def _retrieval_tool(client: AsyncClient, headers: dict, workspace_id: str, kb_id: str, name: str) -> dict:
+    response = await client.post(
+        "/api/v1/tools",
+        json={
+            "workspace_id": workspace_id,
+            "name": name,
+            "tool_type": "knowledge_search",
+            # A registry retrieval row must carry a default question:
+            # `_knowledge_search_config` refuses a config with neither `query`
+            # nor `query_fields`, and a row that saves is a row that runs.
+            "config": {"knowledge_base_id": kb_id, "query": "what is the approval threshold?"},
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_knowledge_base_a_registry_tool_searches_is_409(client: AsyncClient):
+    headers, workspace_id = await _tenant(client, "kb")
+    kb = await _create_kb(client, headers, workspace_id)
+    tool = await _retrieval_tool(client, headers, workspace_id, kb["id"], "search_ap_policy")
+
+    blocked = await client.delete(f"/api/v1/knowledge-bases/{kb['id']}", headers=headers)
+    assert blocked.status_code == 409, blocked.text
+    # The offending tool is NAMED, because editing it is the fix.
+    assert "search_ap_policy" in blocked.json()["detail"]
+
+    # Soft-deleting the tool releases the corpus: a tool that cannot be resolved
+    # at run start references nothing that runs.
+    assert (await client.delete(f"/api/v1/tools/{tool['id']}", headers=headers)).status_code == 204
+    assert (await client.delete(f"/api/v1/knowledge-bases/{kb['id']}", headers=headers)).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_knowledge_base_a_published_node_searches_is_409(client: AsyncClient):
+    """An inline `knowledge_base_id` in a PUBLISHED version blocks; a draft does not."""
+    from test_workflow_versions import graph_payload
+    from test_workflows import create_workflow, create_workspace, register_and_get_token
+
+    from src.modules.workflows.schemas import EdgeInput, NodeInput, NodeType
+
+    data = await register_and_get_token(client, "KB-REF")
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    workspace = await create_workspace(client, token)
+    kb = await _create_kb(client, headers, workspace["id"])
+    workflow = await create_workflow(client, token, workspace["id"])
+
+    nodes = [
+        NodeInput(node_key="start", node_type=NodeType.start, config={}, position_x=0, position_y=0),
+        NodeInput(
+            node_key="search",
+            node_type=NodeType.tool,
+            config={"tool_type": "knowledge_search", "knowledge_base_id": kb["id"], "query": "approval threshold"},
+            position_x=100,
+            position_y=0,
+        ),
+        NodeInput(node_key="end", node_type=NodeType.end, config={}, position_x=200, position_y=0),
+    ]
+    edges = [
+        EdgeInput(source_node_key="start", target_node_key="search"),
+        EdgeInput(source_node_key="search", target_node_key="end"),
+    ]
+
+    saved = await client.post(f"/api/v1/workflows/{workflow['id']}/versions", json=graph_payload(nodes, edges), headers=headers)
+    assert saved.status_code == 201, saved.text
+    version_id = saved.json()["id"]
+
+    # While it is only a draft the author is still editing, so it must not block.
+    assert (await client.get(f"/api/v1/knowledge-bases/{kb['id']}", headers=headers)).status_code == 200
+    draft_delete_allowed = await client.delete(f"/api/v1/knowledge-bases/{kb['id']}", headers=headers)
+    assert draft_delete_allowed.status_code == 204
+
+    # Now do it again, published this time.
+    kb2 = await _create_kb(client, headers, workspace["id"], name="AP Policy 2")
+    nodes[1] = NodeInput(
+        node_key="search",
+        node_type=NodeType.tool,
+        config={"tool_type": "knowledge_search", "knowledge_base_id": kb2["id"], "query": "approval threshold"},
+        position_x=100,
+        position_y=0,
+    )
+    saved = await client.post(f"/api/v1/workflows/{workflow['id']}/versions", json=graph_payload(nodes, edges), headers=headers)
+    version_id = saved.json()["id"]
+    published = await client.post(f"/api/v1/workflows/{workflow['id']}/versions/{version_id}/publish", headers=headers)
+    assert published.status_code == 200, published.text
+
+    blocked = await client.delete(f"/api/v1/knowledge-bases/{kb2['id']}", headers=headers)
+    assert blocked.status_code == 409, blocked.text
+    assert "published" in blocked.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_another_orgs_reference_does_not_block_a_delete(client: AsyncClient):
+    """The reference queries are org-scoped: a same-named tool elsewhere is not a reference."""
+    headers_a, workspace_a = await _tenant(client, "kb-a")
+    headers_b, workspace_b = await _tenant(client, "kb-b")
+
+    kb_a = await _create_kb(client, headers_a, workspace_a)
+    kb_b = await _create_kb(client, headers_b, workspace_b)
+    await _retrieval_tool(client, headers_b, workspace_b, kb_b["id"], "search_ap_policy")
+
+    # Org B's tool searches Org B's corpus; Org A's identically-shaped KB is free.
+    assert (await client.delete(f"/api/v1/knowledge-bases/{kb_a['id']}", headers=headers_a)).status_code == 204

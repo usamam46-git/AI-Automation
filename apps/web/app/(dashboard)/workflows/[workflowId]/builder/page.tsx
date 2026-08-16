@@ -13,7 +13,7 @@ import { BuilderToolbar } from "@/components/workflow-builder/builder-toolbar";
 import { ConfigPanel } from "@/components/workflow-builder/config-panel";
 import { groupIssuesByNode, IssueProvider } from "@/components/workflow-builder/issue-context";
 import { useWorkflowAutosave } from "@/hooks/use-workflow-autosave";
-import { executionsApi, toolsApi, workflowsApi, type WorkflowVersion } from "@/lib/api";
+import { executionsApi, knowledgeApi, toolsApi, workflowsApi, type WorkflowVersion } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/api-client";
 import { EMPTY_GRAPH, flowToVersion, graphSignature, versionToFlow, type BuilderGraph } from "@/lib/graph-mapping";
 import { parseValidationDetail, validateGraph, type ToolRegistry } from "@/lib/graph-validation";
@@ -90,6 +90,15 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
   const toolsQuery = useQuery({
     queryKey: ["tools", orgId, workflowQuery.data?.workspace_id ?? null, "all"],
     queryFn: () => toolsApi.list({ workspaceId: workflowQuery.data!.workspace_id }),
+    enabled: Boolean(workflowQuery.data?.workspace_id),
+  });
+
+  // Same workspace scoping and the same key shape as the Knowledge page, so the
+  // builder's retrieval picker shares that cache. A `knowledge_search` node can
+  // only reference a KB in its own workspace.
+  const knowledgeQuery = useQuery({
+    queryKey: ["knowledge-bases", orgId, workflowQuery.data?.workspace_id ?? null],
+    queryFn: () => knowledgeApi.list({ workspaceId: workflowQuery.data!.workspace_id }),
     enabled: Boolean(workflowQuery.data?.workspace_id),
   });
 
@@ -271,7 +280,7 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
             <ReactFlowProvider>
               <div className="flex h-full min-h-0">
                 <BuilderCanvas graph={graph} setGraph={setGraph} />
-                <ConfigPanel graph={graph} setGraph={setGraph} issuesByNode={issuesByNode} tools={toolsQuery.data} />
+                <ConfigPanel graph={graph} setGraph={setGraph} issuesByNode={issuesByNode} tools={toolsQuery.data} knowledgeBases={knowledgeQuery.data} />
               </div>
             </ReactFlowProvider>
           </IssueProvider>

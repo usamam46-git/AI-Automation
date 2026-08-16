@@ -348,6 +348,8 @@ Append as you go, so a future session can pick up mid-sprint.
 
 | 2026-08-16 | 6–7 | **Gate passed.** `knowledge_search` ships as a TOOL TYPE (not a node type, per §4): `build_chunk_search_stmt` shared by an async API path and a sync tool-node path, `POST /knowledge-bases/{id}/search` built early so days 8–9 are pure frontend, `NODE_OVERRIDABLE_KEYS` extended with `query`/`query_fields` only. Proven live end to end — retrieved chunk at cosine 0.5589 into graph state, agent answered from it and cited the document, run cost $0.000051. Hybrid keyword search deferred (cut #1). **408 tests** (389 + 19). Also closed day 1's last open item (live pricing re-verified, all 11 rates match) and rotated `INTEGRATION_ENCRYPTION_KEY` off the repo-committed default on the Mac. | ~$0.0002 |
 
+| 2026-08-16 | 8–9 | **Gate passed, in a real browser.** `/knowledge` (list, create, rename, delete), KB detail with drag-drop upload, polled document status, chunk inspector and the retrieval playground; `knowledge_search` wired into the builder's tool form with a KB picker — **both** inline and registry, the latter closed by adding the type to `tool-dialog.tsx`, where it had been uncreatable. Verified in both themes: upload → `Queued` → `Indexed` by polling, re-drop reported "already indexed, nothing charged", playground ranked the passage at 39% and an unrelated question at 2% marked below cutoff, document delete cascaded its chunk. Then a registry-backed `start → knowledge_search → end` was published and **run through the real worker to `completed`**, node override of the question winning over the registry default, `tool_executions` row linked. Three real bugs found and fixed — see the day 8–9 notes below. **408 backend / 260 frontend tests.** | ~$0.0002 |
+
 | 2026-08-15 | 2–5 | **Gate passed.** `knowledge_base` module (CRUD + upload + chunks), `core/storage.py` (first MinIO code), `core/document_text.py` (pypdf/docx extraction, paragraph-packed chunking), `workers/document_tasks.py` (first task ever on `worker_documents`), migration `20260815_kb_ingestion`. Upload-time dedup returns 200 and spends nothing. **389 tests** (337 + 52). Also: test suite now refuses to run outside a `*_test` database, after it destroyed the dev data on day 1. | ~$0.0001 |
 
 ### Day 1 notes — read before day 2
@@ -395,3 +397,58 @@ secrets.
 **Environment note:** all of the above ran on the *Windows* machine, not the Mac.
 Docker, the full stack, MinIO round-trips and the 337-test suite all work there —
 see the root CLAUDE.md testing note for how to run pytest without Poetry on PATH.
+
+### Days 8–9 notes — three bugs the browser pass found
+
+All three were invisible to the test suites, which is the argument for doing this
+pass at all rather than trusting green CI.
+
+- **No upload could ever have worked from the UI.** `apiClient` sets
+  `Content-Type: application/json` on every request, and axios reads that header
+  in `transformRequest` *before* it looks at the body — seeing JSON it runs the
+  `FormData` through `formDataToJSON()`, so the file serialised to `{}` and the
+  server answered 422 "Field required". Not a malformed multipart: a JSON body.
+  Fixed by naming `multipart/form-data` at the call site, which only takes it off
+  that path — axios strips the header again and the browser writes the real one
+  with a boundary. `knowledgeApi.upload`'s docstring said the opposite ("Content-
+  Type is deliberately not set"), which is right for `fetch` and wrong here.
+- **The retrieval playground 500'd for any org on BYOK.** `KnowledgeBaseService.
+  search()` called `get_llm_client` with no override, so it needed a server-wide
+  `OPENAI_API_KEY` — while ingestion and the tool node both resolve the org's
+  stored key through `_resolve_llm_client_factory`. The playground was the one
+  retrieval surface that ignored BYOK, and this machine has no server key at all,
+  so the highest-value screen in the module failed on its first query. Fixed in
+  the service (not the router) so the injection seam the tests use survives.
+- **The tools dialog could not create a `knowledge_search` row**, which made the
+  builder's registry branch for that type unreachable code. Adding it exposed a
+  fourth, smaller thing: with the extra fields the dialog outgrows a 776px window
+  and `DialogContent` has no `max-height`, so Create sat off-screen with no way to
+  scroll to it.
+
+**Verification caveat worth knowing before the next browser pass:** synthetic
+typing into a *node config* field collapses to one character per burst. The value
+round-trips through the React Query cache, so the re-render lands a keystroke
+late and React rewinds the DOM input to the stale value. At ~300ms per character
+(human speed) it is correct, and it affects every builder config field equally —
+the pre-existing `url` field included — so it is an automation artefact, not a
+product bug. Type slowly, or assert on the DB row.
+
+**Both gaps this pass opened were closed the same day:**
+
+- **Deleting a knowledge base is now a 409 while anything still searches it** —
+  the rule `ToolService.delete_tool` already applied to a tool a published
+  version references, and it inherits that rule's asymmetry (published blocks,
+  draft does not). Retrieval has two shapes of reference and both are checked:
+  a live registry `knowledge_search` tool, reported **by name** because editing
+  it is the fix, and a node carrying `knowledge_base_id` inline in a published
+  version. The frontend renders the 409 in the dialog as a permanent explained
+  state, not a toast — same treatment as the tools registry. Three integration
+  tests, including one proving another org's identically-shaped tool is not a
+  reference.
+- **The workspace selection persists** (`zustand/middleware` `persist`,
+  `localStorage`, key `orkest.workspace`). Two things keep it honest: the shell
+  now **corrects** a stored id that is not in the fetched list rather than
+  leaving it (a stale id would filter every list by something the API never
+  matches, showing empty pages while the header named a workspace with content),
+  and logout clears it so the next account does not start inside the previous
+  one's workspace.

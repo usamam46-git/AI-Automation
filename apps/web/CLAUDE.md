@@ -66,6 +66,16 @@ The product uses an iOS/macOS-inspired visual language. Full detail in
   only, never localStorage. Response interceptor attempts one silent
   `/auth/refresh` on 401 before redirecting to login.
 - Org/workspace context: Zustand (session state), not React Query.
+- **`currentWorkspaceId` is persisted to `localStorage`** (2026-08-16, key
+  `orkest.workspace`) and the shell **reconciles it against the fetched list on
+  every load**. Both halves are load-bearing. Without persistence it started
+  `null` each load and the shell fell back to `workspaces[0]`, so an org with two
+  workspaces silently changed workspace on every reload. Without reconciliation a
+  *stored* id that no longer resolves — workspace archived, or a different user
+  on the same browser — would sit in the store filtering every list by an id the
+  API never matches, while the header displayed `workspaces[0]`: an app that
+  looks empty for no visible reason. Logout clears it. The access token is still
+  memory-only; that rule is untouched and this is a workspace UUID, not a secret.
 
 ## Workflow builder canvas
 
@@ -997,6 +1007,55 @@ access**.
   during SSR. If it does, the plate is the LCP element and in the initial HTML;
   if not, this is still strictly better than the grey block it replaced. Not
   worth guessing at — check the served HTML if LCP ever needs the answer.
+
+## Knowledge base UI (2026-08-16)
+
+Build-plan days 8–9. `app/(dashboard)/knowledge/{page,[kbId]/page}.tsx`,
+`components/knowledge/{kb-dialog,document-dropzone,document-list,chunk-inspector,
+retrieval-playground}.tsx`, the pure vitest-covered `lib/knowledge.ts`, and
+`knowledgeApi` in `lib/api.ts`. Verified in a browser in both themes.
+
+- **`knowledgeApi.upload` MUST send `Content-Type: multipart/form-data`, and the
+  reason is the opposite of the obvious one.** `apiClient` defaults every request
+  to `application/json`; axios reads that header in `transformRequest` *before*
+  the body, and on a JSON content type it runs `FormData` through
+  `formDataToJSON()` — the `File` becomes `{}` and FastAPI answers 422 "Field
+  required". Naming multipart only takes it off that path: axios strips the header
+  again in `resolveConfig` so the browser writes the real one with a boundary.
+  The old docstring said Content-Type was "deliberately not set", which is right
+  for `fetch` and wrong for this instance. Every upload was broken until fixed.
+- **Document status is polled, and the interval must stop.** `refetchInterval`
+  returns 2500 only while `hasPendingDocuments()` (any `uploaded`/`processing`),
+  false otherwise, so a settled corpus makes no background requests. Same
+  decision and same reasoning as the Execution Viewer.
+- **The playground searches with `score_floor: 0` on purpose** and renders the
+  backend's 0.3 default as a dashed, dimmed "below cutoff" treatment instead. It
+  exists to calibrate that threshold, so filtering by it first would mean tuning
+  a number against results it had already removed. Do not "fix" the mismatch by
+  passing the backend default.
+- **Every query is billable and the cost is shown.** This is the screen people
+  run dozens of queries on; hiding the per-query cost on a per-query-priced
+  feature is how a demo turns into a surprise invoice.
+- **The chunk inspector's selection is an ID, derived against the live list** —
+  never a stored document object. Ingestion mutates the row under the selection
+  and the row can be deleted outright; deriving makes both correct for free.
+- **`knowledge_search` reaches the builder two ways and they are not symmetric.**
+  Inline puts the KB picker on the node. Registry mode makes the KB, `top_k` and
+  `score_floor` read-only off the row and leaves only `query`/`query_fields`
+  editable — `NODE_OVERRIDABLE_KEYS`. A registry retrieval row **must carry a
+  default `query`**: `_knowledge_search_config` refuses a config with neither
+  `query` nor `query_fields`, so `tool-dialog.tsx` collects one and labels it as
+  a default a node may override.
+- **The type has no mutating switch in either surface**, and that is enforcement
+  rather than tidiness: the backend rejects `is_mutating: true` on retrieval, so
+  `tool-dialog.tsx` sends `canMutate && isMutating` (the switch keeps its state
+  across a type change) and the inline form drops the flag when you switch to it.
+- Verifying config-panel text fields under browser automation: **synthetic typing
+  collapses to one character per burst.** Those values round-trip through the
+  React Query cache, so the re-render lands a keystroke late and React rewinds the
+  input to the stale value. ~300ms per character is correct; it affects every
+  builder config field equally (the long-standing `url` field included), so it is
+  an automation artefact, not a bug. Type slowly or assert on the row.
 
 ## Tools registry page (2026-08-12)
 

@@ -21,6 +21,8 @@ from sqlalchemy import Select, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.knowledge_base.models import Document, DocumentChunk, KnowledgeBase
+from src.modules.tools.models import Tool
+from src.modules.workflows.models import Workflow, WorkflowNode, WorkflowVersion
 
 # Retrieval defaults (days 6-7). `TOP_K` matches the five-chunk RAG call the
 # build plan's budget model is costed against.
@@ -126,6 +128,55 @@ class KnowledgeBaseRepository:
         """Hard delete. `documents` and `document_chunks` cascade via their FKs."""
         await self.db.delete(kb)
         await self.db.flush()
+
+    async def list_referencing_tool_names(self, organization_id: uuid.UUID, kb_id: uuid.UUID) -> Sequence[str]:
+        """
+        Names of live registry tools that search this knowledge base.
+
+        Tool names rather than a count, because this one is actionable: the fix
+        is to edit or delete those rows, and naming them saves the caller
+        hunting through the registry. Soft-deleted tools are excluded — they
+        cannot be resolved at run start, so they reference nothing that runs.
+        """
+        stmt = (
+            select(Tool.name)
+            .where(
+                Tool.organization_id == organization_id,
+                Tool.is_active.is_(True),
+                Tool.tool_type == "knowledge_search",
+                Tool.config["knowledge_base_id"].astext == str(kb_id),
+            )
+            .order_by(Tool.name)
+        )
+        return (await self.db.execute(stmt)).scalars().all()
+
+    async def count_published_node_references(self, organization_id: uuid.UUID, kb_id: uuid.UUID) -> int:
+        """
+        How many nodes in *published* versions carry this KB inline.
+
+        The direct analogue of `ToolRepository.count_published_references`, and
+        it inherits both of that method's decisions: published versions are
+        immutable, so their nodes can never be edited to drop the reference,
+        while drafts are still being edited and blocking on one would make a
+        knowledge base undeletable for as long as someone has a stale tab open.
+
+        Registry-backed nodes carry only `tool_id` and are covered by
+        `list_referencing_tool_names` instead — deleting the corpus under a
+        reviewed tool breaks every node using it, not just the published ones.
+        """
+        stmt = (
+            select(func.count(WorkflowNode.id))
+            .join(WorkflowVersion, WorkflowVersion.id == WorkflowNode.workflow_version_id)
+            .join(Workflow, Workflow.id == WorkflowVersion.workflow_id)
+            .where(
+                # workflow_versions/workflow_nodes have no organization_id of
+                # their own — scope comes from the owning workflow.
+                Workflow.organization_id == organization_id,
+                WorkflowVersion.published_at.is_not(None),
+                WorkflowNode.config["knowledge_base_id"].astext == str(kb_id),
+            )
+        )
+        return (await self.db.execute(stmt)).scalar_one()
 
     # ---------------------------------------------------------- Documents
 

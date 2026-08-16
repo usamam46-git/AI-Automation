@@ -610,6 +610,41 @@ verified via a full read-only orientation pass — see note below.)
   `organization_id` comes from **graph state**, never node config; and
   `knowledge_search` **emits `node_usage`** while the other two tool types still
   do not — a deliberate, documented break with the old invariant.
+- **Knowledge base UI landed 2026-08-16** (days 8–9, frontend). `/knowledge` list
+  + `[kbId]` detail, `components/knowledge/*` (dropzone, document list, chunk
+  inspector, retrieval playground), pure `lib/knowledge.ts`, `knowledgeApi` in
+  `lib/api.ts`. Document status is **polled** and the interval stops the moment
+  nothing is `uploaded`/`processing` — same decision as the Execution Viewer, and
+  for the same reason (no WebSocket infra). The playground deliberately searches
+  with `score_floor: 0` and draws the backend's 0.3 cutoff visually instead: it
+  exists to calibrate that number, so it must show what the floor would discard.
+  `knowledge_search` is wired into the builder's tool form **both ways** — inline,
+  and registry, the latter reachable only because `components/tools/tool-dialog.tsx`
+  gained the type on the same day. A registry retrieval row **must carry a default
+  `query`** (`_knowledge_search_config` refuses a config with neither `query` nor
+  `query_fields`), while the KB, `top_k` and `score_floor` stay registry-owned.
+  Verified in a browser in both themes and proven end to end: a registry-backed
+  `start → knowledge_search → end` published and ran through the real worker to
+  `completed`, with the node's own question overriding the registry default.
+  **260 frontend tests**; `tsc`, `eslint` and `npm run build` clean.
+  Two bugs this pass found, both fixed and worth not reintroducing:
+  **`knowledgeApi.upload` must name `multipart/form-data`** — the shared axios
+  instance defaults to `application/json`, and axios's `transformRequest` reads
+  that header first and JSON-serialises the FormData, so the file arrived as `{}`
+  and every upload 422'd; and **`KnowledgeBaseService.search()` now resolves the
+  org's BYOK key itself** (`_byok_client_factory`, the request-scoped twin of
+  `graph_tasks._resolve_llm_client_factory`) — it was the one retrieval path that
+  ignored a stored key, so the playground 500'd for any org without a server-wide
+  `OPENAI_API_KEY`.
+  Two gaps the pass opened were closed the same day, and both are contracts now:
+  **deleting a KB is a 409 while anything still searches it** — a live registry
+  `knowledge_search` tool (named in the message) or a node carrying
+  `knowledge_base_id` inline in a *published* version, the same
+  published-blocks/draft-doesn't asymmetry `ToolService.delete_tool` uses, with
+  the 409 rendered in the dialog rather than as a toast; and **the workspace
+  selection persists** (`persist` middleware, `localStorage`, key
+  `orkest.workspace`), with `dashboard-shell.tsx` correcting a stored id that is
+  not in the fetched list and logout clearing it.
 - **Test suite now REFUSES to run outside a `*_test` database** (2026-08-15).
   Truncate-based isolation wipes whatever `DATABASE_URL` names, and on
   2026-08-15 a run against the dev database destroyed an org, a user, a
@@ -619,21 +654,22 @@ verified via a full read-only orientation pass — see note below.)
   apps/api/CLAUDE.md for how to create and target `aap_test`.
 - Next: verify the 3D scene on a real mobile viewport (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
-  and a phone crops it hard — see apps/web/CLAUDE.md), wire `embed()` into a real
-  ingestion pipeline (the `knowledge_base`
-  module is still models-only — chunking, OCR, and hybrid search are all unbuilt),
-  `subgraph` handler, agent function-calling/ReAct (see the deferral note in
-  apps/api/CLAUDE.md), and
+  and a phone crops it hard — see apps/web/CLAUDE.md), the build plan's days
+  10–12 (the demo corpus and the three flagship workflows), hybrid keyword search
+  (the GIN index has shipped unqueried since the initial schema; deliberately cut
+  first), OCR, `subgraph` handler, agent function-calling/ReAct (see the deferral
+  note in apps/api/CLAUDE.md), and
   an audit-log viewer UI (the endpoint exists and nothing consumes it — same shape
   as the integrations endpoints before the Settings page).
-  Still empty registries: the `worker_documents` and `worker_notifications`
-  containers (nothing routes to their queues yet).
+  Still an empty registry: the `worker_notifications` container (nothing routes to
+  its queue yet). `worker_documents` runs `ingest_document` as of 2026-08-15.
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list), the builder canvas, the Execution Viewer, the
-  home dashboard, the tools registry, and the marketing landing page (see
-  above). `app/(marketing)/` now exists and owns `/`; `app/page.tsx` is gone.
+  home dashboard, the tools registry, the knowledge base, and the marketing
+  landing page (see above). `app/(marketing)/` now exists and owns `/`;
+  `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, 123 tests over the pure `lib/` modules only (no React harness;
+  `npm test`, **260 tests** over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

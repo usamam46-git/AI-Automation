@@ -416,7 +416,7 @@ export const analyticsApi = {
  * backend rejects `python_function`/`mcp` by name at **create**, not at run
  * time. Same list as the builder's inline form — keep the two in sync.
  */
-export type ToolType = "http_request" | "erp_connector";
+export type ToolType = "http_request" | "erp_connector" | "knowledge_search";
 
 /** OpenAI's function-name grammar, mirrored from `TOOL_NAME_PATTERN` in the API's schemas.py. */
 export const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -494,5 +494,180 @@ export const toolsApi = {
   // trail. Draft references do not block.
   async remove(toolId: string) {
     await apiClient.delete(`/tools/${toolId}`);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Knowledge bases (days 8-9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirrors `SUPPORTED_EMBEDDING_MODELS` in the API's llm_client.py.
+ *
+ * Both are requested at 1536 dimensions, so they share one HNSW index and are
+ * interchangeable in the schema — the only difference is price. `-small` is the
+ * API's create-time default (6.5x cheaper) even though the COLUMN default is
+ * `-large`; that mismatch is deliberate, not a bug to reconcile here.
+ */
+export const EMBEDDING_MODELS = ["text-embedding-3-small", "text-embedding-3-large"] as const;
+export type EmbeddingModel = (typeof EMBEDDING_MODELS)[number];
+
+/** uploaded -> processing -> indexed | failed. Written by the worker, never by the client. */
+export type DocumentStatus = "uploaded" | "processing" | "indexed" | "failed";
+
+export type KnowledgeBase = {
+  id: string;
+  organization_id: string;
+  workspace_id: string;
+  name: string;
+  embedding_model: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeDocument = {
+  id: string;
+  organization_id: string;
+  knowledge_base_id: string;
+  file_name: string;
+  mime_type: string;
+  status: DocumentStatus;
+  page_count: number | null;
+  /** Null until the worker indexes it — the upload response does not carry one. */
+  content_hash: string | null;
+  /** Populated only on `failed`, and it is the whole reason the column exists. */
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Never carries `embedding`: 1536 floats per chunk is megabytes of unusable payload. */
+export type DocumentChunk = {
+  id: string;
+  document_id: string;
+  chunk_index: number;
+  content: string;
+  token_count: number;
+};
+
+export type RetrievalHit = {
+  document_id: string;
+  document_name: string;
+  chunk_index: number;
+  content: string;
+  score: number;
+};
+
+export type ChunkSearchResult = {
+  query: string;
+  hits: RetrievalHit[];
+  hit_count: number;
+  embedding_model: string;
+  tokens: number;
+  cost_usd: number;
+};
+
+export type KnowledgeBasePayload = {
+  workspace_id: string;
+  name: string;
+  embedding_model?: EmbeddingModel;
+};
+
+/**
+ * `embedding_model` is absent on purpose — `KnowledgeBaseUpdate` sets
+ * `extra="forbid"`, and changing the model would invalidate every stored chunk
+ * while silently re-embedding the whole corpus. It is immutable in practice.
+ */
+export type KnowledgeBaseUpdatePayload = { name: string };
+
+/** The upload result, plus whether the server deduplicated it (200 rather than 202). */
+export type UploadResult = { document: KnowledgeDocument; deduplicated: boolean };
+
+export const knowledgeApi = {
+  async list(params: { workspaceId?: string | null; cursor?: string | null; limit?: number } = {}) {
+    const { data } = await apiClient.get<KnowledgeBase[]>("/knowledge-bases", {
+      params: {
+        workspace_id: params.workspaceId || undefined,
+        cursor: params.cursor || undefined,
+        limit: params.limit || undefined,
+      },
+    });
+    return data;
+  },
+  async create(payload: KnowledgeBasePayload) {
+    const { data } = await apiClient.post<KnowledgeBase>("/knowledge-bases", payload);
+    return data;
+  },
+  async get(kbId: string) {
+    const { data } = await apiClient.get<KnowledgeBase>(`/knowledge-bases/${kbId}`);
+    return data;
+  },
+  async update(kbId: string, payload: KnowledgeBaseUpdatePayload) {
+    const { data } = await apiClient.patch<KnowledgeBase>(`/knowledge-bases/${kbId}`, payload);
+    return data;
+  },
+  async remove(kbId: string) {
+    await apiClient.delete(`/knowledge-bases/${kbId}`);
+  },
+
+  /**
+   * Multipart upload.
+   *
+   * **The status code carries meaning the body does not**: 202 means the bytes
+   * were stored and ingestion was enqueued; 200 means an identical file was
+   * already indexed in this KB, so nothing was stored and nothing was embedded.
+   * Surfacing that difference is the only way a user learns their re-upload
+   * cost nothing, so it is returned rather than discarded.
+   *
+   * **`Content-Type` MUST be overridden here even though the browser is the one
+   * that ends up setting it.** `apiClient` defaults every request to
+   * `application/json`, and axios reads that default in `transformRequest`
+   * *before* it looks at the body: seeing a JSON content type it runs the
+   * FormData through `formDataToJSON()`, so the file serialises to `{}` and the
+   * server receives `{"file":{}}` as JSON — a 422 "Field required", never a
+   * malformed multipart. Naming `multipart/form-data` here only takes it off
+   * that path; axios then strips the header again in `resolveConfig` so the
+   * browser generates the real one with a boundary. Observed as a live 422, not
+   * theorised.
+   */
+  async upload(kbId: string, file: File): Promise<UploadResult> {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await apiClient.post<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents`, body, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return { document: response.data, deduplicated: response.status === 200 };
+  },
+
+  async listDocuments(kbId: string, params: { cursor?: string | null; limit?: number } = {}) {
+    const { data } = await apiClient.get<KnowledgeDocument[]>(`/knowledge-bases/${kbId}/documents`, {
+      params: { cursor: params.cursor || undefined, limit: params.limit || undefined },
+    });
+    return data;
+  },
+  async getDocument(kbId: string, documentId: string) {
+    const { data } = await apiClient.get<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents/${documentId}`);
+    return data;
+  },
+  async removeDocument(kbId: string, documentId: string) {
+    await apiClient.delete(`/knowledge-bases/${kbId}/documents/${documentId}`);
+  },
+
+  /** Offset-paginated, not cursor — chunks share a `created_at` and have a natural total order. */
+  async listChunks(kbId: string, documentId: string, params: { offset?: number; limit?: number } = {}) {
+    const { data } = await apiClient.get<DocumentChunk[]>(`/knowledge-bases/${kbId}/documents/${documentId}/chunks`, {
+      params: { offset: params.offset ?? 0, limit: params.limit ?? 50 },
+    });
+    return data;
+  },
+
+  /**
+   * POST despite being read-only: the query is free text, and a GET would write
+   * every user question into access logs and proxy caches. Each call embeds the
+   * query and is billable, which is why the response reports tokens and cost.
+   */
+  async search(kbId: string, payload: { query: string; top_k?: number; score_floor?: number }) {
+    const { data } = await apiClient.post<ChunkSearchResult>(`/knowledge-bases/${kbId}/search`, payload);
+    return data;
   },
 };

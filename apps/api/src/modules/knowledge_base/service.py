@@ -14,6 +14,7 @@ process. An orphaned object with no row is the cheaper failure: it costs storage
 and nothing else.
 """
 
+import functools
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -274,8 +275,18 @@ class KnowledgeBaseService:
         from the row. Storage deletes come after the commit: a failure there
         leaves orphaned bytes, which is recoverable, whereas failing the request
         after the rows are gone would leave the caller thinking nothing happened.
+
+        **Blocked with a 409 while anything still searches this corpus**, the
+        same rule `ToolService.delete_tool` applies to a tool referenced by a
+        published version, and for the same reason: `knowledge_base_id` is
+        resolved at run time, so deleting it out from under a live reference
+        converts a working workflow into a run-time failure nobody asked for.
+        Retrieval has two kinds of reference and both are checked — a registry
+        `knowledge_search` tool (named, since editing it is the fix) and a node
+        carrying the id inline in a published version.
         """
         kb = await self._require_kb(organization_id, kb_id)
+        await self._assert_unreferenced(organization_id, kb_id)
         documents = await self.repo.list_documents(organization_id, kb_id, cursor=None, limit=10_000)
         keys = [doc.storage_path for doc in documents]
 
@@ -426,13 +437,22 @@ class KnowledgeBaseService:
         with another returns plausible cosine numbers and meaningless rankings,
         and nothing raises — `embed()` requires an explicit model for exactly
         this reason, and the authority is this row.
+
+        **The org's BYOK key is resolved here when no factory is injected.** The
+        node path gets its factory from `_resolve_llm_client_factory` at run
+        start (Vol. 2 §13), so leaving this path on the bare `get_llm_client`
+        made the playground the one retrieval surface that ignored the stored
+        key — 500 `LLMConfigurationError` for any org running on BYOK, which is
+        every org that has not set a server-wide `OPENAI_API_KEY`. Resolving to
+        None when nothing is stored reproduces the pre-BYOK fallback exactly.
         """
         kb = await self._require_kb(organization_id, kb_id)
+        factory = client_factory or await self._byok_client_factory(organization_id)
         result = await run_in_threadpool(
             _embed_query,
             query=query,
             model=kb.embedding_model,
-            client_factory=client_factory,
+            client_factory=factory,
         )
         rows = await self.repo.search_chunks(organization_id, kb_id, result.vector, _clamp_top_k(top_k))
         floor = DEFAULT_SCORE_FLOOR if score_floor is None else score_floor
@@ -444,6 +464,47 @@ class KnowledgeBaseService:
         )
 
     # -------------------------------------------------------------- internal
+
+    async def _assert_unreferenced(self, organization_id: uuid.UUID, kb_id: uuid.UUID) -> None:
+        """
+        409 if a registry tool or a published node still searches this KB.
+
+        Tools are reported first and by name because that is the reference a
+        user can act on directly; the node count is a fallback for inline
+        configurations, where the fix is to publish a new version instead.
+        """
+        tool_names = await self.repo.list_referencing_tool_names(organization_id, kb_id)
+        if tool_names:
+            listed = ", ".join(f"'{name}'" for name in tool_names)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot delete this knowledge base because {len(tool_names)} registry tool(s) search it: "
+                    f"{listed}. Point them at another knowledge base or delete them first."
+                ),
+            )
+
+        nodes = await self.repo.count_published_node_references(organization_id, kb_id)
+        if nodes > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot delete this knowledge base because {nodes} node(s) in published workflow version(s) search it.",
+            )
+
+    async def _byok_client_factory(self, organization_id: uuid.UUID) -> Callable[..., LLMClient]:
+        """
+        The request-scoped twin of `graph_tasks._resolve_llm_client_factory`.
+
+        Imported inside the call rather than at module scope: `integrations`
+        pulls in `audit_logs` and the encryption layer, and this module is also
+        imported by `node_handlers` (via `validate_tool_config`) into every
+        process that merely validates a tool config — the same reasoning that
+        keeps `_default_search`'s import local.
+        """
+        from src.modules.integrations.service import IntegrationService
+
+        api_key = await IntegrationService(self.db).get_decrypted_openai_key(organization_id)
+        return functools.partial(get_llm_client, api_key_override=api_key)
 
     async def _best_effort_delete(self, key: str) -> None:
         """
