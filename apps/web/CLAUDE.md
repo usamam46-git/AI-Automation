@@ -1057,6 +1057,61 @@ retrieval-playground}.tsx`, the pure vitest-covered `lib/knowledge.ts`, and
   builder config field equally (the long-standing `url` field included), so it is
   an automation artefact, not a bug. Type slowly or assert on the row.
 
+## Approval sentence + trigger payload (2026-08-17)
+
+Build-plan days 10–12, frontend half. Two pure vitest-covered modules —
+`lib/approval-summary.ts` and `lib/trigger-payload.ts` — plus
+`components/workflows/run-workflow-dialog.tsx` and a rewritten approval bar.
+
+- **The approval sentence is DERIVED, and that is a settled decision, not a
+  workaround.** Vol. 3 §6.1 shows "Approve $4,200.00 to Acme Vendor LLC?";
+  `interrupt_payload` is `{type, node_outputs}` with no message string, and a
+  `human_approval` node has no config to template one from. The 15-day plan §4
+  settles approval copy as a frontend concern. `buildApprovalSummary` reads only
+  what the workflow produced. **This is not licence to add a message-template
+  field to `human_approval`** — that contract deliberately has none.
+- **The one rule in `approval-summary.ts` is: never invent.** No default
+  currency, no `0` for a missing amount, no summing of line items. If an amount
+  cannot be read, the bar falls back to the generic headline and the raw JSON,
+  which is what shipped before and is always honest. This is the single line a
+  reviewer reads before authorising a write to a real system.
+- **Field lookup is a convention, not a schema**, because agent output schemas
+  are authored on a canvas and this module cannot know them. Adding a name to
+  `AMOUNT_KEYS` / `PARTY_KEYS` / … is cheap and safe. **Reordering one is not**:
+  first match wins, so moving `amount` above `total_amount` shows the wrong
+  figure on a workflow emitting both. Node outputs are walked in insertion order,
+  which is execution order, so an earlier node's value wins — "what was
+  extracted" over "what was recomputed".
+- **The raw node outputs stay on screen under the summary.** Not redundancy: the
+  summary is a convention a workflow is free not to follow, so the evidence it
+  was drawn from must always be visible.
+- `formatApprovalAmount` hardcodes `$` and the grouping, and prints an unknown
+  currency code rather than dropping it — dropping it turns a euro invoice into a
+  dollar one. Same `toLocaleString(style: "currency")` trap already documented for
+  `formatMonthlyCost` and NumberFlow; three formatters disagreeing on one screen
+  is worse than any one being slightly off. Always 2dp, unlike `formatCost`'s 4dp
+  branch, which exists for per-run costs of fractions of a cent.
+- **`useTriggerRun` takes an object, not a bare workflow id.** It was a string
+  until the Run dialog landed. React Query passes exactly one value to
+  `mutationFn`, and a tuple would make every call site an anonymous pair. The
+  Builder's Test Run is *not* a consumer — it has its own `useMutation`.
+- **Blank payload input is valid and means `{}`**, byte-identical to every
+  Run-now click before the dialog existed. The demo's HR assistant is meant to
+  run on one click; a dialog demanding JSON first would take that away.
+- **The dialog does not validate the payload against the workflow**, because
+  there is nothing to validate against — a trigger payload has no schema
+  anywhere. It only rejects what FastAPI would: a non-object top level.
+- **The form is a child component so closing the dialog UNMOUNTS it.** Radix
+  removes `DialogContent` from the tree when closed, so the reset is free; a
+  `setRaw("")` inside an effect keyed on `open` is a cascading render and
+  `react-hooks/set-state-in-effect` rejects it. The `key={workflow.id}` covers
+  the one case unmount does not: switching workflows while the dialog is already
+  open, where a payload typed for one would otherwise be submitted against
+  another.
+- `WorkflowDetailDialog` closes itself and calls `onRun` rather than opening the
+  run dialog inside itself — two stacked Radix dialogs fight over focus trapping
+  and the textarea ends up unfocusable. The page owns the single dialog.
+
 ## Tools registry page (2026-08-12)
 
 `app/(dashboard)/tools/page.tsx` + `components/tools/{tool-dialog,delete-tool-dialog}.tsx`,

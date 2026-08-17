@@ -1,18 +1,34 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Loader2, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useTriggerRun } from "@/components/workflows/use-trigger-run";
 import { WebhookSecretCard } from "@/components/workflows/webhook-secret-card";
 import { type Workflow } from "@/lib/api";
 
-export function WorkflowDetailDialog({ workflow, open, onOpenChange, workspaceName }: { workflow: Workflow | null; open: boolean; onOpenChange: (open: boolean) => void; workspaceName?: string }) {
+/**
+ * `onRun` hands the workflow back to the page, which owns the single
+ * `RunWorkflowDialog`. This dialog closes first rather than opening the run
+ * dialog inside itself — two stacked Radix dialogs fight over focus trapping
+ * and the payload textarea ends up unfocusable.
+ */
+export function WorkflowDetailDialog({
+  workflow,
+  open,
+  onOpenChange,
+  workspaceName,
+  onRun,
+}: {
+  workflow: Workflow | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  workspaceName?: string;
+  onRun: (workflow: Workflow) => void;
+}) {
   const router = useRouter();
-  const triggerRun = useTriggerRun();
   if (!workflow) return null;
 
   const canRun = Boolean(workflow.current_version_id);
@@ -52,8 +68,13 @@ export function WorkflowDetailDialog({ workflow, open, onOpenChange, workspaceNa
         <DialogFooter>
           <Button variant="outline" onClick={() => router.push(`/workflows/${workflow.id}/builder`)}>Open Builder</Button>
           {canRun ? (
-            <Button onClick={() => triggerRun.mutate(workflow.id)} disabled={triggerRun.isPending}>
-              {triggerRun.isPending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}Run now
+            <Button
+              onClick={() => {
+                onOpenChange(false);
+                onRun(workflow);
+              }}
+            >
+              <Play className="size-4" />Run now
             </Button>
           ) : (
             <Tooltip>

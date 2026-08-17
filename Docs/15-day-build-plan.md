@@ -251,18 +251,38 @@ Ordered by risk, not by comfort.
 
 ### Days 10–12 — the flagship workflows · ~$1.50–2.50
 
-- [ ] Write the demo corpus: AP policy, Acme Vendor LLC contract, expense policy,
+- [x] Write the demo corpus: AP policy, Acme Vendor LLC contract, expense policy,
       short employee handbook. Real prose, consistent with the numbers the
-      landing page already uses.
-- [ ] Seed script — demo org, workspace, KB, registry tools, published workflows,
-      reproducible from empty.
-- [ ] Build and tune the invoice workflow end to end. **Prompt iteration is where
-      the budget actually goes** — stay on the cheap model until the logic is right.
-- [ ] Build the expense and HR workflows on the same pieces.
-- [ ] Approval sentence rendered in the frontend (see §4).
+      landing page already uses. **Markdown, not PDF** — `document_text.py` takes
+      `.md` natively, so there is no generation step and the corpus is
+      diff-reviewable. Lives in `apps/api/src/db/demo/corpus/`, under `src/`
+      because that is the only path the `api` container bind-mounts: a wording
+      change is live without an image rebuild.
+- [x] Seed script — `python -m src.db.demo.seed --email you@example.com`. Seeds
+      into an **existing** org rather than minting a demo one (see the day 10–12
+      notes). Idempotent: KBs/tools/workflows are looked up by name, uploads
+      dedup on content hash, and a workflow whose published graph already matches
+      is skipped, so version numbers do not climb on re-runs.
+- [x] Build and tune the invoice workflow end to end. One tuning round: retrieval
+      `top_k` 5 → 8 on `finance_policy_search`. Total spend across every run in
+      this phase was **under 2 cents**; the budget model over-estimated because a
+      graph that works needs far fewer iterations than one being designed.
+- [x] Build the expense and HR workflows on the same pieces.
+- [x] Approval sentence rendered in the frontend (see §4) —
+      `apps/web/lib/approval-summary.ts`, derived from upstream node outputs,
+      falling back to the old generic headline when nothing can be derived.
+- [x] **Not on the original list:** a trigger-payload box on Run now
+      (`run-workflow-dialog.tsx`). Day 1's notes recorded that "Run now" sends an
+      empty payload with no UI to supply one; that made two of the three demo
+      workflows unrunnable from a browser, so it was in scope whether the plan
+      said so or not.
 
-> **Gate:** trigger → retrieve → decide → approve → post, with citations, from a
-> clean database.
+> **Gate: PASSED 2026-08-17.** Signed webhook → extract → retrieve → validate →
+> condition → **held at the gate** → approve → mock ERP write → `completed`.
+> `$0.002233` for the run, citations to `ap-policy.md` §2 and the Acme MSA §2,
+> and `account_code: "5100"` read out of the policy's own coding table. The
+> guardrail was proven by removing `approval_1` from the same graph: 422 naming
+> `post_to_erp`.
 
 ### Days 13–14 — portfolio surface · ~$0.30
 
@@ -349,6 +369,8 @@ Append as you go, so a future session can pick up mid-sprint.
 | 2026-08-16 | 6–7 | **Gate passed.** `knowledge_search` ships as a TOOL TYPE (not a node type, per §4): `build_chunk_search_stmt` shared by an async API path and a sync tool-node path, `POST /knowledge-bases/{id}/search` built early so days 8–9 are pure frontend, `NODE_OVERRIDABLE_KEYS` extended with `query`/`query_fields` only. Proven live end to end — retrieved chunk at cosine 0.5589 into graph state, agent answered from it and cited the document, run cost $0.000051. Hybrid keyword search deferred (cut #1). **408 tests** (389 + 19). Also closed day 1's last open item (live pricing re-verified, all 11 rates match) and rotated `INTEGRATION_ENCRYPTION_KEY` off the repo-committed default on the Mac. | ~$0.0002 |
 
 | 2026-08-16 | 8–9 | **Gate passed, in a real browser.** `/knowledge` (list, create, rename, delete), KB detail with drag-drop upload, polled document status, chunk inspector and the retrieval playground; `knowledge_search` wired into the builder's tool form with a KB picker — **both** inline and registry, the latter closed by adding the type to `tool-dialog.tsx`, where it had been uncreatable. Verified in both themes: upload → `Queued` → `Indexed` by polling, re-drop reported "already indexed, nothing charged", playground ranked the passage at 39% and an unrelated question at 2% marked below cutoff, document delete cascaded its chunk. Then a registry-backed `start → knowledge_search → end` was published and **run through the real worker to `completed`**, node override of the question winning over the registry default, `tool_executions` row linked. Three real bugs found and fixed — see the day 8–9 notes below. **408 backend / 260 frontend tests.** | ~$0.0002 |
+
+| 2026-08-17 | 10–12 | **Gate passed, live.** Demo corpus (4 Markdown documents, ~9,500 words), `src/db/demo/` seed + `send_invoice.py`, three published workflows, the derived approval sentence and a trigger-payload box on Run now. All three workflows proven end to end against the real worker: the invoice held at its gate and completed on approval with a correct ERP payload; the expense claim was routed to a human **by the retrieved policy** (`compliant: false`, receipt rule cited, `reimbursable_amount` 700.55 — the landing page's own figure); the HR assistant answered from the handbook in one leg, twice, once on its static query and once on a payload question. Guardrail re-proven on this exact graph (422 naming `post_to_erp`), forged webhook rejected with the uniform 401. **430 backend tests** (+19 pinning the demo graphs against the real validators) and **292 frontend tests** (+32). | ~$0.02 |
 
 | 2026-08-15 | 2–5 | **Gate passed.** `knowledge_base` module (CRUD + upload + chunks), `core/storage.py` (first MinIO code), `core/document_text.py` (pypdf/docx extraction, paragraph-packed chunking), `workers/document_tasks.py` (first task ever on `worker_documents`), migration `20260815_kb_ingestion`. Upload-time dedup returns 200 and spends nothing. **389 tests** (337 + 52). Also: test suite now refuses to run outside a `*_test` database, after it destroyed the dev data on day 1. | ~$0.0001 |
 
@@ -452,3 +474,57 @@ product bug. Type slowly, or assert on the DB row.
   matches, showing empty pages while the header named a workspace with content),
   and logout clears it so the next account does not start inside the previous
   one's workspace.
+
+### Days 10–12 notes — what the demo actually taught
+
+- **Two knowledge bases, not one.** `knowledge_base_id` is registry-owned on a
+  `knowledge_search` tool specifically so a reviewed retrieval step cannot have
+  its corpus swapped underneath it — and that guarantee is invisible when there
+  is only one corpus to point at. Splitting Finance policies from the Employee
+  handbook makes the constraint legible, and it keeps the HR assistant honest:
+  it can only ever answer from the handbook.
+- **The two mutating workflows route by different mechanisms, deliberately.**
+  The invoice compares `total_amount` against the policy's USD 1,000 threshold
+  with the structured condition DSL — deterministic, and the rule the landing
+  page prints verbatim. The expense claim routes on an agent's `compliant`
+  boolean, which is where the retrieved clause actually changes the outcome. A
+  demo in which every decision is an LLM guess is not a governance story; one in
+  which none are does not show RAG doing anything.
+- **The sample expense claim has to breach the policy.** It routes on
+  `compliant`, so a clean claim skips the gate entirely and the flagship feature
+  never appears. A test asserts the payload still contains an unreceipted line
+  above the USD 25.00 threshold, because "improving" the sample data would
+  silently delete the human-in-the-loop step from the demo.
+- **`top_k` 5 → 8 was worth one round.** At 5, the expense assessment found the
+  receipt rule (§3) and missed the non-reimbursable list (§8), so it named one
+  breach of three. At 8 it names two and the reimbursable total lands on
+  **700.55** — the exact figure already on the landing page's expense card. Costs
+  ~1,300 extra input tokens per call. This is the only tuning the whole phase
+  needed.
+- **A registry edit does not republish anything.** Re-running the seed after the
+  `top_k` change updated the tool row and reported all three workflows already
+  published — because the *graph* did not change, and the tool is resolved once
+  per run. That is `resolve_node_configs` working, and it is a good thing to
+  point at during a demo.
+- **The seed goes through the services, not the repositories.** A graph that
+  seeds is therefore a graph that publishes, and a tool config that seeds is one
+  `_tool_config` accepts — there is no second code path that can create demo data
+  the product itself would reject. Two real bugs surfaced from writing it this
+  way, both in the script: `SET x = :param` is not parameterisable in Postgres
+  (`set_config()` is), and disposing the async engine from a second
+  `asyncio.run()` floods the exit with `Event loop is closed` — the same
+  loop-affinity trap `workers/async_bridge.py` exists to solve.
+- **Spend was ~$0.02, against a $1.50–2.50 estimate.** The budget model assumed
+  prompt iteration would dominate. It did not, because the prompts were written
+  against a corpus that had been read rather than guessed at, and because the
+  structured-output schemas do most of the constraining that a prompt would
+  otherwise have to. Remaining budget is essentially untouched.
+
+### The gap this phase closed that was not on the list
+
+"Run now" sent an empty `trigger_payload` and there was no UI to supply one —
+recorded in the day 1 notes and never actioned. Two of the three demo workflows
+extract from a payload, so without this they were unrunnable from a browser and
+the phase's own gate could only be met from a terminal. `RunWorkflowDialog` plus
+the pure `lib/trigger-payload.ts` closes it; blank input still parses to `{}`, so
+the one-click path the HR assistant is demoed with is unchanged.

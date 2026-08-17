@@ -6,7 +6,7 @@ import { MoreHorizontal, Play, Plus } from "lucide-react";
 import { ArchiveWorkflowDialog } from "@/components/workflows/archive-workflow-dialog";
 import { WorkflowDetailDialog } from "@/components/workflows/workflow-detail-dialog";
 import { WorkflowDialog } from "@/components/workflows/workflow-dialog";
-import { useTriggerRun } from "@/components/workflows/use-trigger-run";
+import { RunWorkflowDialog } from "@/components/workflows/run-workflow-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -42,7 +42,7 @@ export default function WorkflowsPage() {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState<Workflow | null>(null);
   const [archivingWorkflow, setArchivingWorkflow] = React.useState<Workflow | null>(null);
-  const triggerRun = useTriggerRun();
+  const [runningWorkflow, setRunningWorkflow] = React.useState<Workflow | null>(null);
 
   const workspacesQuery = useQuery({ queryKey: ["workspaces", orgId], queryFn: workspacesApi.list, enabled: Boolean(orgId) });
   const workspaces = workspacesQuery.data ?? [];
@@ -92,7 +92,7 @@ export default function WorkflowsPage() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" onClick={(event) => event.stopPropagation()}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => triggerRun.mutate(workflow.id)} disabled={!workflow.current_version_id || triggerRun.isPending}><Play className="size-4" />Run now</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setRunningWorkflow(workflow)} disabled={!workflow.current_version_id}><Play className="size-4" />Run now</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setSelectedWorkflow(workflow)}>View details</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setArchivingWorkflow(workflow)} className="text-destructive">Archive</DropdownMenuItem>
                 </DropdownMenuContent>
@@ -103,7 +103,8 @@ export default function WorkflowsPage() {
       ) : null}
 
       <WorkflowDialog open={createOpen} onOpenChange={setCreateOpen} />
-      <WorkflowDetailDialog workflow={selectedWorkflow} open={Boolean(selectedWorkflow)} onOpenChange={(open) => !open && setSelectedWorkflow(null)} workspaceName={selectedWorkflow ? workspaceName(selectedWorkflow) : undefined} />
+      <WorkflowDetailDialog workflow={selectedWorkflow} open={Boolean(selectedWorkflow)} onOpenChange={(open) => !open && setSelectedWorkflow(null)} workspaceName={selectedWorkflow ? workspaceName(selectedWorkflow) : undefined} onRun={setRunningWorkflow} />
+      <RunWorkflowDialog workflow={runningWorkflow} open={Boolean(runningWorkflow)} onOpenChange={(open) => !open && setRunningWorkflow(null)} />
       <ArchiveWorkflowDialog workflow={archivingWorkflow} open={Boolean(archivingWorkflow)} onOpenChange={(open) => !open && setArchivingWorkflow(null)} />
     </div>
   );

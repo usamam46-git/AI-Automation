@@ -120,8 +120,8 @@ verified via a full read-only orientation pass — see note below.)
   Schedule + webhook triggers, the audit trail and the per-org run quota all
   landed 2026-08-09 (Vol. 2 §5, §667, §700) — see the bullets below.
   The home dashboard + `analytics` module landed 2026-08-10 — see the bullet below.
-  **389 tests pass** (337 + 52 from the knowledge-base ingestion pipeline,
-  2026-08-15; confirmed clean run in 4m40s against `aap_test`).
+  **430 tests pass** (2026-08-17; confirmed clean run in 5m42s against `aap_test`
+  — the last full-suite figures were 389 on 2026-08-15 and 408 on 2026-08-16).
   Note on running them: `poetry` is not on PATH on every dev machine, and the
   api image installs `--only main`, so `poetry run pytest` from `apps/api/` is
   not universally available. The portable route is inside the container —
@@ -652,6 +652,41 @@ verified via a full read-only orientation pass — see note below.)
   failing with "system roles not seeded". `conftest.py` now hard-exits unless the
   DB name ends in `_test`; `AAP_ALLOW_DESTRUCTIVE_TESTS=1` overrides. See
   apps/api/CLAUDE.md for how to create and target `aap_test`.
+- **Flagship demo workflows landed 2026-08-17** (days 10–12 — the plan's own gate
+  passed live). New `apps/api/src/db/demo/`: four Markdown corpus documents
+  (AP policy, the Acme Vendor MSA, expense policy, employee handbook), `graphs.py`
+  holding three workflow graphs as pure data, an idempotent `seed.py`
+  (`--email`-targeted, goes through the real services) and `send_invoice.py`
+  which HMAC-signs and POSTs the demo invoice. It lives under `src/` because that
+  is the only path `api` bind-mounts, so corpus and prompt edits need no rebuild.
+  Two knowledge bases (Finance policies / Employee handbook) and three registry
+  tools; only `erp_create_journal_entry` is mutating.
+  Proven end to end against the live stack: signed webhook → extract →
+  `knowledge_search` → validate → condition → **held at the gate** → approve →
+  mock ERP write → `completed`, $0.002233, citing `ap-policy.md` §2 and the MSA,
+  with `account_code: "5100"` read out of the policy's own coding table. The
+  expense claim was routed to a human **by the retrieved policy** (`compliant:
+  false`, receipt rule quoted, `reimbursable_amount` 700.55 — the landing page's
+  own figure), and the HR assistant answered from the handbook in one leg on both
+  its static query and a payload question. The guardrail was re-proven on this
+  exact graph: removing `approval_1` makes publish a 422 naming `post_to_erp`.
+  Frontend: **the approval sentence is now derived** (`lib/approval-summary.ts` —
+  Vol. 3 §6.1's "Approve $4,200.00 to Acme Vendor LLC?", built from upstream node
+  outputs, falling back to the generic headline when nothing can be derived; this
+  is NOT licence to add a message field to `human_approval`), and **"Run now" now
+  has a trigger-payload box** (`run-workflow-dialog.tsx` + `lib/trigger-payload.ts`),
+  closing a gap open since day 1 — the API had always accepted `trigger_payload`
+  and no UI ever sent one, which made two of the three demo workflows unrunnable
+  from a browser.
+  **430 backend tests** (+19 in `tests/test_demo_graphs.py`, which runs the demo
+  graphs through the real validators with no DB) and **292 frontend tests** (+32).
+  Total OpenAI spend for the whole phase was **under 2 cents** against a $1.50–2.50
+  estimate. Contracts in apps/api/CLAUDE.md's demo-seed section and
+  apps/web/CLAUDE.md's approval-sentence section; the load-bearing ones: the seed
+  goes through **services not repositories**, `SET x = :param` is not
+  parameterisable in Postgres (use `set_config()`), the async engine must be
+  disposed **inside the same event loop**, and `approval-summary.ts` must **never
+  invent** a figure it could not read.
 - Next: verify the 3D scene on a real mobile viewport (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
   and a phone crops it hard — see apps/web/CLAUDE.md), the build plan's days
@@ -669,7 +704,7 @@ verified via a full read-only orientation pass — see note below.)
   landing page (see above). `app/(marketing)/` now exists and owns `/`;
   `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, **260 tests** over the pure `lib/` modules only (no React harness;
+  `npm test`, **292 tests** over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

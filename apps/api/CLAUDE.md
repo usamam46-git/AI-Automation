@@ -777,6 +777,69 @@ as a signature default binds the function object once at import, which defeats
 monkeypatching and any later re-binding — it cost five failing tests during the
 build. Both search paths take `None` and resolve inside the body instead.
 
+## Demo seed — `src/db/demo/` (landed 2026-08-17)
+
+Build-plan days 10–12. Four Markdown corpus documents, three registry tools, three
+published workflows, and a webhook-signing helper. Nothing in the application
+imports any of it.
+
+```
+docker exec -w /app aap_api python -m src.db.demo.seed --email you@example.com
+docker exec -w /app aap_api python -m src.db.demo.send_invoice
+```
+
+- **It lives under `src/` for one concrete reason.** `infra/docker-compose.yml`
+  bind-mounts `apps/api/src` into `api` and nothing else, so a corpus document or
+  a prompt edited on the host is live in the container immediately. A sibling
+  `apps/api/demo/` would need an image rebuild for every wording change. This is
+  the same constraint that bites `src/workers/` in the other direction — workers
+  do *not* bind-mount, so a new task module still needs a rebuild.
+- **It seeds into an EXISTING org, resolved from `--email`.** Minting a throwaway
+  demo org was rejected: the seeded data would be invisible to whoever is already
+  logged in, and the org's BYOK key would not travel to it. The script refuses to
+  guess — no user, no membership, or more than one active membership are all hard
+  failures naming the ambiguity.
+- **Every write goes through the services, never the repositories.** That is the
+  point of the script: a graph that seeds is a graph that publishes, and a config
+  that seeds is one `_tool_config` accepts. Writing rows directly would let it
+  create demo data the product itself would reject. The consequence is that it
+  must `commit()` explicitly between phases, because services flush and the
+  FastAPI session dependency is what normally commits.
+- **Idempotent, and the graph-signature check is the load-bearing half.** KBs,
+  tools and workflows are looked up by name; uploads dedup on content hash inside
+  `upload_document`. But a published version is immutable, so "already correct"
+  has to be decided by comparing the published graph against the desired one —
+  without `_graph_signature`, every re-run would publish a byte-identical version
+  N+1 and the history would fill with noise.
+- **`SET app.current_org_id = :param` does not work.** `SET` is utility syntax and
+  takes no bind parameters; asyncpg sends `$1` and Postgres answers "syntax error
+  at or near $1". Use `SELECT set_config('app.current_org_id', :org, false)` — an
+  ordinary function call, which parameterises normally. Never string-interpolate
+  it instead; that is an injection site. The third argument is `false`
+  (session-scoped) because the script commits repeatedly and `SET LOCAL` dies
+  with its transaction.
+- **Dispose the engine inside the same event loop.** `finally: asyncio.run(engine.dispose())`
+  after `asyncio.run(_seed(...))` floods the exit with `Event loop is closed` and
+  `attached to a different loop` — asyncpg connections are bound to the loop that
+  opened them. This is exactly what `workers/async_bridge.py` exists to solve;
+  the script's `_run()` wrapper is the same fix in miniature.
+- **The webhook secret is written to `/tmp/orkest-demo.json`, mode 600, never
+  under the repo.** It is a live credential that starts production runs with no
+  login, and `src/` is a bind mount of the working tree — a secret written there
+  is one `git add -A` from being committed. It is returned exactly once at
+  generation and is not readable back, so a seed re-run on a workflow that
+  already has one reports that honestly and points at `--rotate-webhook-secret`
+  rather than pretending.
+- **`tests/test_demo_graphs.py` runs the demo graphs through the REAL validators**
+  — `validate_graph_structure`, `validate_mutating_approval`, `_agent_config`,
+  `_tool_config`, `evaluate_condition` — with no database and no network. Node
+  `config` is `dict[str, Any]` all the way down, so nothing else connects these
+  hand-written blobs to the handlers that consume them. It also reproduces
+  `resolve_node_configs`' merge (reading `NODE_OVERRIDABLE_KEYS` rather than
+  restating it), because a raw demo tool node carries only `tool_id` and
+  `_tool_config` would correctly reject it; what has to be valid is the merged
+  config that actually reaches the handler.
+
 ## Deliberate design decisions (not bugs)
 
 - `compile_graph()` bypasses the Redis compiled-graph cache entirely when
