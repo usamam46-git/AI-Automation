@@ -4,7 +4,17 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, BookText, Bot, ChevronDown, LayoutDashboard, LayoutGrid, LogOut, Plus, Settings, Workflow, Wrench } from "lucide-react";
+import { Bot, ChevronDown, LogOut, Plus } from "lucide-react";
+import {
+  ActivityIcon,
+  AuditIcon,
+  DashboardIcon,
+  KnowledgeIcon,
+  SettingsIcon,
+  ToolsIcon,
+  WorkflowIcon,
+  WorkspacesIcon,
+} from "@/components/ui/animated-icons";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,14 +31,21 @@ import { useAuthStore } from "@/stores/auth-store";
 // activeNavItem below uses `find` on a startsWith match, so the FIRST matching
 // entry wins. Every href here must be a distinct top-level segment — a nested
 // route like /workflows/x/executions would be swallowed by /workflows.
+// Icons are the animated set in components/ui/animated-icons — same Lucide
+// geometry, driven by the row's hover/focus so nothing moves on its own, and
+// inert under prefers-reduced-motion. See that file's header for the rules.
 const navItems = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Workflows", href: "/workflows", icon: Workflow },
-  { label: "Executions", href: "/executions", icon: Activity },
-  { label: "Tools", href: "/tools", icon: Wrench },
-  { label: "Knowledge", href: "/knowledge", icon: BookText },
-  { label: "Workspaces", href: "/workspaces", icon: LayoutGrid },
-  { label: "Settings", href: "/settings", icon: Settings },
+  { label: "Dashboard", href: "/dashboard", icon: DashboardIcon },
+  { label: "Workflows", href: "/workflows", icon: WorkflowIcon },
+  { label: "Executions", href: "/executions", icon: ActivityIcon },
+  { label: "Tools", href: "/tools", icon: ToolsIcon },
+  { label: "Knowledge", href: "/knowledge", icon: KnowledgeIcon },
+  { label: "Workspaces", href: "/workspaces", icon: WorkspacesIcon },
+  // Owner/Admin only (`audit:read`). Shown to everyone anyway: the page renders
+  // its own locked state, and the JWT carries no role claim to gate on here
+  // without a backend change.
+  { label: "Audit log", href: "/audit-log", icon: AuditIcon },
+  { label: "Settings", href: "/settings", icon: SettingsIcon },
 ];
 
 const soonItems = [
@@ -118,15 +135,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </DropdownMenu>
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-3">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const active = item.href === activeNavItem?.href;
-            return (
-              <Link key={item.href} href={item.href} className={cn("flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent", active && "bg-sidebar-accent font-medium")}>
-                <Icon className="size-4" />{item.label}
-              </Link>
-            );
-          })}
+          {navItems.map((item) => (
+            <NavLink key={item.href} item={item} active={item.href === activeNavItem?.href} />
+          ))}
           <div className="mt-3 border-t border-sidebar-border pt-3">
             {soonItems.map((item) => { const Icon = item.icon; return <div key={item.label} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"><Icon className="size-4" />{item.label}<Badge variant="soon" className="ml-auto">Soon</Badge></div>; })}
           </div>
@@ -151,5 +162,43 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </div>
       <WorkspaceDialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen} />
     </div>
+  );
+}
+
+/**
+ * One sidebar row.
+ *
+ * Its own component purely so the hover state is local — lifting it into
+ * `DashboardShell` would re-render the whole shell, including the workspace
+ * query and the header, on every pointer move across the nav.
+ *
+ * Focus counts as hover so the animation is reachable by keyboard, and the
+ * active row animates on mount-in as a small acknowledgement of arrival.
+ */
+function NavLink({
+  item,
+  active,
+}: {
+  item: { label: string; href: string; icon: React.ComponentType<{ className?: string; active?: boolean }> };
+  active: boolean;
+}) {
+  const [hovered, setHovered] = React.useState(false);
+  const Icon = item.icon;
+
+  return (
+    <Link
+      href={item.href}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      className={cn(
+        "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent",
+        active && "bg-sidebar-accent font-medium",
+      )}
+    >
+      <Icon className="size-4" active={hovered} />
+      {item.label}
+    </Link>
   );
 }

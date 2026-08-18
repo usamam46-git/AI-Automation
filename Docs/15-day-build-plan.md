@@ -286,16 +286,23 @@ Ordered by risk, not by comfort.
 
 ### Days 13–14 — portfolio surface · ~$0.30
 
-- [ ] Audit log viewer UI. Cheap page; demonstrates governance, which is what an
-      enterprise buyer actually asks about.
-- [ ] Fix the dangling `#how-it-works` anchor — the nav, the footer and the
+- [x] Audit log viewer UI. Cheap page; demonstrates governance, which is what an
+      enterprise buyer actually asks about. **Done 2026-08-18** — `/audit-log`,
+      plus a small backend addition (`actor_email`) so the screen names people
+      rather than UUIDs.
+- [x] Fix the dangling `#how-it-works` anchor — the nav, the footer and the
       hero's "Watch a run" button all target an id that no longer exists.
+      **Done 2026-08-18** — it is a scroll POSITION, not an element, so the
+      anchor is placed by arithmetic off `SCENES`; see the day 13–14 notes.
 - [ ] Check the landing page on a real phone. Never been seen on one, and the
       plate is a 1.51-aspect image a portrait viewport crops hard.
-- [ ] README: architecture diagram, demo script, and an honest "deliberately not
+      **Still open — needs a physical device.**
+- [x] README: architecture diagram, demo script, and an honest "deliberately not
       built" section — that last part reads as engineering judgement, not as a gap.
+      **Done 2026-08-18** — the root README was still `create-next-app`
+      boilerplate; it is now the portfolio front page, with two Mermaid diagrams.
 - [ ] Record a three-minute walkthrough. A video outlives any environment you
-      have to keep alive.
+      have to keep alive. **Still open — needs a screen recording.**
 
 ### Day 15 — buffer
 
@@ -369,6 +376,10 @@ Append as you go, so a future session can pick up mid-sprint.
 | 2026-08-16 | 6–7 | **Gate passed.** `knowledge_search` ships as a TOOL TYPE (not a node type, per §4): `build_chunk_search_stmt` shared by an async API path and a sync tool-node path, `POST /knowledge-bases/{id}/search` built early so days 8–9 are pure frontend, `NODE_OVERRIDABLE_KEYS` extended with `query`/`query_fields` only. Proven live end to end — retrieved chunk at cosine 0.5589 into graph state, agent answered from it and cited the document, run cost $0.000051. Hybrid keyword search deferred (cut #1). **408 tests** (389 + 19). Also closed day 1's last open item (live pricing re-verified, all 11 rates match) and rotated `INTEGRATION_ENCRYPTION_KEY` off the repo-committed default on the Mac. | ~$0.0002 |
 
 | 2026-08-16 | 8–9 | **Gate passed, in a real browser.** `/knowledge` (list, create, rename, delete), KB detail with drag-drop upload, polled document status, chunk inspector and the retrieval playground; `knowledge_search` wired into the builder's tool form with a KB picker — **both** inline and registry, the latter closed by adding the type to `tool-dialog.tsx`, where it had been uncreatable. Verified in both themes: upload → `Queued` → `Indexed` by polling, re-drop reported "already indexed, nothing charged", playground ranked the passage at 39% and an unrelated question at 2% marked below cutoff, document delete cascaded its chunk. Then a registry-backed `start → knowledge_search → end` was published and **run through the real worker to `completed`**, node override of the question winning over the registry default, `tool_executions` row linked. Three real bugs found and fixed — see the day 8–9 notes below. **408 backend / 260 frontend tests.** | ~$0.0002 |
+
+| 2026-08-18 | — | **Members + invitations — UNPLANNED, added on request.** Vol. 3 §10, which this plan never scheduled. Found while answering "where do we assign roles?": nowhere. `org_memberships` had exactly one writer in the codebase, so every user was the sole Owner of their own org and three of the five seeded roles had never been held by a real user. `organizations` went models-only → real (9 endpoints), migration `20260818_org_members`, signed invite links shown in the UI because there is no mail delivery, and a `register(invite_token=…)` branch so a brand-new invitee joins the inviting org rather than a throwaway one. **463 backend** (+31) and **346 frontend** (+21) tests. Verified live end to end, including the addressee guard refusing a wrong-account accept. Day 15's buffer is now partly spent. | ~$0.00 |
+
+| 2026-08-18 | 13–14 | **Three of five done; two need hardware.** `/audit-log` — the endpoint had been complete and unconsumed since 2026-08-09, the same shape the integrations endpoints were in before the Settings page. Backend gained one field, `actor_email`, from a LEFT JOIN guarded on `actor_type = 'user'` (the column is polymorphic), because a governance screen rendering raw UUIDs undersells the feature. Page is 403-aware (Owner/Admin only), expands each row to its verbatim `metadata`, and does **not** poll — an audit row cannot change, and a trail that reorders itself while an auditor reads it is worse than one they refresh. `#how-it-works` fixed by arithmetic rather than by moving an id: verified live landing at scrub progress 0.5200 against the run scene's own 0.52 start. README rewritten from `create-next-app` boilerplate. **432 backend tests** (+2) and **325 frontend tests** (+33). | ~$0.00 |
 
 | 2026-08-17 | 10–12 | **Gate passed, live.** Demo corpus (4 Markdown documents, ~9,500 words), `src/db/demo/` seed + `send_invoice.py`, three published workflows, the derived approval sentence and a trigger-payload box on Run now. All three workflows proven end to end against the real worker: the invoice held at its gate and completed on approval with a correct ERP payload; the expense claim was routed to a human **by the retrieved policy** (`compliant: false`, receipt rule cited, `reimbursable_amount` 700.55 — the landing page's own figure); the HR assistant answered from the handbook in one leg, twice, once on its static query and once on a payload question. Guardrail re-proven on this exact graph (422 naming `post_to_erp`), forged webhook rejected with the uniform 401. **430 backend tests** (+19 pinning the demo graphs against the real validators) and **292 frontend tests** (+32). | ~$0.02 |
 
@@ -528,3 +539,70 @@ extract from a payload, so without this they were unrunnable from a browser and
 the phase's own gate could only be met from a terminal. `RunWorkflowDialog` plus
 the pure `lib/trigger-payload.ts` closes it; blank input still parses to `{}`, so
 the one-click path the HR assistant is demoed with is unchanged.
+
+---
+
+### Days 13–14 notes
+
+**The `#how-it-works` anchor was a scroll position, not an element.** Three
+links pointed at it — the nav, the footer and the hero's "Watch a run" — and all
+three had been silent no-ops since 2026-08-13, when the 3D scene replaced
+`run-film.tsx` and took the section that owned the id with it. The obvious
+repair, putting the id on the scene's root, lands the reader at progress 0,
+which is the hero they are already looking at. What both links mean is the *run*
+scene, at 0.52.
+
+The scrub is `start: "top top"` / `end: "bottom bottom"` over a 420vh container,
+so progress `p` is reached at `p × (420 − 100)` vh into it. A zero-height div at
+that offset is a real hash target, and native navigation, `scrollIntoView` and a
+cold load with the hash already in the URL all then work with no listener.
+`sceneAnchorTopVh` derives it from the same `SCENES` table the scrub reads, so
+retiming the run moves the anchor with it. Verified live: clicking the nav link
+landed at scrub progress **0.5200** and rendered the run scene's first beat.
+
+**The audit viewer deliberately does not poll.** Every other list in the product
+polls, because a run's status changes underneath the reader. An audit row
+physically cannot change — Postgres rejects UPDATE and DELETE on that table — so
+the only thing a poll could surface is a *new* row, and a trail that reorders
+itself mid-read is worse than one refreshed deliberately.
+
+**`actor_email` was worth the backend change.** The rows store a bare `actor_id`
+and nothing in the API resolves a user id to a name, so the page would have
+rendered hex strings. One LEFT JOIN, guarded on `actor_type = 'user'` because
+the column is polymorphic (`models.py`: users.id *or* agent_sessions.id), plus
+one response field. A governance screen full of UUIDs is a governance screen
+nobody reads.
+
+**Two items are still open and neither is code**: the landing page on a real
+phone, and the three-minute walkthrough. Both need hardware.
+
+---
+
+### Members + invitations — an unplanned day, and what it cost
+
+Not in this plan. It came out of a question — *where do we assign roles?* — whose
+honest answer was **nowhere**. Worth recording, because the gap was invisible
+from the code: the tables, the five seeded roles, the `member:invite` /
+`member:remove` permission strings and the `invited | active | suspended` column
+all existed and looked finished. Nothing wrote them. Exactly the shape
+`audit_logs` was in before day 2026-08-09 and `trigger_type` before triggers.
+
+Three decisions worth not relitigating:
+
+- **Signed invite links over direct-add.** Direct-add was one endpoint and no
+  token, but it puts someone in your organization without their consent and
+  leaves the `invited` status the schema models permanently unused. The link
+  also works for a person who has never used the product, which is the actual
+  demo scenario — the alternative required them to self-register first, which
+  drops them in their own empty org.
+- **`GET /members/me` over a JWT role claim.** A claim would gate the UI
+  synchronously on first paint, but access tokens live 15 minutes, so a demoted
+  user keeps their old role in the UI until rotation. One request per session is
+  cheaper than explaining that.
+- **The last-Owner rule is a 409, not a warning.** An org with no active Owner
+  has nobody holding `"*"`, and every repair path is itself Owner-gated. It is
+  unrecoverable without database access.
+
+**Cost to the plan:** roughly a day, drawn against day 15's buffer. The two
+remaining days 13–14 items still need hardware — a real phone, and a screen
+recording.

@@ -10,10 +10,11 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import desc, select
+from sqlalchemy import Row, and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.audit_logs.models import AuditLog
+from src.modules.auth.models import User
 
 
 class AuditLogRepository:
@@ -64,12 +65,32 @@ class AuditLogRepository:
         actor_id: uuid.UUID | None = None,
         cursor: str | None = None,
         limit: int = 50,
-    ) -> Sequence[AuditLog]:
+    ) -> Sequence[Row[tuple[AuditLog, str | None]]]:
         """
         Newest first, cursor-paginated on raw ISO `created_at` — the same
         convention as the Workflows and Executions lists.
+
+        Each row is `(AuditLog, actor_email)`. The email comes from an explicit
+        LEFT OUTER JOIN rather than a relationship because `actor_id` is
+        **polymorphic** — models.py documents it as "FK to users.id or
+        agent_sessions.id depending on actor_type", so there is no FK to declare
+        and a bare `actor_id == User.id` join would happily match an agent
+        session id against a user id if the two ever collided. The
+        `actor_type == 'user'` half of the onclause is what makes the join
+        sound, and it is the reason this is a join here rather than a second
+        lookup in the service. `agent` and `system` rows resolve to NULL by
+        construction, which is correct: neither has an email.
         """
-        stmt = select(AuditLog).where(AuditLog.organization_id == organization_id).order_by(desc(AuditLog.created_at)).limit(limit)
+        stmt = (
+            select(AuditLog, User.email)
+            .outerjoin(
+                User,
+                and_(AuditLog.actor_type == "user", AuditLog.actor_id == User.id),
+            )
+            .where(AuditLog.organization_id == organization_id)
+            .order_by(desc(AuditLog.created_at))
+            .limit(limit)
+        )
 
         if action is not None:
             stmt = stmt.where(AuditLog.action == action)
@@ -90,4 +111,4 @@ class AuditLogRepository:
                 pass
 
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        return result.all()

@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.audit_logs.models import AuditLog
 from src.modules.audit_logs.repository import AuditLogRepository
-from src.modules.audit_logs.schemas import AuditContext
+from src.modules.audit_logs.schemas import AuditContext, AuditLogResponse
 
 
 class AuditAction:
@@ -55,6 +55,11 @@ class AuditAction:
     INTEGRATION_CREDENTIAL_DELETED = "integration.credential.deleted"
     WEBHOOK_SECRET_ROTATED = "webhook_secret.rotated"
     RUN_QUOTA_EXCEEDED = "workflow.run.quota_exceeded"
+    MEMBER_INVITED = "member.invited"
+    MEMBER_INVITATION_ACCEPTED = "member.invitation_accepted"
+    MEMBER_ROLE_CHANGED = "member.role_changed"
+    MEMBER_STATUS_CHANGED = "member.status_changed"
+    MEMBER_REMOVED = "member.removed"
 
 
 class AuditService:
@@ -103,8 +108,17 @@ class AuditService:
         actor_id: uuid.UUID | None = None,
         cursor: str | None = None,
         limit: int = 50,
-    ) -> Sequence[AuditLog]:
-        return await self._repo.list_by_org(
+    ) -> Sequence[AuditLogResponse]:
+        """
+        Read the trail, newest first, with the actor resolved to an email.
+
+        Returns response models rather than ORM rows because the repository
+        hands back `(AuditLog, actor_email)` pairs — `actor_email` is joined,
+        not a column, so there is no attribute on AuditLog for the router's
+        `from_attributes` validation to find. Assembling it here keeps the
+        router free of the tuple shape.
+        """
+        rows = await self._repo.list_by_org(
             organization_id,
             action=action,
             resource_type=resource_type,
@@ -113,3 +127,4 @@ class AuditService:
             cursor=cursor,
             limit=limit,
         )
+        return [AuditLogResponse.model_validate(log).model_copy(update={"actor_email": email}) for log, email in rows]

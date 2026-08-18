@@ -1112,6 +1112,155 @@ Build-plan days 10–12, frontend half. Two pure vitest-covered modules —
   run dialog inside itself — two stacked Radix dialogs fight over focus trapping
   and the textarea ends up unfocusable. The page owns the single dialog.
 
+## Audit log viewer (2026-08-18)
+
+`/audit-log`, `components/audit-log/audit-log-row.tsx`, pure `lib/audit-log.ts`.
+Consumes `GET /api/v1/audit-logs`, complete and unconsumed since 2026-08-09 —
+the same shape the integrations endpoints were in before the Settings page.
+
+- **It does NOT poll, and that is the point.** Every other list here polls
+  because a run's status changes underneath the reader. An audit row physically
+  cannot change (Postgres rejects UPDATE and DELETE on that table), so the only
+  thing a poll could surface is a *new* row — and a trail that reorders itself
+  while an auditor is mid-read is worse than one they refresh deliberately.
+- **A 403 is a state, not an error.** `audit:read` is Owner/Admin only and sits
+  in the backend's `WILDCARD_READ_EXEMPT`, so Viewer's `"*:read"` does not reach
+  it. The locked card mirrors `settings/openai-key-card.tsx`, and the query's
+  `retry` predicate skips retrying a 403 so the state renders immediately.
+  The nav entry is shown to everyone: the JWT carries `sub`/`user_id`/`org_id`
+  and no role claim, so hiding it would need a backend change.
+- **`auditSummary` must never invent a fact** — the same rule
+  `approval-summary.ts` follows. Every branch reads keys that the corresponding
+  `AuditService.record()` call site actually writes, type-checks them, and
+  returns `null` when it cannot. The caller then renders *nothing*, not a
+  placeholder. A plausible sentence assembled from a guess is worse on an audit
+  trail than no sentence, and the tests assert null for every action under both
+  missing and wrong-shaped metadata.
+- **`AUDIT_ACTION_META` must stay in step with the backend's `AuditAction`.**
+  Both sides make the same promise — only actions something really writes are
+  listed — and a test asserts `AUDIT_ACTIONS` and `AUDIT_ACTION_META` have
+  identical keys. An unknown action still renders via `humanizeAction`, because
+  the backend vocabulary is open by design (Vol. 2 §3.5) and a governance screen
+  that blanks on a new action is worse than one with an awkward label.
+- **The cursor is passed through verbatim.** `nextAuditCursor` returns the last
+  row's raw ISO `created_at`; a round-trip through JS `Date` truncates to
+  milliseconds and the backend compares `created_at < cursor`, so the boundary
+  row would be re-served on every page. Same convention as Workflows/Executions.
+- Five `member.*` actions joined the vocabulary on 2026-08-18. The test that
+  used `member.invited` as its example of an *unknown* action caught the change
+  and had to be repointed — that is the keys-in-step assertion working.
+- Rows expand to the **verbatim `metadata` JSON** plus the full ids the
+  collapsed row abbreviates. On a governance screen the underlying record is the
+  product; the next question after "what happened" is "show me what you stored".
+
+## The `#how-it-works` anchor (fixed 2026-08-18)
+
+The nav, the footer and the hero's "Watch a run" button all target
+`#how-it-works`. It matched **nothing** between 2026-08-13 — when the 3D scene
+replaced `run-film.tsx` and deleted the section owning that id — and 2026-08-18.
+Three silent no-ops.
+
+Putting the id on the scene root does not fix it: that is progress 0, the hero
+the reader is already looking at. What both links mean is the `run` scene, which
+is a scroll **position**, not an element.
+
+`sceneAnchorTopVh(sceneId, scrollVh)` in `lib/scene-script.ts` converts one to
+the other. The scrub is `start: "top top"` / `end: "bottom bottom"`, so progress
+`p` is reached at `scrollY = rootTop + p × (rootHeight − viewportHeight)`, and an
+element at absolute `top: T` aligns to the viewport top at `rootTop + T` —
+hence `T = p × (scrollVh − 100)` vh. `core-scene.tsx` renders a zero-height
+`aria-hidden` div there.
+
+Two consequences worth keeping: it is **pure CSS**, so native hash navigation,
+`scrollIntoView` and a cold load with the hash already in the URL all work with
+no listener; and it is **derived from `SCENES`**, so retiming the run cannot
+leave "Watch a run" pointing at the wrong moment. Verified live — the nav link
+landed at scrub progress 0.5200 against the run scene's 0.52 start, rendering
+its first beat.
+
+## Members + invitations (2026-08-18)
+
+`components/settings/{members-card,invite-member-dialog}.tsx`,
+`app/(auth)/accept-invite/page.tsx`, pure `lib/members.ts`, `membersApi`.
+Backend contracts are in apps/api/CLAUDE.md's members section.
+
+- **The predicates in `lib/members.ts` are an AFFORDANCE, not a boundary.**
+  Every rule they encode — last active Owner, no self-edit, revoke rather than
+  suspend a pending invite — is enforced by `MemberService` and 409s there. This
+  copy exists so a refused action is disabled with a reason instead of failing
+  after a click. If the two disagree the backend wins and the user gets a toast;
+  that is degraded, not unsafe. **Never move a rule out of the service.**
+- **`isSelf` compares MEMBERSHIP ids, not user ids.** A pending invitation has
+  `user_id: null`, so a user_id comparison matches every pending row against
+  every other one. For the same reason, never key a list on `user_id`.
+- **`hasPermission` deliberately does NOT duplicate `WILDCARD_READ_EXEMPT`.** It
+  is only ever asked about `member:*`, none of which are exempt; a partial copy
+  of that set is a lie that drifts. Ask the backend about anything else.
+- **The invite dialog's second state is the whole point.** There is no email
+  delivery (`worker_notifications` boots with an empty registry), so the accept
+  URL is returned in the response body and handed over on screen. Closing
+  without copying makes the invitation unreachable until it is revoked and
+  reissued — hence the explicit warning and a close button that says so.
+- **`/accept-invite` runs its own silent session bootstrap.** Access tokens live
+  in memory only, so someone already signed in who opens the link from their
+  email arrives with an empty store and would be shown the *register* form —
+  which can only fail for them with "Email already registered". `AuthGate`
+  cannot be reused: it redirects to /login when there is no session, and this
+  page must also work for someone with no account at all. So it attempts
+  `authApi.refresh()` once and treats failure as a normal outcome that reveals
+  the register form. Found in a browser, not in review.
+- `RegisterPayload.organization_name` is now **optional** — the backend requires
+  it only when `invite_token` is absent, and 422s when neither is present.
+
+## Permissions UI + animated nav icons (2026-08-18)
+
+`lib/permissions.ts` (pure), `components/settings/{role-permissions,
+change-role-dialog,roles-matrix-card}.tsx`, `components/ui/animated-icons/`.
+
+- **The frontend no longer resolves wildcards at all.** `roles.permissions`
+  stores `["*"]` / `["*:read"]`, and expanding those needs the full vocabulary
+  AND `WILDCARD_READ_EXEMPT`. The backend now returns `effective_permissions`
+  (see `expand_permissions`), so `hasPermission` is a plain `.includes()` and
+  the duplicated wildcard branch in `lib/members.ts` was **deleted**. If you
+  write `endsWith(":read")` anywhere in `lib/permissions.ts`, stop.
+- **Withheld capabilities are rendered, not just granted ones.** "Editor can
+  build workflows" answers half of what someone assigning a role is asking; the
+  other half is "and what can't they do?", which a list of ticks cannot answer.
+  The contrast is the information.
+- **`Make Admin` / `Make Viewer` menu items were replaced by one
+  `Change role…`** opening a dialog with a gained/lost diff. Those items were
+  one unexplained click from changing what a colleague can do to production
+  workflows. The dialog resets per member via a **`key` prop**, not an effect —
+  a synchronous setState in an effect is a cascading render and the lint rule
+  correctly refuses it.
+- `RolesMatrixCard` is Vol. 3 §10's "Roles & Permissions" page, **read-only**.
+  The blueprint specifies a custom-role builder for enterprise; nothing writes
+  an org-owned `roles` row, so this renders the same matrix as a reference
+  rather than an editor. It makes the backend's subtle rules visible — Viewer
+  holds `*:read` and still has no audit-trail tick, which is
+  `WILDCARD_READ_EXEMPT` on screen.
+
+### Icons
+
+- **Glyphs are literal, not decorative.** `workflow.published` used to be a
+  rocket; publishing here is an immutable version being cut, and a launch glyph
+  oversells it in a way that reads as stock-AI dressing. It is
+  `GitCommitVertical` now, and `webhook_secret.rotated` is a rotation rather
+  than a second key. If a glyph could sit on any product's screen unchanged, it
+  is the wrong glyph.
+- **`components/ui/animated-icons/` is hand-built on the `motion` already in
+  the tree** — the pqoqubbw/icons *pattern*, not the dependency. No new package,
+  and identical Lucide geometry so they are indistinguishable at rest. Three
+  rules, in that file's header: nothing moves unprompted (hover/focus only,
+  driven by the parent `NavLink`), `prefers-reduced-motion` disables it
+  entirely, and each animation moves the part of the glyph that carries its
+  meaning. Uniform bouncing would be the animated equivalent of a rocket emoji.
+- **The animation itself is UNVERIFIED under browser automation** — the tab is
+  never focused, so neither `:hover` nor programmatic `.focus()` reaches React's
+  delegated handlers, exactly like the frozen rAF documented for the 3D scene.
+  Rendering at rest, the icon count and a clean console are all confirmed;
+  the motion needs a human pointer.
+
 ## Tools registry page (2026-08-12)
 
 `app/(dashboard)/tools/page.tsx` + `components/tools/{tool-dialog,delete-tool-dialog}.tsx`,

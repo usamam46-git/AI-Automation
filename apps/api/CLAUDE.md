@@ -481,6 +481,20 @@ Five things to know:
 `integration_type` + `last_four`; the webhook rotation records only
 `replaced_existing`. Two tests grep the whole response for the real value.
 
+**`actor_email` is joined, not stored** (added 2026-08-18 with the audit-log
+UI). `AuditLogRepository.list_by_org` returns `(AuditLog, actor_email)` pairs
+from a LEFT OUTER JOIN whose onclause is
+`and_(AuditLog.actor_type == "user", AuditLog.actor_id == User.id)`. Both halves
+matter: `actor_id` is **polymorphic** (models.py — users.id *or*
+agent_sessions.id depending on `actor_type`), so there is no FK to declare and a
+bare `actor_id == User.id` join would match an agent session id against a user
+id if the two ever collided. `agent` and `system` rows resolve to NULL by
+construction, which is correct. `AuditService.list_logs` consequently returns
+`AuditLogResponse` objects rather than ORM rows — `actor_email` is not an
+attribute on `AuditLog`, so the router's `from_attributes` validation has
+nothing to find. A `user` row with a null `actor_email` means the user was
+deleted; the frontend renders a short id for it, deliberately not "Unknown".
+
 **Two ORM identity-map traps were found writing this** — both produced a
 *stale* read, and both will recur if you reach for the same shape:
 `.returning(Model)` resolves to an instance already in the session's identity
@@ -490,6 +504,98 @@ map rather than refreshing it from the RETURNING row. So `get_by_type()` before
 a scalar column, which does not populate the identity map), and reading
 `workflow.webhook_secret_encrypted` *after* `repository.update()` yields the new
 value. Capture before-state before the write.
+
+## Members + invitations (landed 2026-08-18)
+
+Vol. 3 §10. Before this, `org_memberships` was written by **exactly one line in
+the whole codebase** — `AuthService.register` — so every user was the sole Owner
+of their own organization and Editor/Approver/Viewer had never been held by a
+real user outside the test suite. `member:invite`/`member:remove` existed as
+permission strings that gated nothing.
+
+The `organizations` module went models-only → real: `{schemas,repository,service,
+router}.py` under `/api/v1/organizations`. Migration `20260818_org_members`.
+**Not a new module** — members belong to the org domain, and `organizations`
+already existed as a directory.
+
+- **`org_memberships.user_id` is now NULLABLE, and `invited_email` was added.**
+  An invitation to an address with no account has nothing to point at and must
+  still appear on the roster. This is safe **only because** every permission
+  path already filters `status = 'active'` (`require_permission`,
+  `AuthService.switch_org`) — a pending row grants nothing anywhere. Do not add
+  a permission path that forgets that filter.
+- **`uq_org_membership (organization_id, user_id)` does NOT constrain pending
+  invitations** — Postgres treats NULLs as distinct. `uq_org_pending_invite`, a
+  partial unique index on `(organization_id, lower(invited_email)) WHERE user_id
+  IS NULL`, is what stops two invitations to one address.
+- **Invite tokens and access tokens are signed with the SAME key**, so they are
+  separated deliberately and in two ways: a `typ` claim (`"invite"` vs
+  `"access"`, checked on both sides — `decode_invite_token` rejects a non-invite
+  and `get_current_user` rejects a non-access), and the invite carrying **no
+  `sub`, `user_id` or `jti`**. Either alone would do; both are cheap. If you add
+  a claim to one kind, re-read this. `test_an_invite_token_is_not_usable_as_an_access_token`
+  is the guard.
+- **Invitations are stateless but revocable.** The token names a membership row
+  that must still be `status='invited'`, so deleting the row or accepting it
+  makes the token inert with no blocklist. That is why revocation is a plain
+  DELETE.
+- **An invitation is addressed to a person, not to whoever holds the link.**
+  Both accept paths compare the token's `email` claim to the authenticated (or
+  registering) user's address and 403 on a mismatch. Without it a forwarded link
+  is a bearer credential for joining someone else's org.
+- **Every invitation failure returns ONE identical 400** — bad signature,
+  expired, revoked, already accepted. Same anti-enumeration reasoning as the
+  webhook trigger's uniform 401; the preview endpoint is unauthenticated.
+- **The last active Owner cannot be demoted, suspended or removed (409).** An
+  org with no active Owner has nobody holding `"*"`, and every repair path is
+  itself Owner-gated — it is unrecoverable without database access. The count is
+  `status='active'` only: a suspended or invited Owner administers nothing.
+- **Nobody may change their own role or status (409).** Self-elevation is the
+  obvious half; the other is that an Admin cannot demote themselves into a state
+  they cannot undo.
+- **`Owner` is absent from `ASSIGNABLE_ROLES`, in both directions.** Ownership
+  transfer has different consequences and is a separate, unbuilt operation.
+- **Role and status changes MUST invalidate the permission cache.**
+  `require_permission` reads Redis before the database, so a change that skips
+  `invalidate_permissions_cache` is a change that does not take effect until the
+  cache expires. `test_suspending_a_member_revokes_access_immediately` pins it.
+- **`member:read` is NOT in `WILDCARD_READ_EXEMPT`** — knowing who your
+  colleagues are is ordinary in-org information, unlike a BYOK key's last four
+  or an audit row's client IP. Viewer reaches it through `"*:read"`; Admin,
+  Editor and Approver hold it explicitly.
+- **`seed_roles.py` alone is not enough when adding a permission.**
+  `seed_system_roles` only INSERTs a role that is missing and never updates one
+  that exists, so editing that file has no effect on any database that has
+  booted once. The migration carries the same lists. Same pairing as
+  `20260815_kb_ingestion`.
+- **`POST /auth/register` grew an `invite_token` branch.** With it, no
+  Organization and no Workspace are created and the existing `invited` row is
+  filled in — dropping an invitee into their own empty org is precisely what
+  invitations exist to prevent. `organization_name` becomes optional, enforced
+  by a model validator.
+- **`expand_permissions()` is the single place wildcards are resolved.** It
+  sits in `core/permissions.py` beside `permission_granted` precisely because
+  the two must agree; `test_expand_permissions_agrees_with_permission_granted`
+  asserts that across every permission and every system role. The API returns
+  the result as `effective_permissions` on both `RoleOption` and
+  `CurrentMemberResponse`, which is what let the frontend **delete** its own
+  copy of the wildcard branch — `WILDCARD_READ_EXEMPT` no longer exists in two
+  languages. Do not reintroduce a client-side expansion.
+  `ALL_PERMISSIONS` is hand-maintained so the vocabulary stays auditable by
+  reading it; `test_all_permissions_is_complete` fails if a new constant is
+  added and not listed. Unknown strings are **preserved**, not dropped — a
+  custom role may name one, and under-reporting a grant is the one direction a
+  permissions screen must never be wrong in.
+- **`GET /organizations/roles` returns ALL system roles, Owner included**, with
+  an `assignable` flag and ordered by power (`ROLE_DISPLAY_ORDER`), not
+  alphabetically — sorting by name puts Approver above Editor and implies a
+  hierarchy that does not exist. The reference table has to show the role that
+  can do everything; the flag, not a short list, is what keeps Owner out of an
+  assignment dropdown.
+- `MemberRepository.get_membership_by_id_unscoped` is the **one** deliberate
+  exception to org scoping, for the accept path alone: the invitee has no
+  session in the target org yet. The org comes off the signed token and the row,
+  never off the request. Same shape as `WorkflowRepository.get_by_id_unscoped`.
 
 ## Analytics module (landed 2026-08-10)
 

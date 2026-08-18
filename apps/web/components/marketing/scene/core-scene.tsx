@@ -27,6 +27,7 @@ import {
   platePresenceAtProgress,
   plateScaleAtProgress,
   runBeatIndexAtProgress,
+  sceneAnchorTopVh,
   sceneCaptionOpacityAtProgress,
   sceneIndexAtProgress,
   settleAtProgress,
@@ -462,6 +463,26 @@ export function CoreScene() {
 
   return (
     <div ref={rootRef} style={{ height: `${SCROLL_VH}vh` }} className="relative">
+      {/* `#how-it-works` — the target of the nav link, the footer link and the
+          hero's "Watch a run" button, all three of which pointed at nothing
+          between 2026-08-13 and 2026-08-18.
+
+          It is a zero-height element rather than an id on the section root
+          because the scene is a scrub, so "how it works" is a scroll POSITION
+          (the run, at progress 0.52), not an element. `sceneAnchorTopVh`
+          derives the offset from the same `SCENES` table the scrub reads, so
+          retiming the run in one place moves the anchor with it.
+
+          `scroll-margin-top: 0` is explicit: the sticky stage fills the
+          viewport, so aligning to the very top is exactly right here and must
+          not inherit a global offset meant for ordinary sections. */}
+      <div
+        id="how-it-works"
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 h-0"
+        style={{ top: `${sceneAnchorTopVh("run", SCROLL_VH)}vh`, scrollMarginTop: 0 }}
+      />
+
       {/* The page's hero, in the first viewport of the scroll container.
           Deliberately NOT inside the sticky stage: it scrolls up and away on
           its own while the room stays stuck behind it, which is the whole

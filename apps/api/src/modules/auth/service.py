@@ -61,6 +61,28 @@ class AuthService:
         self.db.add(user)
         await self.db.flush()
 
+        # 1b. Invitation path — join an existing org instead of creating one.
+        #
+        # The membership row already exists (created as `invited` when the
+        # invitation was minted), so this attaches the new user to it rather
+        # than inserting a second one. No Organization and no Workspace are
+        # created: the invitee is joining somewhere that already has both, and
+        # minting a throwaway org for them is the outcome invitations exist to
+        # avoid.
+        if req.invite_token:
+            from src.modules.organizations.service import MemberService
+
+            membership, _role, org = await MemberService(self.db)._resolve_invitation(req.invite_token)
+            if (membership.invited_email or "").lower() != req.email.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"This invitation was sent to {membership.invited_email}.",
+                )
+            membership.user_id = user.id
+            membership.status = "active"
+            await self.db.commit()
+            return await self._generate_token_response(user.id, org.id)
+
         # 2. Create Organization
         # Slugify the org name trivially for now (production would use a proper slugifier)
         slug = req.organization_name.lower().replace(" ", "-") + "-" + str(uuid.uuid4())[:8]

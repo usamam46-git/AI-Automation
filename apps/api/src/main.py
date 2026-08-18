@@ -109,6 +109,7 @@ from src.modules.auth.router import router as auth_router
 from src.modules.executions.router import router as executions_router
 from src.modules.integrations.router import router as integrations_router
 from src.modules.knowledge_base.router import router as knowledge_base_router
+from src.modules.organizations.router import router as organizations_router
 from src.modules.tools.router import router as tools_router
 from src.modules.workflows.router import router as workflows_router
 from src.modules.workspaces.router import router as workspaces_router
@@ -129,6 +130,7 @@ app.include_router(knowledge_base_router, prefix="/api/v1/knowledge-bases", tags
 # Read-only by construction — see the module docstring. Vol. 2 §700 requires
 # that no UPDATE/DELETE route exists for audit_logs.
 app.include_router(audit_logs_router, prefix="/api/v1/audit-logs", tags=["audit-logs"])
+app.include_router(organizations_router, prefix="/api/v1/organizations", tags=["organizations"])
 # Read-only aggregates over workflow_runs — owns no tables, gated on execution:read.
 app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["analytics"])
 

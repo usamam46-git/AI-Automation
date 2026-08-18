@@ -12,6 +12,7 @@ from src.core.permissions import (
     EXECUTION_READ,
     KNOWLEDGE_READ,
     KNOWLEDGE_WRITE,
+    MEMBER_READ,
     PROMPT_READ,
     PROMPT_WRITE,
     TOOL_READ,
@@ -61,6 +62,7 @@ async def seed_system_roles(db: AsyncSession) -> None:
                 # client IPs. Explicit because AUDIT_READ is in
                 # WILDCARD_READ_EXEMPT, so Viewer's "*:read" does not reach it.
                 AUDIT_READ,
+                MEMBER_READ,
                 "member:invite",
                 "member:remove",
             ],
@@ -81,12 +83,13 @@ async def seed_system_roles(db: AsyncSession) -> None:
                 TOOL_WRITE,
                 KNOWLEDGE_READ,
                 KNOWLEDGE_WRITE,
+                MEMBER_READ,
             ],
             "is_system": True,
         },
         {
             "name": "Approver",
-            "permissions": [EXECUTION_READ, EXECUTION_APPROVE],
+            "permissions": [EXECUTION_READ, EXECUTION_APPROVE, MEMBER_READ],
             "is_system": True,
         },
         {

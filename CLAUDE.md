@@ -120,8 +120,8 @@ verified via a full read-only orientation pass — see note below.)
   Schedule + webhook triggers, the audit trail and the per-org run quota all
   landed 2026-08-09 (Vol. 2 §5, §667, §700) — see the bullets below.
   The home dashboard + `analytics` module landed 2026-08-10 — see the bullet below.
-  **430 tests pass** (2026-08-17; confirmed clean run in 5m42s against `aap_test`
-  — the last full-suite figures were 389 on 2026-08-15 and 408 on 2026-08-16).
+  **467 tests pass** (2026-08-18; confirmed clean run in 95s against `aap_test`
+  — the last full-suite figures were 430 on 2026-08-17 and 432 earlier the same day).
   Note on running them: `poetry` is not on PATH on every dev machine, and the
   api image installs `--only main`, so `poetry run pytest` from `apps/api/` is
   not universally available. The portable route is inside the container —
@@ -687,24 +687,86 @@ verified via a full read-only orientation pass — see note below.)
   parameterisable in Postgres (use `set_config()`), the async engine must be
   disposed **inside the same event loop**, and `approval-summary.ts` must **never
   invent** a figure it could not read.
-- Next: verify the 3D scene on a real mobile viewport (the one thing it has
+- **Audit log viewer + portfolio surface landed 2026-08-18** (days 13–14). Three
+  of the plan's five items; the other two need hardware and are still open —
+  **the landing page has still never been seen on a real phone**, and the
+  three-minute walkthrough is unrecorded.
+  Backend: one field, `actor_email`, joined onto `AuditLogResponse` via a LEFT
+  OUTER JOIN guarded on `actor_type = 'user'` (the column is polymorphic). No
+  migration. `AuditService.list_logs` now returns response models rather than
+  ORM rows as a consequence — see apps/api/CLAUDE.md's audit-trail section.
+  Frontend: `app/(dashboard)/audit-log/page.tsx`,
+  `components/audit-log/audit-log-row.tsx`, pure `lib/audit-log.ts`, `auditApi`,
+  a nav entry. **It deliberately does not poll** — an audit row cannot change,
+  so the only thing a poll could surface is a new row, and a trail that reorders
+  itself mid-read is worse than one refreshed deliberately. A 403 is a state,
+  not an error (Owner/Admin only), rendered as a locked card.
+  Also fixed **`#how-it-works`**, dead since 2026-08-13 in three places (nav,
+  footer, the hero's "Watch a run"). It is a scroll POSITION, not an element:
+  `sceneAnchorTopVh` in `lib/scene-script.ts` converts the run scene's 0.52
+  start into an absolute `vh` offset inside the 420vh scrub container, and a
+  zero-height div sits there. Pure CSS, derived from `SCENES`. Verified live at
+  scrub progress 0.5200.
+  And the **root README**, which was still untouched `create-next-app`
+  boilerplate, is now the portfolio front page: two Mermaid diagrams
+  (architecture + a run's actual sequence, including the interrupt), a demo
+  script, and a "deliberately not built" section.
+  **432 backend tests** (+2) and **325 frontend tests** (+33).
+- **Members + invitations landed 2026-08-18** (Vol. 3 §10 — NOT in the 15-day
+  plan; added on request after the audit-log work). Until this, `org_memberships`
+  was written by exactly one line in the codebase (`AuthService.register`), so
+  every user was the sole Owner of their own org and Editor/Approver/Viewer had
+  never been held by a real user. `member:invite`/`member:remove` gated nothing.
+  The `organizations` module went models-only → real: `/api/v1/organizations`
+  with roster, `members/me`, roles, invite, role change, suspend/reactivate,
+  remove, plus a public invitation preview and an accept endpoint. Migration
+  `20260818_org_members` makes `user_id` nullable, adds `invited_email`, adds a
+  partial unique index for pending invites, and grants the new `member:read` to
+  already-seeded Admin/Editor/Approver.
+  **Invitations are a signed link, shown in the UI** — there is no email
+  delivery, so the accept URL comes back in the response body. `POST
+  /auth/register` grew an `invite_token` branch that joins the inviting org
+  instead of creating one.
+  Access tokens now carry `typ: "access"` and invite tokens `typ: "invite"`,
+  checked on both sides — they share a signing key. Full contracts in
+  apps/api/CLAUDE.md's members section; the load-bearing ones: the last active
+  Owner cannot be demoted/suspended/removed, nobody edits themselves, role and
+  status changes MUST invalidate the Redis permission cache, and every
+  invitation failure returns one identical 400.
+  Frontend: `components/settings/{members-card,invite-member-dialog}.tsx`,
+  `app/(auth)/accept-invite/`, pure `lib/members.ts`.
+  **467 backend tests** (+35) and **363 frontend tests** (+38).
+  Follow-up the same day: **permissions are now shown, not just named.**
+  `expand_permissions()` resolves `*` / `*:read` server-side and the API returns
+  `effective_permissions`, which let the frontend DELETE its duplicated wildcard
+  branch; `GET /organizations/roles` returns all five roles with an `assignable`
+  flag, ordered by power. UI: a grant breakdown inside the invite dialog, a
+  `Change role…` dialog with a gained/lost diff replacing the bare `Make X`
+  items, and a read-only Roles & permissions matrix (Vol. 3 §10).
+  Also **replaced the stock-AI glyphs** (the rocket on `workflow.published` is
+  `GitCommitVertical`) and added `components/ui/animated-icons/` — hover-only
+  nav icons built on the `motion` already in the tree, no new dependency,
+  inert under `prefers-reduced-motion`. The motion is unverified under
+  automation (the tab is never focused); rest rendering is confirmed.
+  Verified live in a browser: invite → link handover → accept page → the
+  addressee guard refusing a wrong-account accept → revoke, with the
+  `member.invited` row rendering in the audit log.
+- Next: **verify the 3D scene on a real mobile viewport** (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
-  and a phone crops it hard — see apps/web/CLAUDE.md), the build plan's days
-  10–12 (the demo corpus and the three flagship workflows), hybrid keyword search
+  and a phone crops it hard — see apps/web/CLAUDE.md), **record the walkthrough**,
+  hybrid keyword search
   (the GIN index has shipped unqueried since the initial schema; deliberately cut
-  first), OCR, `subgraph` handler, agent function-calling/ReAct (see the deferral
-  note in apps/api/CLAUDE.md), and
-  an audit-log viewer UI (the endpoint exists and nothing consumes it — same shape
-  as the integrations endpoints before the Settings page).
+  first), OCR, `subgraph` handler, and agent function-calling/ReAct (see the
+  deferral note in apps/api/CLAUDE.md).
   Still an empty registry: the `worker_notifications` container (nothing routes to
   its queue yet). `worker_documents` runs `ingest_document` as of 2026-08-15.
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list), the builder canvas, the Execution Viewer, the
-  home dashboard, the tools registry, the knowledge base, and the marketing
-  landing page (see above). `app/(marketing)/` now exists and owns `/`;
-  `app/page.tsx` is gone.
+  home dashboard, the tools registry, the knowledge base, the audit log viewer,
+  the members/invitations surface and the marketing landing page (see above). `app/(marketing)/` now exists and
+  owns `/`; `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, **292 tests** over the pure `lib/` modules only (no React harness;
+  `npm test`, **363 tests** over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

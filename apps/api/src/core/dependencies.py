@@ -40,6 +40,13 @@ async def get_current_user(
     """
     try:
         payload = decode_access_token(token)
+        # Invitation tokens are signed with the same key (see
+        # core/security.create_invite_token). They carry no user_id/sub/jti, so
+        # the checks below already reject them — this is the explicit guard, so
+        # that adding a claim to one token kind can never silently make it valid
+        # as the other.
+        if payload.get("typ") not in (None, "access"):
+            raise credentials_exception
         user_id: str | None = payload.get("user_id") or payload.get("sub")
         jti: str | None = payload.get("jti")
         if user_id is None or jti is None:

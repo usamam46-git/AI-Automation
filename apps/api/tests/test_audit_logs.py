@@ -19,6 +19,7 @@ from src.core.permissions import AUDIT_READ, BILLING_READ, INTEGRATION_READ, per
 from src.db.database import async_session_maker
 from src.modules.audit_logs.models import AuditLog
 from src.modules.audit_logs.service import AuditAction
+from src.modules.auth.models import User
 
 
 async def _logs_for_org(organization_id: uuid.UUID, action: str | None = None) -> list[AuditLog]:
@@ -134,6 +135,44 @@ async def test_publish_writes_an_audit_row(client: AsyncClient):
     assert rows[0]["actor_type"] == "user"
     assert rows[0]["actor_id"] is not None
     assert rows[0]["metadata"]["workflow_id"] == ctx["workflow_id"]
+
+
+async def test_actor_email_is_resolved_for_a_user_row(client: AsyncClient):
+    """
+    `actor_id` is a bare UUID and there is no endpoint that resolves one to a
+    person, so the viewer would render hex strings without this join. Added
+    2026-08-18 with the audit-log UI.
+    """
+    from test_executions import _register_and_publish
+
+    ctx = await _register_and_publish(client, "audit-actor-email")
+
+    resp = await client.get("/api/v1/audit-logs?action=workflow.published", headers=ctx["headers"])
+    rows = resp.json()
+    assert len(rows) == 1, "the LEFT JOIN to users must not multiply rows"
+
+    async with async_session_maker() as session:
+        expected = (await session.execute(select(User.email).where(User.id == uuid.UUID(rows[0]["actor_id"])))).scalar_one()
+    assert rows[0]["actor_email"] == expected
+
+
+async def test_system_actor_rows_carry_no_actor_email(client: AsyncClient):
+    """
+    The join is guarded on `actor_type == 'user'` because `actor_id` is
+    polymorphic (models.py: users.id OR agent_sessions.id). A system row has a
+    null actor_id and must resolve to null, not to whatever user shares the id.
+    """
+    from test_trigger_schedule import _dispatch_due_schedules_async, _force_due, _scheduled_published_workflow
+
+    ctx = await _scheduled_published_workflow(client, "audit-sys-email")
+    await _force_due(ctx["workflow_id"])
+    await _dispatch_due_schedules_async()
+
+    logs = await client.get(f"/api/v1/audit-logs?action={AuditAction.WORKFLOW_RUN_STARTED}", headers=ctx["headers"])
+    rows = logs.json()
+    assert len(rows) == 1
+    assert rows[0]["actor_type"] == "system"
+    assert rows[0]["actor_email"] is None
 
 
 async def test_manual_run_and_approval_are_audited(client: AsyncClient):

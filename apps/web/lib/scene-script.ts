@@ -98,6 +98,42 @@ export function sceneIndexAtProgress(progress: number, scenes: readonly SceneDef
   return scenes.length - 1;
 }
 
+/**
+ * Where a scene begins, expressed as an absolute `top` offset in `vh` **inside
+ * the scroll container** — so that a zero-height element placed there is a real
+ * hash target that lands the reader on that scene.
+ *
+ * ## Why this arithmetic rather than a scroll listener
+ *
+ * The nav's "How it works", the footer's matching link and the hero's "Watch a
+ * run" button all pointed at `#how-it-works`, an id that existed on nothing —
+ * the section it named was deleted when the 3D scene replaced `run-film.tsx` on
+ * 2026-08-13, and the three links were never repointed. Every one of them was a
+ * silent no-op until 2026-08-18.
+ *
+ * The obvious repair — put the id on the scene's root — sends the reader to
+ * progress 0, which is the hero they are already looking at. What "How it
+ * works" and "Watch a run" both mean is the `run` scene, and that is a *scroll
+ * position*, not an element.
+ *
+ * The scene root is pinned by a ScrollTrigger with `start: "top top"` and
+ * `end: "bottom bottom"`, so progress `p` is reached at
+ * `scrollY = rootTop + p × (rootHeight − viewportHeight)`. An element at
+ * absolute `top: T` within the root aligns to the viewport top at
+ * `scrollY = rootTop + T`. Setting the two equal gives
+ * `T = p × (scrollVh − 100)` vh — pure CSS, so native hash navigation,
+ * `scrollIntoView` and a fresh page load with the hash already in the URL all
+ * work, with no listener and nothing to keep in sync at runtime.
+ *
+ * Returns 0 for an unknown scene id: an anchor at the top of the section is a
+ * poor target but a working one, which beats `NaN` in a `top` property.
+ */
+export function sceneAnchorTopVh(sceneId: SceneId, scrollVh: number, scenes: readonly SceneDef[] = SCENES): number {
+  const scene = scenes.find((item) => item.id === sceneId);
+  if (!scene || !Number.isFinite(scrollVh)) return 0;
+  return scene.start * Math.max(scrollVh - 100, 0);
+}
+
 /** Progress *within* the current scene, 0–1. Useful for per-scene easing. */
 export function sceneLocalProgress(progress: number, scenes: readonly SceneDef[] = SCENES): number {
   const scene = scenes[sceneIndexAtProgress(progress, scenes)];

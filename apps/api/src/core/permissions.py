@@ -45,6 +45,12 @@ BILLING_WRITE = "billing:write"
 ORG_DELETE = "org:delete"
 MEMBER_INVITE = "member:invite"
 MEMBER_REMOVE = "member:remove"
+# Added 2026-08-18 with the members module. Deliberately NOT in
+# WILDCARD_READ_EXEMPT: knowing who your colleagues are, and what they are
+# allowed to do, is ordinary in-org information — unlike a BYOK key's last four
+# or an audit row's client IP. Every role can see the roster; only Owner and
+# Admin can change it.
+MEMBER_READ = "member:read"
 
 # Integration permissions — Owner-only (not granted to Admin in seed_roles.py),
 # same reasoning as BILLING_READ/BILLING_WRITE: a stored BYOK key is a direct
@@ -83,3 +89,73 @@ def permission_granted(permissions: list[str], required: str) -> bool:
     if required.endswith(":read") and "*:read" in permissions and required not in WILDCARD_READ_EXEMPT:
         return True
     return False
+
+
+#: Every permission string the platform defines.
+#:
+#: Declared explicitly rather than scraped from this module's globals: the list
+#: is the vocabulary a role is described BY, so it must be auditable by reading
+#: it, and a stray module-level string must not silently become a permission.
+#: `test_all_permissions_is_complete` asserts it matches the constants above, so
+#: adding one and forgetting this fails the suite rather than quietly producing
+#: a role screen that under-reports what a role can do.
+ALL_PERMISSIONS: tuple[str, ...] = (
+    WORKFLOW_READ,
+    WORKFLOW_WRITE,
+    WORKFLOW_PUBLISH,
+    WORKFLOW_EXECUTE,
+    WORKSPACE_READ,
+    WORKSPACE_WRITE,
+    AGENT_READ,
+    AGENT_WRITE,
+    PROMPT_READ,
+    PROMPT_WRITE,
+    TOOL_READ,
+    TOOL_WRITE,
+    KNOWLEDGE_READ,
+    KNOWLEDGE_WRITE,
+    EXECUTION_READ,
+    EXECUTION_APPROVE,
+    MEMBER_READ,
+    MEMBER_INVITE,
+    MEMBER_REMOVE,
+    INTEGRATION_READ,
+    INTEGRATION_WRITE,
+    BILLING_READ,
+    BILLING_WRITE,
+    AUDIT_READ,
+    ORG_DELETE,
+)
+
+
+def expand_permissions(stored: list[str]) -> list[str]:
+    """
+    Resolve a role's STORED permission list into the concrete set it grants.
+
+    `roles.permissions` holds wildcards — Owner is literally `["*"]` and Viewer
+    `["*:read"]` — so the raw column cannot be rendered to a human deciding what
+    to assign. Expanding it is the whole job of this function, and it lives here
+    **beside `permission_granted`, on purpose**: the two must agree, and the
+    only way to guarantee that is to derive both from the same constants.
+
+    The frontend previously reimplemented the wildcard branch to gate its own
+    UI, which meant `WILDCARD_READ_EXEMPT` existed in two languages. It does not
+    any more — the API returns the expanded list and the client just reads it.
+    `test_expand_permissions_agrees_with_permission_granted` pins the agreement
+    across every permission and every system role.
+
+    Unknown strings are preserved rather than dropped: a custom role (Vol. 2
+    §658, enterprise plan) may name something this build has not heard of, and
+    silently discarding it would under-report what that role can do — the one
+    direction a permissions screen must never be wrong in.
+    """
+    if "*" in stored:
+        return list(ALL_PERMISSIONS)
+
+    granted = {p for p in stored if p != "*:read"}
+    if "*:read" in stored:
+        granted.update(p for p in ALL_PERMISSIONS if p.endswith(":read") and p not in WILDCARD_READ_EXEMPT)
+
+    known = [p for p in ALL_PERMISSIONS if p in granted]
+    unknown = sorted(granted - set(ALL_PERMISSIONS))
+    return known + unknown

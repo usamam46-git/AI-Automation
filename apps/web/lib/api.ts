@@ -15,7 +15,12 @@ export type RegisterPayload = {
   full_name: string;
   email: string;
   password: string;
-  organization_name: string;
+  /** Required UNLESS `invite_token` is supplied — the backend's model
+   *  validator enforces exactly that, and 422s when neither is present. */
+  organization_name?: string;
+  /** Join an existing organization instead of creating one. The address must
+   *  match the one the invitation was addressed to, or the API 403s. */
+  invite_token?: string;
 };
 
 export type Workspace = {
@@ -668,6 +673,168 @@ export const knowledgeApi = {
    */
   async search(kbId: string, payload: { query: string; top_k?: number; score_floor?: number }) {
     const { data } = await apiClient.post<ChunkSearchResult>(`/knowledge-bases/${kbId}/search`, payload);
+    return data;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Audit log — Vol. 2 §3.5, §13 §700
+// ---------------------------------------------------------------------------
+
+/**
+ * One append-only audit event.
+ *
+ * `metadata` is free-form JSONB whose shape depends entirely on `action` —
+ * `lib/audit-log.ts` is the only place that reads into it, and it reads
+ * defensively. Do not narrow this type per action: the backend vocabulary is
+ * open by design (Vol. 2 §3.5), so a union here would be wrong the first time
+ * someone adds an action.
+ *
+ * `actor_email` is joined, not stored — the column is a bare polymorphic
+ * `actor_id`. It is null for `system` and `agent` rows by construction, and
+ * also for a `user` row whose user has since been deleted.
+ */
+export type AuditLogEntry = {
+  id: string;
+  organization_id: string;
+  actor_type: "user" | "agent" | "system";
+  actor_id: string | null;
+  actor_email: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  metadata: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+};
+
+export const auditApi = {
+  /**
+   * Bare array, cursor-paginated on the raw ISO `created_at` of the previous
+   * page's last row — the same convention as the Workflows and Executions
+   * lists. Gated on `audit:read`, which is Owner/Admin only, so a 403 here is
+   * an expected state and not an error to retry.
+   */
+  async list(params: { action?: string | null; resourceType?: string | null; cursor?: string | null; limit?: number } = {}) {
+    const { data } = await apiClient.get<AuditLogEntry[]>("/audit-logs", {
+      params: {
+        action: params.action || undefined,
+        resource_type: params.resourceType || undefined,
+        cursor: params.cursor || undefined,
+        limit: params.limit || undefined,
+      },
+    });
+    return data;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Organization members — Vol. 3 §10
+// ---------------------------------------------------------------------------
+
+export const ASSIGNABLE_ROLES = ["Admin", "Editor", "Approver", "Viewer"] as const;
+export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
+export type MemberStatus = "invited" | "active" | "suspended";
+
+/**
+ * One row of the roster.
+ *
+ * `user_id` is **null while an invitation is pending** — the address may have no
+ * account yet — and `email` then comes from `invited_email`. Never key a list on
+ * `user_id`; use `id`, the membership id, which is what every mutation endpoint
+ * takes.
+ */
+export type Member = {
+  id: string;
+  user_id: string | null;
+  email: string;
+  full_name: string | null;
+  role_id: string;
+  role_name: string;
+  status: MemberStatus;
+  created_at: string;
+};
+
+export type CurrentMember = {
+  membership_id: string;
+  user_id: string;
+  email: string;
+  role_name: string;
+  /** The raw stored column — wildcards and all (`["*"]` for Owner). */
+  permissions: string[];
+  /**
+   * The same grant with `*` / `*:read` resolved by the backend against the real
+   * vocabulary, including the reads the wildcard deliberately does not reach.
+   * **Gate on this.** The frontend does not reimplement the wildcard rules —
+   * see the header of `lib/permissions.ts`.
+   */
+  effective_permissions: string[];
+  status: MemberStatus;
+};
+
+/**
+ * A system role. The endpoint returns ALL of them, Owner included, ordered by
+ * power — the reference table needs the role that can do everything.
+ * **Filter dropdowns on `assignable`,** never on the list being short.
+ */
+export type RoleOption = {
+  id: string;
+  name: string;
+  permissions: string[];
+  effective_permissions: string[];
+  assignable: boolean;
+};
+
+/**
+ * A freshly created invitation.
+ *
+ * `accept_url` is returned in the body because the platform sends no email —
+ * `worker_notifications` has an empty task registry. The UI shows it to copy.
+ */
+export type InviteResult = { member: Member; accept_url: string; expires_in_days: number };
+
+export type InvitePreview = { organization_name: string; email: string; role_name: string };
+export type AcceptInviteResult = { organization_id: string; organization_name: string; role_name: string };
+
+export const membersApi = {
+  async list() {
+    const { data } = await apiClient.get<Member[]>("/organizations/members");
+    return data;
+  },
+  // No permission gate on the backend — it returns only what the caller already
+  // is, which is exactly what the UI needs to decide what to hide.
+  async me() {
+    const { data } = await apiClient.get<CurrentMember>("/organizations/members/me");
+    return data;
+  },
+  async roles() {
+    const { data } = await apiClient.get<RoleOption[]>("/organizations/roles");
+    return data;
+  },
+  // 409 when the address is already a member or already invited.
+  async invite(payload: { email: string; role_name: AssignableRole }) {
+    const { data } = await apiClient.post<InviteResult>("/organizations/members", payload);
+    return data;
+  },
+  // 409 on the last active Owner, or on editing yourself.
+  async changeRole(membershipId: string, roleName: AssignableRole) {
+    const { data } = await apiClient.patch<Member>(`/organizations/members/${membershipId}/role`, { role_name: roleName });
+    return data;
+  },
+  async changeStatus(membershipId: string, status: "active" | "suspended") {
+    const { data } = await apiClient.patch<Member>(`/organizations/members/${membershipId}/status`, { status });
+    return data;
+  },
+  async remove(membershipId: string) {
+    await apiClient.delete(`/organizations/members/${membershipId}`);
+  },
+  // Unauthenticated: the invitee may have no account yet.
+  async previewInvite(token: string) {
+    const { data } = await apiClient.get<InvitePreview>(`/organizations/invitations/${encodeURIComponent(token)}`);
+    return data;
+  },
+  async acceptInvite(token: string) {
+    const { data } = await apiClient.post<AcceptInviteResult>(`/organizations/invitations/${encodeURIComponent(token)}/accept`);
     return data;
   },
 };

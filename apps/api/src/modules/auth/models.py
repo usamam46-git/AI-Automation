@@ -95,6 +95,21 @@ class OrgMembership(UUIDMixin, TimestampMixin, Base):
 
     UNIQUE(organization_id, user_id) prevents duplicate membership rows.
     status drives the invite flow: invited → active, or → suspended.
+
+    `user_id` became NULLABLE on 2026-08-18, when invitations landed. An
+    invitation addressed to someone who has no account yet has nothing to point
+    at, and it still has to appear on the roster — Vol. 3 §10 asks for
+    "pending-invite status" as a first-class row. `invited_email` carries the
+    address until the invitee registers, at which point `user_id` is filled and
+    `status` flips to active.
+
+    Two consequences worth knowing. `UNIQUE(organization_id, user_id)` does not
+    constrain pending invitations, because Postgres treats NULLs as distinct —
+    `uq_org_pending_invite`, a partial unique index on
+    `(organization_id, lower(invited_email)) WHERE user_id IS NULL`, is what
+    stops two invitations to the same address. And every permission path
+    (`require_permission`, `switch_org`) already filters `status = 'active'`,
+    so a pending row grants nothing anywhere.
     """
 
     __tablename__ = "org_memberships"
@@ -106,11 +121,17 @@ class OrgMembership(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
+        comment="Null while an invitation to an address with no account is pending.",
+    )
+    invited_email: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Address the invitation was addressed to; null for memberships created at register.",
     )
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -125,7 +146,7 @@ class OrgMembership(UUIDMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="memberships")
+    user: Mapped["User | None"] = relationship("User", back_populates="memberships")
     role: Mapped["Role"] = relationship("Role", back_populates="memberships")
     organization: Mapped["Organization"] = relationship(  # type: ignore[name-defined]
         "Organization", back_populates="memberships"

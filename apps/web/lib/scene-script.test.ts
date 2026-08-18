@@ -61,6 +61,7 @@ import {
   runBeatIndexAtProgress,
   sceneCaptionOpacityAtProgress,
   sceneIndexAtProgress,
+  sceneAnchorTopVh,
   sceneLocalProgress,
   settleAtProgress,
   smoothstep,
@@ -111,6 +112,39 @@ describe("sceneLocalProgress", () => {
     expect(sceneLocalProgress(0.14)).toBeCloseTo(0.5);
     expect(sceneLocalProgress(0.28)).toBeCloseTo(0);
     expect(sceneLocalProgress(1)).toBeCloseTo(1);
+  });
+});
+
+describe("sceneAnchorTopVh", () => {
+  // The scrub is `start: "top top"` / `end: "bottom bottom"` over a container
+  // `scrollVh` tall, so progress p is reached after scrolling
+  // p × (scrollVh − 100) viewport heights into it. An absolutely positioned
+  // element at that offset is therefore a hash target that lands on scene p.
+  it("places the run anchor at the run scene's own start", () => {
+    const run = SCENES.find((scene) => scene.id === "run")!;
+    expect(sceneAnchorTopVh("run", 420)).toBeCloseTo(run.start * 320);
+  });
+
+  it("puts the first scene at the very top and the last inside the container", () => {
+    expect(sceneAnchorTopVh("scattered", 420)).toBe(0);
+    expect(sceneAnchorTopVh("orchestrated", 420)).toBeLessThan(420);
+  });
+
+  it("tracks the section's pacing knob", () => {
+    // SCROLL_VH is the one dial that retimes the whole scene. The anchor is
+    // derived from it rather than hard-coded, so changing it cannot silently
+    // leave "Watch a run" pointing at the wrong moment.
+    expect(sceneAnchorTopVh("run", 620)).toBeGreaterThan(sceneAnchorTopVh("run", 420));
+  });
+
+  it("never returns a negative or non-finite offset", () => {
+    // A NaN or a negative number here becomes an invalid CSS `top`, which
+    // silently drops the anchor back to the top of the section.
+    expect(sceneAnchorTopVh("run", 50)).toBe(0);
+    expect(sceneAnchorTopVh("run", Number.NaN)).toBe(0);
+    for (const scene of SCENES) {
+      expect(sceneAnchorTopVh(scene.id, 420)).toBeGreaterThanOrEqual(0);
+    }
   });
 });
 

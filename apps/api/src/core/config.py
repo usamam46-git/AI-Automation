@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    # Org invitations (Vol. 3 §10). Short enough that a link pasted into a
+    # chat and forgotten stops working, long enough to survive a weekend.
+    INVITE_TOKEN_EXPIRE_DAYS: int = 7
+    # Where invitation accept links point. The API cannot derive this — its own
+    # host serves no /accept-invite route — so it is configured, with the
+    # request Origin as the fallback. Set this in any deployment where the
+    # frontend is not on localhost:3000.
+    FRONTEND_URL: str = "http://localhost:3000"
 
     # ------------------------------------------------------------------
     # Celery
