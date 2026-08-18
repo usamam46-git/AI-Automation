@@ -751,7 +751,23 @@ verified via a full read-only orientation pass — see note below.)
   Verified live in a browser: invite → link handover → accept page → the
   addressee guard refusing a wrong-account accept → revoke, with the
   `member.invited` row rendering in the audit log.
-- Next: **verify the 3D scene on a real mobile viewport** (the one thing it has
+- **Mobile layout fixed 2026-08-19** after the landing page was reported as
+  "nothing aligned" on an iPhone 15 Pro. Root cause was ONE missing utility: the
+  platform-tiles grid held a code snippet with a 426px min-content width, and a
+  grid item's default `min-width: auto` forced the document to **494px wide on a
+  393px viewport** — which shifts and clips every centred section on the page.
+  `[&>article]:min-w-0` fixes it; desktop verified unchanged. Also added
+  `fovForAspect()` so the 3D camera widens on portrait frames (inert at aspect
+  ≥ 1.6 and inert while the photographed room is on screen, both tested).
+  **Critical for anyone verifying this: `ResizeObserver` does not fire under
+  browser automation**, so R3F's canvas stays 300×150 and the scene renders
+  nothing regardless of viewport. A blank canvas there is an artifact, not a
+  bug — the scene's *appearance* still has to be checked on a real device.
+  Layout is testable via a same-origin iframe (media queries resolve against the
+  frame); see apps/web/CLAUDE.md's mobile section for the harness.
+  **370 frontend tests** (+7 on the camera).
+- Next: **look at the 3D scene on a real phone** (layout is now verified; the
+  scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
   and a phone crops it hard — see apps/web/CLAUDE.md), **record the walkthrough**,
   hybrid keyword search
@@ -766,7 +782,7 @@ verified via a full read-only orientation pass — see note below.)
   the members/invitations surface and the marketing landing page (see above). `app/(marketing)/` now exists and
   owns `/`; `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, **363 tests** over the pure `lib/` modules only (no React harness;
+  `npm test`, **370 tests** over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
 import { ScrollTrigger } from "@/lib/gsap";
@@ -21,6 +21,7 @@ import {
   backdropGradientAtProgress,
   cameraAtProgress,
   coreVisibilityAtProgress,
+  fovForAspect,
   heroOpacityAtProgress,
   keyLightWarmthAtProgress,
   plateDefocusAtProgress,
@@ -134,15 +135,38 @@ interface RigProps {
  * slider; a damped one feels like a body being moved.
  */
 function CameraRig({ progressRef, pointerRef, damped }: RigProps) {
-  const { camera } = useThree();
   const current = React.useRef(new THREE.Vector3());
   const lookAt = React.useRef(new THREE.Vector3());
   const seeded = React.useRef(false);
 
-  useFrame(() => {
+  // `camera` and `size` come off the frame state rather than `useThree()`:
+  // the FOV write below mutates the camera, and the React Compiler correctly
+  // refuses that on a value returned from a hook. Same object, legal binding.
+  useFrame(({ camera, size }) => {
     const progress = progressRef.current ?? 0;
     const { position, target } = cameraAtProgress(progress);
     const pointer = pointerRef.current ?? { x: 0, y: 0 };
+
+    /**
+     * Widen the lens on narrow frames.
+     *
+     * A portrait phone is ~0.46 aspect against the 1.6–2.4 this scene was
+     * composed for, and a fixed vertical FOV turns that into a slot: every card
+     * away from the centre leaves the frame. `fovForAspect` compensates, ramped
+     * in by the plate's departure so the photographed room — which the camera is
+     * solved against — is never touched. Above 1.6 it returns the authored 46
+     * for every progress, so desktop cannot regress.
+     *
+     * Guarded because `updateProjectionMatrix` is not free and this runs every
+     * frame; the value is static once the scrub settles.
+     */
+    if (camera instanceof THREE.PerspectiveCamera) {
+      const desiredFov = fovForAspect(size.width / size.height, progress);
+      if (Math.abs(camera.fov - desiredFov) > 0.05) {
+        camera.fov = desiredFov;
+        camera.updateProjectionMatrix();
+      }
+    }
 
     /**
      * Pointer parallax. Small and proportional to distance so it reads as the

@@ -61,6 +61,10 @@ import {
   runBeatIndexAtProgress,
   sceneCaptionOpacityAtProgress,
   sceneIndexAtProgress,
+  CAMERA_FOV_DEG,
+  MAX_FOV_DEG,
+  REFERENCE_ASPECT,
+  fovForAspect,
   sceneAnchorTopVh,
   sceneLocalProgress,
   settleAtProgress,
@@ -112,6 +116,65 @@ describe("sceneLocalProgress", () => {
     expect(sceneLocalProgress(0.14)).toBeCloseTo(0.5);
     expect(sceneLocalProgress(0.28)).toBeCloseTo(0);
     expect(sceneLocalProgress(1)).toBeCloseTo(1);
+  });
+});
+
+describe("fovForAspect", () => {
+  const DESKTOP = 1.9;
+  const PHONE = 393 / 852; // iPhone 15 Pro, portrait — 0.461
+
+  it("leaves every desktop aspect on the authored lens", () => {
+    // Non-negotiable: the whole composition, and every projection assertion in
+    // this file, is authored at CAMERA_FOV_DEG.
+    for (const aspect of [REFERENCE_ASPECT, DESKTOP, 2.4, 3.2]) {
+      for (const progress of [0, 0.1, 0.5, 1]) {
+        expect(fovForAspect(aspect, progress)).toBe(CAMERA_FOV_DEG);
+      }
+    }
+  });
+
+  it("does not touch the lens while the photographed room is on screen", () => {
+    // The camera is solved against the plate; widening here would slide the
+    // paper off the wood. Six tests below depend on that solve holding.
+    expect(fovForAspect(PHONE, 0)).toBeCloseTo(CAMERA_FOV_DEG, 5);
+  });
+
+  it("widens on a phone once the room has gone", () => {
+    const opened = fovForAspect(PHONE, 1);
+    expect(opened).toBeGreaterThan(CAMERA_FOV_DEG);
+    expect(opened).toBe(MAX_FOV_DEG);
+  });
+
+  it("ramps monotonically as the plate leaves, never jumping", () => {
+    // A step change in FOV mid-scroll reads as the lens snapping.
+    let previous = -Infinity;
+    for (let p = 0; p <= 1.0001; p += 0.02) {
+      const fov = fovForAspect(PHONE, Math.min(p, 1));
+      expect(fov).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = fov;
+    }
+  });
+
+  it("clamps rather than reaching for a fisheye", () => {
+    // Full compensation at a phone aspect wants ~112°, which bows the desk.
+    const uncapped = (2 * Math.atan(Math.tan(((CAMERA_FOV_DEG / 2) * Math.PI) / 180) * REFERENCE_ASPECT / PHONE) * 180) / Math.PI;
+    expect(uncapped).toBeGreaterThan(MAX_FOV_DEG);
+    expect(fovForAspect(PHONE, 1)).toBe(MAX_FOV_DEG);
+  });
+
+  it("widens more for a narrower frame, up to the clamp", () => {
+    const tablet = fovForAspect(1.2, 1);
+    expect(tablet).toBeGreaterThan(CAMERA_FOV_DEG);
+    expect(tablet).toBeLessThanOrEqual(MAX_FOV_DEG);
+    expect(fovForAspect(0.7, 1)).toBeGreaterThanOrEqual(tablet);
+  });
+
+  it("falls back to the authored lens on a degenerate aspect", () => {
+    // A zero-height frame happens for one tick during some resizes; NaN here
+    // would poison the projection matrix rather than just look wrong.
+    for (const aspect of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(fovForAspect(aspect, 1)).toBe(CAMERA_FOV_DEG);
+    }
   });
 });
 

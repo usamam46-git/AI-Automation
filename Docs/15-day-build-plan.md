@@ -294,9 +294,14 @@ Ordered by risk, not by comfort.
       hero's "Watch a run" button all target an id that no longer exists.
       **Done 2026-08-18** — it is a scroll POSITION, not an element, so the
       anchor is placed by arithmetic off `SCENES`; see the day 13–14 notes.
-- [ ] Check the landing page on a real phone. Never been seen on one, and the
+- [x] Check the landing page on a real phone. Never been seen on one, and the
       plate is a 1.51-aspect image a portrait viewport crops hard.
-      **Still open — needs a physical device.**
+      **Layout done 2026-08-19** — reported broken on an iPhone 15 Pro, root-caused
+      to one grid item that could not shrink (the document went 494px wide on a
+      393px screen, shifting every centred section). Fixed and verified at a true
+      393×852. The 3D scene's *appearance* is still unverified and cannot be
+      checked under automation — `ResizeObserver` never fires there, so R3F's
+      canvas stays 300×150 and nothing renders. Needs eyes on a device.
 - [x] README: architecture diagram, demo script, and an honest "deliberately not
       built" section — that last part reads as engineering judgement, not as a gap.
       **Done 2026-08-18** — the root README was still `create-next-app`

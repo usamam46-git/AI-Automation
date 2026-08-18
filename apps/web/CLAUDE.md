@@ -1261,6 +1261,76 @@ change-role-dialog,roles-matrix-card}.tsx`, `components/ui/animated-icons/`.
   Rendering at rest, the icon count and a clean console are all confirmed;
   the motion needs a human pointer.
 
+## Mobile — what was actually wrong (2026-08-19)
+
+The landing page was reported as "nothing aligned" on an iPhone 15 Pro. Verified
+at a true 393×852 viewport and fixed. Two separate things, and the first one
+mattered far more than it looks.
+
+### One missing utility made the whole page look broken
+
+`components/marketing/platform-tiles.tsx` holds an audit tile containing a
+`CREATE TRIGGER` snippet whose **min-content width is 426px**. A CSS grid item
+defaults to `min-width: auto`, meaning it refuses to shrink below its content —
+so on a 393px phone that single tile forced the grid to 474px, which made
+`document.scrollWidth` **494px against a 393px viewport**.
+
+That is why *every* section looked misaligned: with the document 100px wider
+than the screen, every centred `mx-auto` block is centred on 494 and reads as
+shifted and clipped. One utility, sitewide symptom. The grid now carries
+`[&>article]:min-w-0`; the snippet already had `overflow-x-auto`, which is what
+this lets take effect. Desktop is unaffected — verified at 1440×900, tiles still
+376/376/376/764 with no internal scrolling.
+
+**The lesson worth keeping:** when a phone layout looks globally wrong, measure
+`document.documentElement.scrollWidth` against `window.innerWidth` first. A
+single unshrinkable grid or flex child explains a page-wide symptom far more
+often than a dozen local mistakes do.
+
+### The camera was looking through a slot
+
+A perspective camera's *vertical* FOV is fixed, so horizontal extent is
+`tan(fov/2) × aspect`. Going from a 2.0 desktop frame to a 0.46 portrait phone
+cuts the horizontal view more than fourfold — every card composed away from
+centre simply leaves the frame. `fovForAspect(aspect, progress)` in
+`lib/scene-script.ts` compensates. Two guards make it safe:
+
+- **At or above `REFERENCE_ASPECT` (1.6) it returns the authored 46° for every
+  progress**, so no desktop frame can change.
+- **It ramps in with `platePresenceAtProgress`**, so it is a no-op while the
+  photographed room is on screen. The camera is *solved* against that photo;
+  widening there would slide the paper off the wood, which six existing tests
+  exist to prevent. They still pass.
+
+Clamped at 82°: full compensation wants ~112°, which bows the desk edges and
+balloons the nearest card. Beyond the clamp a phone simply shows a tighter crop,
+which is the honest trade — a portrait frame cannot hold a 2:1 composition.
+
+`camera` and `size` are read from the `useFrame` state, not `useThree()`: the
+FOV write mutates the camera and the React Compiler correctly rejects mutating a
+hook's return value.
+
+### The automation ceiling — read this before trying to verify the scene
+
+**`ResizeObserver` never fires in this browser-automation context.** Confirmed
+directly: observing a correctly-sized element produced no callback in 2.5s, when
+the spec requires an immediate initial one. R3F sizes its canvas from that
+observer, so the canvas stays at its intrinsic **300×150** and the scene renders
+nothing — at every viewport, top-level as well as in an iframe.
+
+So a blank or tiny canvas under automation is **not** evidence of a bug, and the
+older "frozen rAF" note is the same family of problem. **The 3D scene's
+appearance cannot be verified here at all** — only its layout box. The FOV fix
+above is unit-tested and provably inert on desktop, but nobody has seen it.
+
+### The harness that does work
+
+Window resizing is clamped by the OS (~494px minimum, and requests above the
+display size are ignored), so drive layout tests through a **same-origin iframe**
+— CSS media queries and `window.innerWidth` resolve against the frame, giving an
+exact 393×852. Scale it visually with `transform: scale()` to fit the capture
+region; a transform does not change an iframe's layout viewport.
+
 ## Tools registry page (2026-08-12)
 
 `app/(dashboard)/tools/page.tsx` + `components/tools/{tool-dialog,delete-tool-dialog}.tsx`,

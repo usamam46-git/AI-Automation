@@ -44,7 +44,16 @@ export function PlatformTiles() {
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {/* `[&>article]:min-w-0` is load-bearing, not tidiness.
+            A grid item defaults to `min-width: auto`, which means it refuses to
+            shrink below its content's min-content width — and the audit tile
+            holds a `CREATE TRIGGER` snippet measuring 426px. On a 393px phone
+            that forced the whole grid to 474px, which made the DOCUMENT 494px
+            wide and left every centred section on the page looking shifted and
+            clipped. One missing utility, sitewide symptom.
+            The snippet already carries `overflow-x-auto`; this is what lets it
+            actually take effect. Found on a real 393px viewport 2026-08-19. */}
+        <div className="grid gap-3 [&>article]:min-w-0 sm:grid-cols-2 lg:grid-cols-3">
           {/* Tall focal tile — the Execution Viewer, in miniature. */}
           <article
             data-tile

@@ -1473,6 +1473,68 @@ export function keyLightWarmthAtProgress(progress: number): number {
  * 1.04 and translated to match (see `room-plate.tsx`), so nothing is ever
  * revealed at its edges. Full sway returns as the room leaves.
  */
+/**
+ * Aspect the scene's composition was authored against.
+ *
+ * `SCENE_NODES`, `COPY_SAFE_ZONE` and `HERO_SAFE_ZONE` were all placed and
+ * asserted for desktop frames — 1.6 is the narrow end of that range.
+ */
+export const REFERENCE_ASPECT = 1.6;
+
+/**
+ * Upper bound on the widened field of view.
+ *
+ * Full horizontal compensation at a phone's 0.46 aspect wants ~112°, which is a
+ * fisheye: straight desk edges bow and the nearest document balloons. 82° is
+ * the point where the graph still reads without the perspective calling
+ * attention to itself. Beyond this the crop stays tighter than desktop, and
+ * that is the correct trade — a portrait phone genuinely cannot hold a
+ * composition laid out for a 2:1 frame.
+ */
+export const MAX_FOV_DEG = 82;
+
+/**
+ * Vertical field of view for a given frame aspect and scrub position.
+ *
+ * ## Why a phone needed this at all
+ *
+ * A perspective camera's *vertical* FOV is fixed, so the horizontal extent is
+ * `tan(fov/2) × aspect`. Going from a 2.0 desktop frame to a 0.46 phone frame
+ * cuts the horizontal view by more than four times — every card composed away
+ * from the centre falls outside the frame, and the ones that remain fill it.
+ * Nothing is mispositioned; the camera is simply looking through a slot.
+ *
+ * ## Why it must not fire while the photograph is on screen
+ *
+ * The opening room is a **photograph**, and the camera is solved against it —
+ * `PLATE_DESK_EDGE_NDC` and friends only hold at the authored FOV. Widening
+ * there would slide the paper off the wood, which six tests exist to prevent.
+ *
+ * That constraint turns out to be free: the plate is `object-cover`, so in a
+ * tall frame it shows the photo's **full height** and crops its width — which
+ * is exactly what a fixed vertical FOV does to the 3D layer. The two crop
+ * together. So the widening is ramped in by `platePresenceAtProgress`, reaching
+ * full strength only once the room has gone.
+ *
+ * Desktop is untouched by construction: at or above `REFERENCE_ASPECT` this
+ * returns the authored value for every progress.
+ */
+export function fovForAspect(aspect: number, progress: number): number {
+  if (!Number.isFinite(aspect) || aspect <= 0) return CAMERA_FOV_DEG;
+  if (aspect >= REFERENCE_ASPECT) return CAMERA_FOV_DEG;
+
+  const toRad = Math.PI / 180;
+  const halfVerticalRef = (CAMERA_FOV_DEG / 2) * toRad;
+  // The horizontal half-angle the composition was authored to show.
+  const halfHorizontal = Math.atan(Math.tan(halfVerticalRef) * REFERENCE_ASPECT);
+  // The vertical FOV that would reproduce it at this aspect.
+  const compensated = (2 * Math.atan(Math.tan(halfHorizontal) / aspect)) / toRad;
+  const target = Math.min(compensated, MAX_FOV_DEG);
+
+  const platePresent = platePresenceAtProgress(progress);
+  return CAMERA_FOV_DEG + (target - CAMERA_FOV_DEG) * (1 - platePresent);
+}
+
 export function swayScaleAtProgress(progress: number): number {
   const present = platePresenceAtProgress(progress);
   return 1 - present * 0.85;
