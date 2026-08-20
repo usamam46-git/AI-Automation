@@ -3,6 +3,7 @@
 import * as React from "react";
 import { CircleAlert, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { AgentConfigForm } from "@/components/workflow-builder/agent-config-form";
@@ -14,6 +15,7 @@ import type { KnowledgeBase, Tool } from "@/lib/api";
 import type { BuilderGraph } from "@/lib/graph-mapping";
 import type { GraphIssue } from "@/lib/graph-validation";
 import { NODE_CATALOG } from "@/lib/node-catalog";
+import { renameNodeKey, validateNodeKey } from "@/lib/node-rename";
 import { cn } from "@/lib/utils";
 import { useWorkflowBuilderStore } from "@/stores/workflow-builder-store";
 
@@ -58,6 +60,13 @@ export function ConfigPanel({
     }));
   }
 
+  /** Renaming rewrites edges and every `node_outputs.<key>` path — see
+   *  lib/node-rename.ts. Selection has to follow the node to its new key. */
+  function renameNode(oldKey: string, newKey: string) {
+    setGraph((current) => renameNodeKey(current, oldKey, newKey));
+    selectNode(newKey);
+  }
+
   function deleteNode(nodeKey: string) {
     setGraph((current) => ({
       nodes: current.nodes.filter((item) => item.id !== nodeKey),
@@ -80,7 +89,18 @@ export function ConfigPanel({
           </span>
         ) : null}
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-medium leading-tight">{node ? node.id : "Edge"}</h3>
+          {node ? (
+            <NodeKeyField
+              // Remount on selection change so the draft never carries over.
+              key={node.id}
+              nodeKey={node.id}
+              existingKeys={graph.nodes.map((item) => item.id)}
+              readOnly={readOnly}
+              onRename={renameNode}
+            />
+          ) : (
+            <h3 className="truncate text-sm font-medium leading-tight">Edge</h3>
+          )}
           <p className="truncate text-[11px] leading-tight text-muted-foreground">
             {node ? entry?.label : `${edge?.source} → ${edge?.target}`}
           </p>
@@ -148,6 +168,72 @@ export function ConfigPanel({
         </>
       ) : null}
     </aside>
+  );
+}
+
+/**
+ * The node key, edited in place. It is committed on Enter or blur, not on every
+ * keystroke: each commit rewrites the whole graph, and a per-keystroke rename
+ * would rewrite downstream state paths against half-typed keys. Escape reverts.
+ */
+function NodeKeyField({
+  nodeKey,
+  existingKeys,
+  readOnly,
+  onRename,
+}: {
+  nodeKey: string;
+  existingKeys: string[];
+  readOnly: boolean;
+  onRename: (oldKey: string, newKey: string) => void;
+}) {
+  const [draft, setDraft] = React.useState(nodeKey);
+  const [error, setError] = React.useState<string | null>(null);
+
+  if (readOnly) return <h3 className="truncate text-sm font-medium leading-tight">{nodeKey}</h3>;
+
+  function commit() {
+    const next = draft.trim();
+    if (next === nodeKey) {
+      setDraft(nodeKey);
+      setError(null);
+      return;
+    }
+    const problem = validateNodeKey(next, nodeKey, existingKeys);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setError(null);
+    onRename(nodeKey, next);
+  }
+
+  return (
+    <>
+      <Input
+        value={draft}
+        aria-label="Node key"
+        aria-invalid={error !== null}
+        spellCheck={false}
+        className="h-6 border-transparent bg-transparent px-1 text-sm font-medium shadow-none hover:border-input focus-visible:border-input"
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setError(null);
+        }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft(nodeKey);
+            setError(null);
+          }
+        }}
+      />
+      {error ? <p className="px-1 text-[11px] leading-tight text-destructive">{error}</p> : null}
+    </>
   );
 }
 

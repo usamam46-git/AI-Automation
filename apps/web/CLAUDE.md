@@ -86,9 +86,20 @@ Built as of 2026-08-06 (canvas, config panel, validation, autosave/publish).
 - **Node identity**: the React Flow node `id` **is** `node_key`. Never use
   `NodeResponse.id` — `save_draft` replaces the whole row set, so those
   UUIDs are regenerated on every save and are unusable as canvas ids. Edge
-  ids are likewise derived (`source->target`), not persisted. `node_key` is
-  assigned at creation and read-only in v1; renaming would mean rewriting
-  every referencing edge.
+  ids are likewise derived (`source->target`), not persisted.
+- **Renaming a node key is a whole-graph rewrite** (`lib/node-rename.ts`,
+  2026-08-20). It was read-only until then, on the grounds that a rename means
+  rewriting every referencing edge — which is exactly what `renameNodeKey` now
+  does, in one pure function, along with every `node_outputs.<key>.<field>` path
+  an author has typed into a node config or an edge condition. That second half
+  is the load-bearing one: a path with a valid root and a dead second segment
+  resolves to nothing at run time and is flagged by nothing, so a rename that
+  moved only the node and its edges would silently break downstream mappings.
+  Matching is on **segment boundaries** — `agent_1` must not rewrite
+  `agent_10`, and `node_outputs.other.agent_1` is a field, not a reference.
+  The panel commits on Enter/blur, never per keystroke (each commit rewrites the
+  graph, so a half-typed key would be written into downstream paths), and
+  selection follows the node to its new key.
 - **The graph lives in the React Query cache**, under
   `['workflow-graph', workflowId, versionId ?? 'new']`. React Flow runs
   controlled and `onNodesChange`/`onEdgesChange` write back via

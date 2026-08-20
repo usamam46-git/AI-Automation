@@ -766,6 +766,16 @@ verified via a full read-only orientation pass — see note below.)
   Layout is testable via a same-origin iframe (media queries resolve against the
   frame); see apps/web/CLAUDE.md's mobile section for the harness.
   **370 frontend tests** (+7 on the camera).
+- **Node-key rename landed 2026-08-20** (frontend only, no backend change) —
+  the top product observation from the 2026-08-19 shakedown
+  (`Docs/shakedown-fixes.md` §B1). Node keys were auto-assigned `<prefix>_<n>`
+  with no rename control, which made a ten-node graph unreadable on the canvas
+  and every hand-authored dotted path opaque. New pure `lib/node-rename.ts` +
+  an editable key field in the builder's config panel header. The rename is a
+  whole-graph rewrite — node identity, both ends of every touching edge (ids
+  are derived, so they are rebuilt) and every `node_outputs.<key>` state path in
+  any node config or edge condition. Contracts in apps/web/CLAUDE.md's builder
+  section. **383 frontend tests** (370 + 13).
 - Next: **look at the 3D scene on a real phone** (layout is now verified; the
   scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect

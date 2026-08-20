@@ -24,7 +24,12 @@
 
 ## B. Product observations (for the team, not doc fixes)
 
-1. **Node keys are not renameable.** Auto keys make a ten-node graph hard to read
+1. **DONE (2026-08-20) — Node keys are now renameable.** The config panel's
+   header is an editable key field; `lib/node-rename.ts` rewires the edges and
+   retargets every `node_outputs.<key>` path in downstream configs and edge
+   conditions. Original observation below.
+
+   **Node keys are not renameable.** Auto keys make a ten-node graph hard to read
    on the canvas and make every dotted path opaque (`node_outputs.agent_2.
    account_code` vs `node_outputs.assess.account_code`). The state paths are
    authored by hand against these keys, so unreadable keys directly raise the
