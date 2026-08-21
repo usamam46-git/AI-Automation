@@ -120,8 +120,9 @@ verified via a full read-only orientation pass — see note below.)
   Schedule + webhook triggers, the audit trail and the per-org run quota all
   landed 2026-08-09 (Vol. 2 §5, §667, §700) — see the bullets below.
   The home dashboard + `analytics` module landed 2026-08-10 — see the bullet below.
-  **467 tests pass** (2026-08-18; confirmed clean run in 95s against `aap_test`
-  — the last full-suite figures were 430 on 2026-08-17 and 432 earlier the same day).
+  **469 tests pass** (2026-08-21; confirmed clean run in 84s against `aap_test`,
+  with MINIO_ENDPOINT pointed at TEST-NET-3 to prove no object-storage dependency
+  — the last full-suite figures were 467 on 2026-08-18 and 430 on 2026-08-17).
   Note on running them: `poetry` is not on PATH on every dev machine, and the
   api image installs `--only main`, so `poetry run pytest` from `apps/api/` is
   not universally available. The portable route is inside the container —
@@ -129,7 +130,13 @@ verified via a full read-only orientation pass — see note below.)
   `docker exec -e PYTHONPATH=/app -w /app aap_api python -m pytest -q`. The dev
   deps do not survive a container rebuild; `tests/` is not in the image or the
   bind mounts, so `docker cp` it in (delete `/app/tests` first — `docker cp`
-  into an existing directory nests it).
+  into an existing directory nests it). **Then delete the copied
+  `__pycache__`** — `docker exec aap_api sh -c 'find /app/tests -name __pycache__
+  -type d -exec rm -rf {} +'`. The host's caches embed host absolute paths, and
+  pytest-asyncio calls `inspect.getsource` during fixture setup, so without this
+  the run reports `OSError: could not get source code` on almost every async test
+  — 238 failures that look like a real breakage and are pure artifact (hit
+  2026-08-21).
 - Key files added: `src/workers/celery_app.py`, `src/workers/postgres_saver.py`,
   `src/workers/graph_tasks.py`, `src/modules/executions/{schemas,repository,service,router}.py`.
   Migration: `alembic/versions/20260802_execution_engine.py` (interrupt_payload column).
@@ -776,6 +783,32 @@ verified via a full read-only orientation pass — see note below.)
   are derived, so they are rebuilt) and every `node_outputs.<key>` state path in
   any node config or edge condition. Contracts in apps/web/CLAUDE.md's builder
   section. **383 frontend tests** (370 + 13).
+- **Shakedown phases 04–08 driven end to end 2026-08-21**, closing section C of
+  `Docs/shakedown-fixes.md` — the guardrail 422, cycle, orphan and `unknown_tool`
+  canvas rules; the signed webhook plus three forgeries returning one identical
+  401 with the quota untouched; a real approval hold → approve → `completed` and
+  → reject → `rejected` with the mutating node never executing; manual and cron
+  triggers; and the audit trail's Postgres-level immutability plus a 429 at a
+  quota of 2. Full results and six new findings in that file's sections G–I.
+  **Two changes came out of it:**
+  - **`http_request` now follows redirects** (`get_http_client`,
+    `follow_redirects=True`, `max_redirects=5`). A 3xx was being classified as a
+    definitive answer, so a node calling `api.frankfurter.app` stored a Cloudflare
+    301 HTML page as an FX rate and the agent downstream reasoned over it with
+    nothing reporting a failure. **469 backend tests** (467 + 2).
+  - **The dead `Agents · Soon` sidebar row is now a real page**,
+    `app/(dashboard)/agents/page.tsx` — what an agent is in this product today
+    (each item linking to a working surface) and what the `agents` module will
+    add (each item carrying the engineering reason it is not built). Frontend
+    only; **383 frontend tests** unchanged, since the page is `lib`-free by the
+    same convention as Settings.
+  - The headline *product* finding is not a bug and was deliberately not
+    "fixed" unilaterally: on the flagship demo graph the approval gate fires on
+    **retrieval uncertainty rather than on risk** — a EUR 4,200 purchase was
+    auto-posted because retrieval confidently returned coding guidance, while an
+    EUR 85 one was escalated because retrieval was vague. `tool_1` searches on a
+    product description, so the spend-authority threshold table is effectively
+    unreachable. See finding H2 for the options.
 - Next: **look at the 3D scene on a real phone** (layout is now verified; the
   scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
@@ -789,10 +822,10 @@ verified via a full read-only orientation pass — see note below.)
 - Frontend: initial Next.js/shadcn shell done (auth, dashboard shell,
   workspaces, workflows list), the builder canvas, the Execution Viewer, the
   home dashboard, the tools registry, the knowledge base, the audit log viewer,
-  the members/invitations surface and the marketing landing page (see above). `app/(marketing)/` now exists and
+  the members/invitations surface, the Agents preview page and the marketing landing page (see above). `app/(marketing)/` now exists and
   owns `/`; `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, **370 tests** over the pure `lib/` modules only (no React harness;
+  `npm test`, **383 tests** over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

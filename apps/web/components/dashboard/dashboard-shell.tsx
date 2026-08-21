@@ -4,9 +4,10 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ChevronDown, LogOut, Plus } from "lucide-react";
+import { ChevronDown, LogOut, Plus } from "lucide-react";
 import {
   ActivityIcon,
+  AgentsIcon,
   AuditIcon,
   DashboardIcon,
   KnowledgeIcon,
@@ -48,8 +49,13 @@ const navItems = [
   { label: "Settings", href: "/settings", icon: SettingsIcon },
 ];
 
-const soonItems = [
-  { label: "Agents", icon: Bot },
+// Sits below a rule, apart from the working rows, because it is the only
+// destination that is mostly about unbuilt work. It was a disabled `Soon` label
+// until 2026-08-21; a nav row you cannot click carries the same visual weight
+// as one you can and teaches the reader nothing, so it now leads to a page that
+// says what an agent is here today and what the `agents` module will add.
+const previewItems = [
+  { label: "Agents", href: "/agents", icon: AgentsIcon },
 ];
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -83,7 +89,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     if (currentWorkspace && currentWorkspace.id !== currentWorkspaceId) setCurrentWorkspaceId(currentWorkspace.id);
   }, [currentWorkspace, currentWorkspaceId, setCurrentWorkspaceId]);
 
-  const activeNavItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  // Preview rows are searched too, or /agents would render the fallback title.
+  const activeNavItem = [...navItems, ...previewItems].find(
+    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
+  );
   const title = activeNavItem?.label ?? "Workflows";
 
   async function logout() {
@@ -139,7 +148,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <NavLink key={item.href} item={item} active={item.href === activeNavItem?.href} />
           ))}
           <div className="mt-3 border-t border-sidebar-border pt-3">
-            {soonItems.map((item) => { const Icon = item.icon; return <div key={item.label} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"><Icon className="size-4" />{item.label}<Badge variant="soon" className="ml-auto">Soon</Badge></div>; })}
+            {previewItems.map((item) => (
+              <NavLink key={item.href} item={item} active={item.href === activeNavItem?.href} badge="Preview" />
+            ))}
           </div>
         </nav>
       </aside>
@@ -178,9 +189,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 function NavLink({
   item,
   active,
+  badge,
 }: {
   item: { label: string; href: string; icon: React.ComponentType<{ className?: string; active?: boolean }> };
   active: boolean;
+  /** Trailing chip, for rows that lead somewhere partly unbuilt. */
+  badge?: string;
 }) {
   const [hovered, setHovered] = React.useState(false);
   const Icon = item.icon;
@@ -199,6 +213,7 @@ function NavLink({
     >
       <Icon className="size-4" active={hovered} />
       {item.label}
+      {badge ? <Badge variant="soon" className="ml-auto">{badge}</Badge> : null}
     </Link>
   );
 }

@@ -33,6 +33,7 @@ from src.graphs.node_handlers import (
     ToolAuthenticationError,
     ToolExecutionError,
     ToolNodeConfigError,
+    get_http_client,
     tool_handler,
 )
 from src.modules.workflows.models import WorkflowEdge, WorkflowNode, WorkflowVersion
@@ -342,6 +343,45 @@ def test_http_request_output_never_includes_headers():
     assert set(output) == {"status_code", "body"}
     assert "super-secret-token" not in json.dumps(output)
     assert "leaky" not in json.dumps(output)
+
+
+def test_http_request_follows_redirects_instead_of_returning_the_3xx():
+    """
+    Regression guard for a live defect found during the 2026-08-21 shakedown.
+
+    httpx defaults `follow_redirects=False` (unlike requests), and a 3xx is below
+    500 and absent from `_RETRYABLE_STATUS` — so `_run_http_request` classified a
+    redirect as "a definitive answer from the server" and handed its HTML body to
+    the graph as the tool's result. A real demo node calling api.frankfurter.app
+    stored `{"status_code": 301, "body": "<html>...cloudflare..."}` and the agent
+    downstream reasoned over that instead of an FX rate, with nothing reporting a
+    failure anywhere.
+
+    The fix lives in `get_http_client`, so this asserts the CLIENT is constructed
+    to follow — patching `httpx.Client` wholesale (as every test here does) means
+    the mock can never redirect on its own.
+    """
+    mock, mock_client = _patched_httpx(httpx.Response(200, json={"rates": {"USD": 1.08}}))
+    try:
+        output = _run_tool(HTTP_CONFIG)
+    finally:
+        mock.stop()
+
+    assert mock_client.call_args.kwargs["follow_redirects"] is True
+    assert mock_client.call_args.kwargs["max_redirects"] == 5
+    assert output["status_code"] == 200
+
+
+def test_http_client_redirect_defaults_are_overridable():
+    """
+    The defaults are `setdefault`, not hardcoded: a tool holding a custom auth
+    header (which httpx does NOT strip across origins, unlike `Authorization`)
+    must still be able to refuse redirects entirely.
+    """
+    with patch("src.graphs.node_handlers.httpx.Client") as mock_client:
+        get_http_client(timeout=5, follow_redirects=False)
+
+    assert mock_client.call_args.kwargs["follow_redirects"] is False
 
 
 def test_tool_error_messages_redact_url_query_strings():

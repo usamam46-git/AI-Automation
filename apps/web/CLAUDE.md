@@ -1396,3 +1396,36 @@ wrapping the BYOK endpoints that had been complete on the backend since
   — don't add a field expecting it to be filled in.
 - Vol. 3 §10 specifies six admin pages; only Integrations has a backend. The
   other five are deliberately absent rather than stubbed.
+
+## Agents preview page (2026-08-21)
+
+`app/(dashboard)/agents/page.tsx`. Replaces the dead `Agents · Soon` sidebar
+row — a label with a badge, no href and nothing to click.
+
+- **The sidebar now has two lists.** `navItems` (working destinations) and
+  `previewItems`, rendered below a rule and given a `Preview` badge through
+  `NavLink`'s new optional `badge` prop. `activeNavItem` searches **both**, or
+  `/agents` renders the fallback header title ("Workflows"). Add future
+  part-built destinations to `previewItems` rather than reintroducing a disabled
+  row: an unclickable nav item carries the same visual weight as a working one
+  and teaches the reader nothing.
+- **The page's rule is that nothing is aspirational without saying so.**
+  Everything under "What you can build today" links to a surface that works;
+  everything under "Where this is going" is marked not-built and carries the
+  engineering reason rather than a quarter. The ReAct card states the real
+  blocker — an agent's own tool calls have no node in the graph, so
+  `validate_mutating_approval` structurally cannot see them — because that
+  constraint IS the product's argument. Softening it to "coming soon" would sell
+  the opposite of what this platform is for.
+- **`DisplayCards` descriptions must stay short.** The stack is skewed 8° and
+  each card is `max-w-[22rem]` with a fading `after:` gradient over its right
+  edge, so a description much past ~28 characters reads as text escaping the
+  card. Matched to the Knowledge empty state's lengths.
+- **No new dependency, and no 21st.dev MCP.** It is still in `.mcp.json` and
+  still unauthenticated (verified again 2026-08-21 — no tool is reachable), so
+  its components live here hand-adapted onto the oklch tokens:
+  `components/ui/display-cards.tsx` and `ai-text-loading.tsx` both carry headers
+  listing exactly what was changed from upstream and why.
+- `AgentsIcon` joins `components/ui/animated-icons/` under that file's three
+  rules. It blinks, deliberately the smallest motion in the set: the row leads
+  to mostly-unbuilt work and should not be the liveliest thing in the sidebar.

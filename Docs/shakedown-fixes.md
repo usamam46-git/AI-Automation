@@ -52,6 +52,9 @@ Nothing in section A or D is outstanding. Section B item 1 (rename affordance)
 remains a product suggestion for the team, not a doc fix.
 
 ## C. Still to verify (phases not yet reached)
+
+**All five CLOSED on 2026-08-21 — see section G below for the results.**
+
 - 04 guardrail / cycle / orphan / unknown_tool
 - 05 signed webhook + three forgeries + quota untouched
 - 06 approval hold, approve, reject, auto branch, dashboard denominator
@@ -112,3 +115,137 @@ Consequence for phase 04:
   draft, and give the published-workflow variant of Test D.
 - Artifact TODO: tool delete is a SOFT delete, deliberately, so `tool_executions`
   keeps the audit trail. Worth stating in phase 02 and phase 08.
+
+---
+
+# Session 2 — 2026-08-21: phases 04–08 driven end to end
+
+Section C is now closed. Every phase from 04 to 08 was executed against the live
+stack, mostly through the browser UI, as Owner on org `7d73af44`. The workflow is
+**"Purchase request review" v2** (v1's graph, republished after the phase-04
+teardown). Total OpenAI spend for the session: **under $0.01**.
+
+## G. Phase results
+
+- **04 Test A — mutating guardrail: PASS, and better than documented.** Deleting
+  `approval_1` flagged `tool_4` red **on the canvas immediately** ("tool_4 writes
+  to an external system but has no human approval step upstream"), and Publish
+  still called the API and got a real **HTTP 422** naming `['tool_4']`. The draft
+  saved; v1 stayed live. The artifact implies the 422 is the only signal — the
+  canvas pre-empts it, and the toast ("Publish rejected — see the highlighted
+  nodes") does not name the node; the node highlight and the config panel do.
+- **04 Test B — cycle: PASS.** Every node in the loop flagged, with the full path
+  spelled out: "Cycle detected: agent_1 → tool_1 → tool_2 → agent_2 → agent_1.
+  Loops are not supported yet."
+- **04 Test C — orphan: PASS.** "Not connected: agent_3…" inline; the draft saved
+  with the orphan in the DB and publish 422'd naming it. **Note the ordering:**
+  structural validation runs before the mutating-approval walk, so a graph broken
+  both ways reports the orphan first.
+- **04 Test D — both halves: PASS.** Deleting `fx_lookup` (referenced by a
+  published version) gave **409**, rendered *in the dialog*, not a toast:
+  "Cannot delete tool because 1 node(s) in published workflow version(s)
+  reference it." The `unknown_tool` canvas rule was then proven with a throwaway
+  tool referenced only from the draft — delete returned 204, and the node showed
+  "tool_2 points at a tool that is no longer in the registry."
+- **05 — signed webhook: PASS on every point.** Genuine request → **202**.
+  Forged signature, stale timestamp (−4000s) and unknown workflow UUID all
+  returned a **byte-identical 401** (`{"detail":"Invalid or missing webhook
+  signature."}`). The org's quota counter stood at **1** afterwards — forged
+  requests burn nothing.
+- **06 — the gate: PASS.** A run held at `waiting_approval`; the derived sentence
+  read **"Approve 48,000.00 EUR to Acme Vendor LLC?"** with the policy citation
+  rendered as evidence. Approve → resumed → `completed`, `MOCK-…` confirmation
+  carrying `account_code: "6110"` read out of the corpus. Reject → `rejected`
+  with `tool_4` **never executed**. Duration on the approved run was **69.4s**
+  including the human wait, confirming `_started_at_first_leg_only`.
+  Dashboard then read **100.0% · "2 runs · last 30 days"** — the rejected run
+  excluded from the denominator, exactly as designed.
+- **07 — other triggers: PASS.** Manual "Run now" on a *webhook* workflow works
+  and says so in the dialog; the payload box accepts and pretty-prints JSON.
+  Cron fired unattended within the 60s tick, ran to `completed`, logged
+  `actor_type: system` / `trigger: schedule`, and re-armed `next_run_at` to the
+  next day's boundary. Timezone maths verified: a 22:05 `Asia/Karachi` cron armed
+  to 17:05 UTC.
+- **08 — governance: PASS.** Raw `UPDATE` and `DELETE` on `audit_logs` both
+  rejected **by Postgres** (`reject_audit_log_mutation()`), not by app code. No
+  secret appears anywhere in `metadata` (grepped for `whsec_`/`sk-`: 0 rows).
+  Quota dropped to 2 → **202, 202, 429** with `Retry-After: 24737` (to 00:00 UTC);
+  `infra/.env` restored and `api` restarted afterwards.
+
+## H. New findings (2026-08-21)
+
+1. **FIXED — `http_request` treated a 3xx redirect as a successful result.**
+   httpx defaults `follow_redirects=False`; a 3xx is below 500 and not in
+   `_RETRYABLE_STATUS`, so `_run_http_request` classified it as "a definitive
+   answer from the server". `tool_2` called `https://api.frankfurter.app/latest?
+   from=EUR&to=USD`, which now 301s at Cloudflare, and stored
+   `{"status_code": 301, "body": "<html>…301 Moved Permanently…"}` as the FX
+   rate. The agent downstream reasoned over that HTML and **nothing reported a
+   failure anywhere**. `get_http_client` now sets `follow_redirects=True` and
+   `max_redirects=5` (both overridable). Two tests pin it. Note the residual
+   edge, documented in the docstring: httpx strips `Authorization` across
+   origins but **not** a custom header like `X-API-Key`.
+   Side effect worth knowing: this node cost **18.8s** of every run's duration.
+
+2. **The approval gate fires on retrieval uncertainty, not on risk.** The
+   sharpest finding of the session, and it is a graph-design problem rather than
+   an engine bug. `tool_1`'s query is mapped to `node_outputs.agent_1.summary` —
+   a *product description* — so it retrieves the **coding guide** and never the
+   spend-authority threshold table. Observed, on one published graph:
+   - **EUR 4,200** ("Component assembly AC-2291-B") → retrieval confidently
+     returned the coding guide's worked example → `requires_approval: false` →
+     the auto branch → **posted to the ledger with no human involved**, despite
+     `policy.md` §3.1 requiring approval for anything ≥ EUR 1,000.
+   - **EUR 85** (calibration standard) → retrieval was vague → `requires_approval:
+     true` → held at the gate.
+
+   So the cheap purchase was escalated and the expensive one was not. The agent
+   *can* follow the "if the retrieved text does not cover this case, set
+   requires_approval to true" instruction — it did so twice — but on the 4,200 run
+   it decided the text *did* cover the case, because coding guidance genuinely
+   matched the description. **This is what ∃-semantics costs in practice**
+   (section F predicted the shape; this is the live consequence): the fallback
+   branch reaches a mutating node with no gate, so the safety of the whole graph
+   rests on one LLM boolean. Options worth discussing, none applied unilaterally:
+   retrieve against the *decision* rather than the description, add a second
+   retrieval for thresholds, or put a deterministic value condition upstream of
+   the branch so money — not prose — decides.
+
+3. **`workflow.run.quota_exceeded` is NOT written on the HTTP paths** — only by
+   the schedule tick (`workers/trigger_tasks.py`). The artifact's phase 08 claims
+   the row appears after a 429; it does not. Deliberate per
+   `_claim_run_quota`'s docstring, but it means a tenant hitting its ceiling
+   through the API leaves no trace in the trail an admin would look at.
+   **Artifact fix required; product decision optional.**
+
+4. **Webhook-triggered runs are audited as `actor_type: system` with no IP.** The
+   caller of the one unauthenticated route in the product is the one caller whose
+   IP is most worth keeping, and it is the one that is dropped. Defensible (there
+   is no authenticated actor) but worth a look.
+
+5. **Cost (MTD) renders `$0.00` for any sub-cent month.** Three runs costing
+   $0.0036 showed as `$0.00` on the dashboard while the per-run rows correctly
+   showed `$0.0012`. During development every figure is sub-cent, so the card
+   reads zero permanently.
+
+6. **The workflow detail dialog shows the version UUID, not the version number.**
+   "Version: ba9bd9f9-74b2-4443-a50c-1f087854adc2" where the builder header, the
+   run header and the toast all say "v2".
+
+7. **Confirmed, no action:** the B2 controlled-input character-loss issue is
+   specific to the node inspector — the Run-now payload textarea accepted a
+   200-character JSON body typed at full speed with nothing dropped.
+
+## I. Artifact corrections still to publish
+
+- Phase 04: the canvas flags Test A, B, C and D **inline before Publish**; say so.
+- Phase 04 Test D: give the published-workflow variant (409) as primary, per F.
+- Phase 02 / 08: state that tool delete is a **soft** delete — the dialog already
+  says "Existing runs and the tool's execution history are kept".
+- Phase 03 `tool_2`: the expected `status_code: 200` FX body is now only true
+  because redirects are followed (finding H1); `api.frankfurter.app` 301s.
+- Phase 08: remove the claim that a `workflow.run.quota_exceeded` audit row
+  appears after an HTTP 429 (finding H3).
+- Phase 03 / Reference: **node keys ARE renameable** as of 2026-08-20
+  (`lib/node-rename.ts`). The "there is no rename control anywhere" warning and
+  the "cannot be renamed" line in the Reference table are both stale.

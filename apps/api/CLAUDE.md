@@ -957,6 +957,19 @@ docker exec -w /app aap_api python -m src.db.demo.send_invoice
   PostgreSQL's JSONB `||` append operator (no read-modify-write). This is
   required to avoid a race with LangGraph's `AsyncBackgroundExecutor`, which
   submits `aput` and `aput_writes` as independent concurrent asyncio tasks.
+- **`http_request` follows redirects** (`get_http_client`, `follow_redirects=True`,
+  `max_redirects=5`, both overridable). Added 2026-08-21 as a bug fix, not a
+  preference: httpx defaults to NOT following, unlike requests, and a 3xx is below
+  500 and absent from `_RETRYABLE_STATUS`, so the classification below treated it
+  as "a definitive answer from the server" and handed the redirect's HTML body to
+  the graph as the tool's result. Found live — a node calling
+  `api.frankfurter.app` stored a Cloudflare `301 Moved Permanently` page as an FX
+  rate and the downstream agent reasoned over it with nothing reporting a failure.
+  The residual edge is documented on the factory and is worth knowing: httpx
+  strips `Authorization` when a redirect leaves the origin, but **not** a custom
+  header such as `X-API-Key`, so a tool holding one should point at a
+  non-redirecting URL. By the time the three-way split below runs, the status is
+  always the final hop's.
 - `http_request` tool nodes classify response status three ways, and the split
   is deliberate: **401/403** raise `ToolAuthenticationError` on the first
   attempt (a credential failure returned as node output is indistinguishable

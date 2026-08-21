@@ -263,7 +263,28 @@ def get_http_client(**kwargs: Any) -> httpx.Client:
 
     Sync, not async, on purpose — see the module docstring: an `async def` node
     cannot be driven by `.invoke()`, which `compile_for_test_run` relies on.
+
+    **Redirects are followed, and that is a fix rather than a preference** (added
+    2026-08-21). httpx defaults `follow_redirects=False`, unlike requests — and a
+    3xx is below 500 and not in `_RETRYABLE_STATUS`, so `_run_http_request`
+    classified it as "a definitive answer from the server" and handed the
+    redirect's HTML body to the graph as the tool's result. Found live: a demo
+    node calling `https://api.frankfurter.app/latest?from=EUR&to=USD` stored
+    `{"status_code": 301, "body": "<html>...301 Moved Permanently...cloudflare"}`
+    and the downstream agent reasoned over that instead of an FX rate, with
+    nothing anywhere reporting a failure. Trailing-slash and http→https upgrades
+    are the same trap and are far more common than that specific host.
+
+    Two bounds come with it. `max_redirects` is deliberately low — a redirect
+    chain is a remote party spending this worker's timeout budget. And httpx
+    strips `Authorization` when a redirect leaves the origin (except a direct
+    http→https upgrade on the same host), which covers the standard credential
+    header; a **custom** auth header such as `X-API-Key` is NOT stripped by httpx
+    and would travel to the redirect target, so a tool holding one should point at
+    a URL that does not redirect. Callers may override either default.
     """
+    kwargs.setdefault("follow_redirects", True)
+    kwargs.setdefault("max_redirects", 5)
     return httpx.Client(**kwargs)
 
 
@@ -503,6 +524,11 @@ def _run_http_request(
     second mechanism — a hand-rolled loop with `retry_base_delay * 2**attempt`
     (1s, 2s, 4s). tenacity is only a transitive langchain pin, not a declared
     dependency of this project.
+
+    Redirects are resolved by the client before any of this runs (see
+    `get_http_client`), so `response.status_code` here is always the status of the
+    final hop — a 3xx reaching the classification below would mean the chain
+    exceeded `max_redirects`, and it is treated as the definitive answer it then is.
 
     Status handling splits three ways:
       - 401/403 raise `ToolAuthenticationError` on the first attempt. A credential

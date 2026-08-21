@@ -232,3 +232,31 @@ export function SettingsIcon({ className, active }: AnimatedIconProps) {
     </svg>
   );
 }
+
+/**
+ * Agents — the head sits still and the two eyes blink.
+ *
+ * Deliberately the smallest motion in the set. The Agents surface is a preview
+ * of unbuilt work, so an icon that swung or spun would advertise it as the
+ * liveliest thing in the sidebar, which is the opposite of true. A blink reads
+ * as "there is something here" without competing with the rows that do work.
+ */
+export function AgentsIcon({ className, active }: AnimatedIconProps) {
+  const { controls, reduced } = useHoverControls(active);
+  const blink: Variants = {
+    normal: { scaleY: 1 },
+    animate: { scaleY: [1, 0.1, 1], transition: { duration: 0.4, ease: "easeInOut" } },
+  };
+  return (
+    <svg {...SVG_PROPS} className={cn("size-4", className)} aria-hidden>
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <motion.g variants={reduced ? undefined : blink} animate={controls} initial="normal" style={{ originX: "50%", originY: "50%" }}>
+        <path d="M15 13v2" />
+        <path d="M9 13v2" />
+      </motion.g>
+    </svg>
+  );
+}
