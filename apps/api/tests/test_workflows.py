@@ -137,6 +137,7 @@ async def test_workflow_create_and_get(client: AsyncClient):
     assert body["workspace_id"] == ws["id"]
     assert body["status"] == "draft"
     assert body["current_version_id"] is None  # always null at this stage
+    assert body["current_version_number"] is None  # rendered as "Not compiled"
 
 
 @pytest.mark.asyncio
@@ -272,3 +273,54 @@ async def test_workspace_deletion_blocked_by_workflow(client: AsyncClient):
 
     resp = await client.get(f"/api/v1/workspaces/{ws['id']}", headers=headers)
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_workflow_response_carries_version_number_not_just_uuid(client: AsyncClient):
+    """
+    Shakedown finding H6: the detail dialog rendered `current_version_id` — a UUID —
+    where the builder header, the run header and the publish toast all say "v2".
+
+    The number is resolved through Workflow.current_version, a joined-eager viewonly
+    relationship. Publishing twice is the point of the second half: it proves the
+    relationship reloads rather than serving the first version out of a warm
+    identity map.
+    """
+    data = await register_and_get_token(client, "VERSION-NUMBER")
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ws = await create_workspace(client, token)
+    wf = await create_workflow(client, token, ws["id"])
+    # Inlined rather than imported from test_workflow_versions: that module already
+    # imports create_workflow from this one, so the import would be circular.
+    graph = {
+        "nodes": [
+            {"node_key": "start", "node_type": "start", "config": {}, "position_x": 0, "position_y": 0},
+            {"node_key": "agent_1", "node_type": "agent", "config": {"agent_id": str(uuid.uuid4())}, "position_x": 100, "position_y": 0},
+            {"node_key": "end", "node_type": "end", "config": {}, "position_x": 200, "position_y": 0},
+        ],
+        "edges": [
+            {"source_node_key": "start", "target_node_key": "agent_1"},
+            {"source_node_key": "agent_1", "target_node_key": "end"},
+        ],
+    }
+
+    before = await client.get(f"/api/v1/workflows/{wf['id']}", headers=headers)
+    assert before.json()["current_version_number"] is None
+
+    for expected_number in (1, 2):
+        saved = await client.post(f"/api/v1/workflows/{wf['id']}/versions", json=graph, headers=headers)
+        assert saved.status_code in (200, 201), saved.text
+        version_id = saved.json()["id"]
+
+        published = await client.post(f"/api/v1/workflows/{wf['id']}/versions/{version_id}/publish", headers=headers)
+        assert published.status_code == 200, published.text
+
+        detail = await client.get(f"/api/v1/workflows/{wf['id']}", headers=headers)
+        body = detail.json()
+        assert body["current_version_id"] == version_id
+        assert body["current_version_number"] == expected_number
+
+    listed = await client.get(f"/api/v1/workflows?workspace_id={ws['id']}", headers=headers)
+    assert [w["current_version_number"] for w in listed.json()] == [2]

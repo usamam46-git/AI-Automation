@@ -13,6 +13,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import redis.asyncio as aioredis
@@ -24,7 +25,7 @@ from langgraph.types import Command
 
 from src.core.llm_client import LLMClient, get_llm_client
 from src.graphs import cache as graph_cache
-from src.graphs.condition_eval import evaluate_condition
+from src.graphs.condition_eval import evaluate_condition, has_predicate
 from src.graphs.node_handlers import (
     agent_handler,
     end_handler,
@@ -184,17 +185,58 @@ def _log_unresolved_config_refs(nodes: list[WorkflowNode], *, resolved_tool_keys
                 )
 
 
+#: Sort floor for an edge with no `created_at` — see `_ordered_condition_edges`.
+_EDGE_SORT_FLOOR = datetime.min.replace(tzinfo=UTC)
+
+
+def _ordered_condition_edges(outgoing: list[WorkflowEdge]) -> list[WorkflowEdge]:
+    """
+    Deterministic evaluation order for one condition node's outgoing edges.
+
+    `router` below is first-match-wins, and `evaluate_condition` returns True for
+    an edge with no predicate — so a catch-all fallback edge matches every state.
+    Evaluated first, it makes every predicate behind it dead code and the branch
+    those predicates guard (typically the human_approval gate) is skipped with
+    nothing reporting anything. On a graph whose mutating write sits downstream of
+    both branches, that is the difference between a gated post and an unattended one.
+
+    Nothing guaranteed the order before this. The edges arrive in whatever order
+    Postgres returned them, and it only ever looked stable because a plain select
+    over unmodified rows tends to come back in insertion order. `WorkflowVersion.edges`
+    now carries an explicit ORDER BY as well; this sort is the guarantee the router
+    itself relies on, and it is kept here rather than at the query so the invariant
+    sits next to the loop that depends on it.
+
+    Fallback edges sort last. Within each group the order is (created_at, id):
+    `save_draft` deletes and re-inserts every edge of a version in one transaction,
+    so `created_at` — a server-side now() — ties across the whole graph, which makes
+    the `id` tiebreak load-bearing rather than decorative.
+    """
+
+    def sort_key(edge: WorkflowEdge) -> tuple[int, datetime, str]:
+        # `created_at` is None on an edge that has not been flushed (every edge in
+        # the compiler's own unit tests). Substituting a floor keeps a mixed list
+        # sortable instead of raising on a None-vs-datetime comparison, and it is
+        # tz-aware because the column is TIMESTAMPTZ.
+        created_at = edge.created_at or _EDGE_SORT_FLOOR
+        return (0 if has_predicate(edge.condition) else 1, created_at, str(edge.id))
+
+    return sorted(outgoing, key=sort_key)
+
+
 def _build_condition_router(outgoing: list[WorkflowEdge]) -> tuple[Callable[[dict[str, Any]], str], dict[str, str]]:
+    ordered = _ordered_condition_edges(outgoing)
+
     path_map: dict[str, str] = {}
-    for idx, edge in enumerate(outgoing):
+    for idx, edge in enumerate(ordered):
         path_map[_branch_key(edge, idx)] = edge.target_node_key
 
     def router(state: dict[str, Any]) -> str:
-        for idx, edge in enumerate(outgoing):
+        for idx, edge in enumerate(ordered):
             branch = _branch_key(edge, idx)
             if evaluate_condition(edge.condition, state):
                 return branch
-        return _branch_key(outgoing[-1], len(outgoing) - 1)
+        return _branch_key(ordered[-1], len(ordered) - 1)
 
     return router, path_map
 

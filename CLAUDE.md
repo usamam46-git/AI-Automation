@@ -802,13 +802,51 @@ verified via a full read-only orientation pass — see note below.)
     add (each item carrying the engineering reason it is not built). Frontend
     only; **383 frontend tests** unchanged, since the page is `lib`-free by the
     same convention as Settings.
-  - The headline *product* finding is not a bug and was deliberately not
-    "fixed" unilaterally: on the flagship demo graph the approval gate fires on
-    **retrieval uncertainty rather than on risk** — a EUR 4,200 purchase was
-    auto-posted because retrieval confidently returned coding guidance, while an
-    EUR 85 one was escalated because retrieval was vague. `tool_1` searches on a
-    product description, so the spend-authority threshold table is effectively
-    unreachable. See finding H2 for the options.
+  - The headline *product* finding was not a bug and was deliberately not
+    "fixed" unilaterally at the time: the approval gate fired on **retrieval
+    uncertainty rather than on risk** — a EUR 4,200 purchase was auto-posted
+    because retrieval confidently returned coding guidance, while an EUR 85 one
+    was escalated because retrieval was vague. `tool_1` searched on a product
+    description, so the spend-authority threshold table was effectively
+    unreachable. **Closed 2026-08-22 — see the next bullet.** Note this line
+    used to say "on the flagship demo graph", which was wrong: the affected graph
+    was the hand-built one in the Shakedown runbook, not the seeded demo.
+- **Shakedown findings H2/H5/H6 closed 2026-08-22**, plus one latent correctness
+  bug found while closing H2. Full detail in `Docs/shakedown-fixes.md` sections
+  J and K.
+  - **Condition-edge evaluation order was unspecified and could skip an approval
+    gate.** `WorkflowVersion.edges` had no `order_by`, `_build_condition_router`
+    is first-match-wins, and `evaluate_condition` returns `True` for an edge with
+    no predicate — so a catch-all fallback that sorted first made every predicate
+    behind it dead code, silently routing around the human gate in front of a
+    mutating write. It only ever worked because Postgres tends to return
+    insertion order. Fixed: `_ordered_condition_edges` in `src/graphs/compiler.py`
+    sorts catch-all edges last then by `(created_at, id)`, and `has_predicate()`
+    now lives in `condition_eval.py` and is used *by* `evaluate_condition` so the
+    two definitions of "matches everything" cannot drift. The `id` tiebreak is
+    load-bearing: `save_draft` re-inserts every edge in one transaction, so
+    `created_at` ties across the whole graph.
+  - **H2 was a runbook problem, not a seed problem — do not "fix" the demo
+    graphs.** `Invoice approval` in `src/db/demo/graphs.py` already routes
+    deterministically on `check_amount` and retrieves against `policy_question`.
+    The graph that auto-posted EUR 4,200 was the hand-built one the Shakedown
+    artifact's phase 03 teaches; that phase is rewritten (money decides first and
+    deterministically, retrieval searches on the decision, a second condition node
+    carries the model's judgement on the auto branch).
+  - Two engine limitations recorded and **not** fixed: parallel edges between one
+    node pair are not authorable (`edgeId` is `source->target`), and condition
+    nodes cannot chain (the router attaches to the condition's predecessor).
+    Nothing validates either on the canvas or at publish.
+  - H5: `formatMonthlyCost` shows 4 decimals below a cent — every dev and demo
+    month is sub-cent, so the card read `$0.00` permanently. H6:
+    `WorkflowResponse.current_version_number` via a viewonly `lazy="joined"`
+    `Workflow.current_version` relationship (explicit `foreign_keys` — circular FK
+    pair), so the detail dialog says `v2` rather than a UUID.
+  - **473 backend tests** (469 + 4) and **387 frontend tests** (383 + 4) —
+    the touched suites pass (`test_graph_compiler` 33, `test_workflows` 10,
+    `dashboard-stats` 25); the FULL suites were not re-run in that session.
+    Note `aap_test` was two migrations behind and needed
+    `alembic upgrade head` before it would run at all.
 - Next: **look at the 3D scene on a real phone** (layout is now verified; the
   scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect

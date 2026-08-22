@@ -69,6 +69,10 @@ class WorkflowResponse(BaseModel):
     trigger_type: str
     trigger_config: dict[str, Any] | None = None
     current_version_id: uuid.UUID | None = None
+    #: Human-facing version label, e.g. 2 renders as "v2". Resolved from the live
+    #: version row (Workflow.current_version_number) rather than shipping the UUID
+    #: alone, which is what the detail dialog used to show — shakedown finding H6.
+    current_version_number: int | None = None
     next_run_at: datetime | None = None
     last_triggered_at: datetime | None = None
     has_webhook_secret: bool = False

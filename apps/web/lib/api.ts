@@ -51,6 +51,13 @@ export type Workflow = {
   trigger_type: TriggerType;
   trigger_config: Record<string, unknown> | null;
   current_version_id: string | null;
+  /**
+   * Human-facing label for the live version — 2 renders as `v2`. Null until the
+   * workflow has been published. Prefer this over `current_version_id` in any UI a
+   * person reads: the builder header, the run header and the publish toast all say
+   * "v2", and the detail dialog used to be the one surface showing the raw UUID.
+   */
+  current_version_number: number | null;
   /** Next due fire time (schedule triggers only); null for every other type. */
   next_run_at: string | null;
   last_triggered_at: string | null;

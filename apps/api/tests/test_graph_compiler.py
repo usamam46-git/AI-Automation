@@ -16,6 +16,7 @@ from src.graphs import cache as graph_cache
 from src.graphs.cache import cache_graph, get_cached_graph, invalidate_cached_graph
 from src.graphs.compiler import (
     DraftVersionCompileError,
+    _build_condition_router,
     _compile_state_graph,
     _log_unresolved_config_refs,
     compile_for_test_run,
@@ -24,7 +25,7 @@ from src.graphs.compiler import (
     initial_state_from_trigger,
     run_graph_sync,
 )
-from src.graphs.condition_eval import evaluate_condition
+from src.graphs.condition_eval import evaluate_condition, has_predicate
 from src.graphs.node_handlers import AgentNodeConfigError
 from src.modules.workflows.models import WorkflowEdge, WorkflowNode, WorkflowVersion
 
@@ -166,6 +167,72 @@ def _realistic_compile_graph() -> WorkflowVersion:
 )
 def test_evaluate_condition_operators(operator, state, condition, result):
     assert evaluate_condition(condition, state) is result
+
+
+# ---------------------------------------------------------------------------
+# Unit — condition edge ordering
+#
+# `_build_condition_router` is first-match-wins and `evaluate_condition` returns
+# True for an edge with no predicate, so a catch-all fallback matches every state.
+# Nothing ordered the edges before 2026-08-22 — `WorkflowVersion.edges` had no
+# ORDER BY and the list was whatever Postgres returned. A fallback that happened
+# to come back first made every predicate behind it dead code and silently skipped
+# the branch they guard, which on the shakedown's graph is the approval gate in
+# front of a mutating ERP write.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected"),
+    [
+        (None, False),
+        ({}, False),
+        ({"branch": "auto"}, False),  # branch-only metadata is a label, not a test
+        ({"field": "node_outputs.x.v", "operator": "eq"}, True),  # value may legitimately be None
+        ({"field": "node_outputs.x.v", "operator": "eq", "value": 1}, True),
+    ],
+)
+def test_has_predicate_matches_evaluate_condition(condition, expected):
+    assert has_predicate(condition) is expected
+    # The two must agree on what "matches everything" means, which is the whole
+    # reason has_predicate lives next to evaluate_condition and is used by it.
+    if not expected:
+        assert evaluate_condition(condition, {}) is True
+
+
+def test_fallback_edge_evaluated_last_even_when_it_sorts_first():
+    fallback = _edge("check_amount", "auto_note")
+    gated = _edge("check_amount", "approval", {"field": "node_outputs.extract.total_amount", "operator": "gt", "value": 1000})
+
+    # Fallback deliberately first — the pre-fix order that skipped the gate.
+    router, path_map = _build_condition_router([fallback, gated])
+
+    assert path_map == {"auto_note": "auto_note", "approval": "approval"}
+    assert router({"node_outputs": {"extract": {"total_amount": 4200}}}) == "approval"
+    assert router({"node_outputs": {"extract": {"total_amount": 85}}}) == "auto_note"
+
+
+def test_condition_edge_order_is_stable_across_loads():
+    """
+    Two predicates plus a fallback, shuffled the way an unordered query can return
+    them. `save_draft` deletes and re-inserts every edge in one transaction, so
+    created_at ties across the whole graph — the id tiebreak is what makes this
+    deterministic rather than incidental.
+    """
+    high = _edge("route", "approval", {"field": "node_outputs.a.amount", "operator": "gt", "value": 1000})
+    flagged = _edge("route", "review", {"field": "node_outputs.a.flagged", "operator": "eq", "value": True})
+    fallback = _edge("route", "auto")
+
+    orders = [[high, flagged, fallback], [fallback, high, flagged], [flagged, fallback, high]]
+    routed = set()
+    for outgoing in orders:
+        router, _ = _build_condition_router(outgoing)
+        # Both predicates match, so the (created_at, id) tiebreak alone decides —
+        # which is the part that used to be luck.
+        routed.add(router({"node_outputs": {"a": {"amount": 5000, "flagged": True}}}))
+
+    assert len(routed) == 1, f"input order changed the branch: {routed}"
+    assert routed < {"approval", "review"}, "a matching predicate must win over the fallback"
 
 
 # ---------------------------------------------------------------------------

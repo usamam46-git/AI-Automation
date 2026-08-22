@@ -62,7 +62,7 @@ export function WorkflowDetailDialog({
             <div className="flex items-center justify-between"><span className="text-muted-foreground">Last triggered</span><span>{new Date(workflow.last_triggered_at).toLocaleString()}</span></div>
           ) : null}
           <div className="flex items-center justify-between"><span className="text-muted-foreground">Created</span><span>{new Date(workflow.created_at).toLocaleString()}</span></div>
-          <div className="flex items-center justify-between"><span className="text-muted-foreground">Version</span><span>{workflow.current_version_id ?? "Not compiled"}</span></div>
+          <div className="flex items-center justify-between"><span className="text-muted-foreground">Version</span><span>{workflow.current_version_number != null ? `v${workflow.current_version_number}` : "Not compiled"}</span></div>
           {workflow.trigger_type === "webhook" ? <WebhookSecretCard workflow={workflow} /> : null}
         </div>
         <DialogFooter>

@@ -122,6 +122,33 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
         back_populates="workflow",
         foreign_keys="WorkflowVersion.workflow_id",
     )
+    #: The live version row, for `current_version_number` below.
+    #:
+    #: `foreign_keys` is mandatory, not stylistic: workflows.current_version_id and
+    #: workflow_versions.workflow_id form a circular FK pair, so SQLAlchemy cannot
+    #: infer which side this relationship walks — the same reason `versions` above
+    #: pins its own. `viewonly=True` keeps `publish_version` the only writer of
+    #: current_version_id and avoids the post_update dance a writable circular
+    #: relationship would need.
+    #:
+    #: `lazy="joined"` because this is read during response serialization on every
+    #: workflow list and detail call. Under the async engine a lazy load there
+    #: raises MissingGreenlet, and eager-loading one row by primary key is cheaper
+    #: than the alternative — pulling the entire `versions` collection to read one
+    #: integer off it.
+    #:
+    #: Identity-map note: `mark_published` sets current_version_id with a bulk
+    #: UPDATE and the session runs expire_on_commit=False, so a Workflow already
+    #: loaded in that same session keeps a stale `current_version`. Harmless today
+    #: because publish returns a *version* response, not a workflow one — but do
+    #: not start serializing a WorkflowResponse after a publish in one request
+    #: without refreshing the instance first.
+    current_version: Mapped["WorkflowVersion | None"] = relationship(
+        "WorkflowVersion",
+        foreign_keys=[current_version_id],
+        viewonly=True,
+        lazy="joined",
+    )
 
     @property
     def has_webhook_secret(self) -> bool:
@@ -132,6 +159,22 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
         @property-for-a-derived-response-field pattern as WorkflowRun.workflow_name.
         """
         return self.webhook_secret_encrypted is not None
+
+    @property
+    def current_version_number(self) -> int | None:
+        """
+        Feeds WorkflowResponse.current_version_number.
+
+        The detail dialog used to render `current_version_id` — a UUID — where the
+        builder header, the run header and the publish toast all say "v2"
+        (shakedown finding H6). The number is what a human has been given
+        everywhere else, so the response carries it too.
+
+        Null while the workflow has never been published, which the UI renders as
+        "Not compiled". Same @property-for-a-derived-response-field pattern as
+        `has_webhook_secret` above and WorkflowRun.workflow_name.
+        """
+        return self.current_version.version_number if self.current_version else None
 
 
 class WorkflowVersion(UUIDMixin, TimestampMixin, Base):
@@ -183,7 +226,17 @@ class WorkflowVersion(UUIDMixin, TimestampMixin, Base):
         foreign_keys=[workflow_id],
     )
     nodes: Mapped[list["WorkflowNode"]] = relationship("WorkflowNode", back_populates="workflow_version")
-    edges: Mapped[list["WorkflowEdge"]] = relationship("WorkflowEdge", back_populates="workflow_version")
+    #: Ordered so the list a caller receives is the list the compiler evaluates.
+    #: `_build_condition_router` in src/graphs/compiler.py is first-match-wins over
+    #: a condition node's outgoing edges, and before this the order was whatever
+    #: Postgres returned. The compiler re-sorts defensively (catch-all edges last,
+    #: which this ORDER BY cannot express); this makes the API's own edge lists and
+    #: the canvas's round-trip stable for the same reason.
+    edges: Mapped[list["WorkflowEdge"]] = relationship(
+        "WorkflowEdge",
+        back_populates="workflow_version",
+        order_by="WorkflowEdge.created_at, WorkflowEdge.id",
+    )
     runs: Mapped[list["WorkflowRun"]] = relationship(  # type: ignore[name-defined]
         "WorkflowRun", back_populates="workflow_version"
     )

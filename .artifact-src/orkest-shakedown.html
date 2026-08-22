@@ -1,0 +1,1324 @@
+<title>Orkest Shakedown</title>
+<style>
+  /* ── Tokens ───────────────────────────────────────────────────────────
+     Light is the base. Dark redefines tokens only, twice: once for the
+     un-stamped system-dark state, once for an explicit toggle. Nothing
+     below this block declares a raw colour. */
+  :root {
+    --paper:   #F2F5F4;
+    --surface: #FFFFFF;
+    --sunk:    #E9EEED;
+    --ink:     #101E1D;
+    --muted:   #586967;
+    --faint:   #7C8D8B;
+    --line:    #D8E1DF;
+    --line-2:  #C3D0CE;
+    --accent:  #0C6A64;
+    --accent-soft: #E0EEEC;
+    --amber:   #9A540A;
+    --amber-soft:  #F7EBDB;
+    --rose:    #9B1B3C;
+    --rose-soft:   #F8E4E9;
+    --green:   #14684A;
+    --green-soft:  #DFEFE7;
+    --code-bg: #0E1A19;
+    --code-ink:#DDE8E6;
+    --shadow:  0 1px 2px rgba(16,30,29,.06), 0 8px 24px -16px rgba(16,30,29,.28);
+
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:   #0C1312;
+      --surface: #131C1B;
+      --sunk:    #0F1817;
+      --ink:     #E7EEEC;
+      --muted:   #93A5A2;
+      --faint:   #748683;
+      --line:    #22302E;
+      --line-2:  #2E403D;
+      --accent:  #57C3B8;
+      --accent-soft: #122A28;
+      --amber:   #DC9A46;
+      --amber-soft:  #2A2116;
+      --rose:    #EE8AA2;
+      --rose-soft:   #2A161C;
+      --green:   #5FCB9D;
+      --green-soft:  #12271F;
+      --code-bg: #08100F;
+      --code-ink:#D6E3E1;
+      --shadow:  0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:   #0C1312;
+    --surface: #131C1B;
+    --sunk:    #0F1817;
+    --ink:     #E7EEEC;
+    --muted:   #93A5A2;
+    --faint:   #748683;
+    --line:    #22302E;
+    --line-2:  #2E403D;
+    --accent:  #57C3B8;
+    --accent-soft: #122A28;
+    --amber:   #DC9A46;
+    --amber-soft:  #2A2116;
+    --rose:    #EE8AA2;
+    --rose-soft:   #2A161C;
+    --green:   #5FCB9D;
+    --green-soft:  #12271F;
+    --code-bg: #08100F;
+    --code-ink:#D6E3E1;
+    --shadow:  0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { animation: none !important; transition: none !important; } }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell { max-width: 1180px; margin: 0 auto; padding: 0 24px 96px; }
+
+  /* ── Masthead ─────────────────────────────────────────────────────── */
+  .masthead { padding: 64px 0 40px; border-bottom: 1px solid var(--line); }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(30px, 5.2vw, 50px);
+    line-height: 1.04;
+    letter-spacing: -.035em;
+    font-weight: 600;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  .standfirst { font-size: 18px; color: var(--muted); max-width: 62ch; margin: 0 0 26px; }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  .facts { display: flex; flex-wrap: wrap; gap: 10px; }
+  .fact {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .01em;
+    border: 1px solid var(--line-2); border-radius: 2px;
+    padding: 6px 10px; color: var(--muted); background: var(--surface);
+  }
+  .fact b { color: var(--ink); font-weight: 600; }
+
+  /* ── Two-column frame ─────────────────────────────────────────────── */
+  .frame { display: block; }
+  @media (min-width: 1020px) {
+    .frame { display: grid; grid-template-columns: 214px minmax(0, 1fr); gap: 56px; align-items: start; }
+  }
+
+  nav.rail { display: none; }
+  @media (min-width: 1020px) {
+    nav.rail {
+      display: block; position: sticky; top: 28px; padding-top: 44px;
+      max-height: calc(100vh - 56px); overflow-y: auto;
+    }
+  }
+  .rail-title {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--faint); margin: 0 0 12px;
+  }
+  .rail a {
+    display: flex; gap: 10px; align-items: baseline;
+    font-size: 13.5px; color: var(--muted); text-decoration: none;
+    padding: 5px 0; border-left: 2px solid transparent; padding-left: 12px;
+    margin-left: -14px;
+  }
+  .rail a:hover { color: var(--ink); }
+  .rail a.on { color: var(--ink); border-left-color: var(--accent); font-weight: 600; }
+  .rail a span { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 16px; }
+  .rail a.on span { color: var(--accent); }
+  .rail a:focus-visible, .shell a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+  main { padding-top: 44px; min-width: 0; }
+
+  /* ── Phase sections ───────────────────────────────────────────────── */
+  section { margin: 0 0 60px; scroll-margin-top: 24px; }
+  .phase-head { display: flex; gap: 16px; align-items: baseline; border-top: 2px solid var(--ink); padding-top: 14px; margin-bottom: 8px; }
+  .phase-num {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    letter-spacing: .1em; color: var(--accent); padding-top: 5px;
+  }
+  h2 {
+    font-family: var(--mono); font-size: clamp(20px, 2.6vw, 25px);
+    letter-spacing: -.025em; font-weight: 600; margin: 0; line-height: 1.2;
+    text-wrap: balance;
+  }
+  .phase-sub { color: var(--muted); font-size: 15px; margin: 0 0 26px; max-width: 66ch; }
+  @media (min-width: 1020px) { .phase-sub { padding-left: 40px; } }
+
+  h3 {
+    font-size: 15px; font-weight: 650; margin: 34px 0 10px;
+    letter-spacing: -.005em;
+  }
+  h3:first-of-type { margin-top: 26px; }
+  h4 { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin: 26px 0 10px; font-weight: 600; }
+
+  p { margin: 0 0 14px; max-width: 68ch; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; max-width: 68ch; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--faint); }
+  strong { font-weight: 650; }
+  em { font-style: italic; color: var(--muted); }
+
+  code {
+    font-family: var(--mono); font-size: .875em;
+    background: var(--sunk); border: 1px solid var(--line);
+    padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+  }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  /* ── Steps ────────────────────────────────────────────────────────── */
+  ol.steps { list-style: none; padding: 0; counter-reset: s; max-width: none; }
+  ol.steps > li {
+    counter-increment: s; position: relative;
+    padding: 0 0 0 38px; margin-bottom: 18px;
+  }
+  ol.steps > li::before {
+    content: counter(s);
+    position: absolute; left: 0; top: 1px;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    width: 22px; height: 22px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid var(--line-2);
+  }
+
+  /* ── Callouts ─────────────────────────────────────────────────────── */
+  .note {
+    border-left: 3px solid var(--line-2); background: var(--surface);
+    padding: 14px 18px; margin: 18px 0; border-radius: 0 3px 3px 0;
+    box-shadow: var(--shadow);
+  }
+  .note > :last-child { margin-bottom: 0; }
+  .note .tag {
+    display: block; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: .14em; text-transform: uppercase; margin-bottom: 6px; font-weight: 600;
+  }
+  .note.expect { border-left-color: var(--green); background: var(--green-soft); }
+  .note.expect .tag { color: var(--green); }
+  .note.gate { border-left-color: var(--amber); background: var(--amber-soft); }
+  .note.gate .tag { color: var(--amber); }
+  .note.trap { border-left-color: var(--rose); background: var(--rose-soft); }
+  .note.trap .tag { color: var(--rose); }
+  .note.why .tag { color: var(--accent); }
+  .note.why { border-left-color: var(--accent); background: var(--accent-soft); }
+
+  /* ── Code ─────────────────────────────────────────────────────────── */
+  .code { margin: 16px 0; border-radius: 4px; overflow: hidden; border: 1px solid var(--line-2); }
+  .code-cap {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--faint);
+    padding: 8px 14px; background: var(--sunk); border-bottom: 1px solid var(--line);
+  }
+  pre {
+    margin: 0; padding: 14px 16px; overflow-x: auto;
+    background: var(--code-bg); color: var(--code-ink);
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.62;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; white-space: pre; color: inherit; }
+
+  /* ── Tables ───────────────────────────────────────────────────────── */
+  .tw { overflow-x: auto; margin: 18px 0; border: 1px solid var(--line-2); border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; min-width: 540px; font-size: 14px; background: var(--surface); }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--faint); background: var(--sunk); font-weight: 600;
+  }
+  tr:last-child td { border-bottom: 0; }
+  td code { white-space: normal; }
+
+  /* ── Graph diagram ────────────────────────────────────────────────── */
+  .graph { margin: 22px 0; padding: 20px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 4px; overflow-x: auto; box-shadow: var(--shadow); }
+  .graph pre { background: none; color: var(--ink); padding: 0; font-size: 12px; line-height: 1.75; }
+
+  /* ── Node spec cards ──────────────────────────────────────────────── */
+  .spec { border: 1px solid var(--line-2); border-radius: 4px; margin: 14px 0; background: var(--surface); overflow: hidden; }
+  .spec > summary {
+    cursor: pointer; padding: 11px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline;
+    font-family: var(--mono); font-size: 13px; list-style: none;
+  }
+  .spec > summary::-webkit-details-marker { display: none; }
+  .spec > summary::before { content: "▸"; color: var(--faint); font-size: 11px; }
+  .spec[open] > summary::before { content: "▾"; }
+  .spec[open] > summary { border-bottom: 1px solid var(--line); }
+  .spec .k { font-weight: 650; color: var(--ink); }
+  .spec .t {
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); border: 1px solid var(--line-2); border-radius: 2px; padding: 1px 6px;
+  }
+  .spec .body { padding: 4px 16px 14px; }
+  .spec .body > p:first-child { margin-top: 12px; }
+
+  .kbd {
+    font-family: var(--mono); font-size: 11.5px; border: 1px solid var(--line-2);
+    border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; background: var(--surface); white-space: nowrap;
+  }
+
+  footer { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 22px; color: var(--faint); font-size: 13.5px; }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">Hands-on shakedown · 2026-08-19</p>
+    <h1>Orkest Shakedown</h1>
+    <p class="standfirst">
+      Everything the platform can actually do, driven by hand, in the order the dependencies demand.
+      Your own documents — not the seed. A ten-node graph with <strong>two agents, all three tool types,
+      a real external API, a branch and an approval gate</strong>. A signed webhook you build yourself.
+      Then the parts designed to fail, on purpose.
+    </p>
+    <div class="facts">
+      <span class="fact"><b>~90 min</b> end to end</span>
+      <span class="fact">OpenAI spend <b>under $0.10</b></span>
+      <span class="fact">Run quota <b>50/day</b> per org</span>
+      <span class="fact">Ten phases, <b>strictly ordered</b></span>
+    </div>
+
+    <div class="note expect" style="margin-top:26px">
+      <span class="tag">Phases 00–08 have now been run · updated 2026-08-21</span>
+      <p>Every phase through 08 was executed against the live stack. <strong>All of it passed</strong> — the guardrail,
+        the cycle and orphan rules, both halves of the tool-delete rule, the signed webhook and its three forgeries, the
+        approval hold in both directions, cron and manual triggers, and the audit trail's Postgres-level immutability.
+        Corrections found along the way are folded in below and marked with the date, so a note dated 2026-08-21 is an
+        observed result rather than a prediction.</p>
+      <p>Two are worth reading before you demo anything: the <a href="#p6">phase 06</a> note on the approval gate firing
+        on retrieval uncertainty rather than on value, and the <a href="#p3">phase 03</a> note on a redirect being
+        silently accepted as a tool result.</p>
+    </div>
+  </header>
+
+  <div class="frame">
+    <nav class="rail" aria-label="Phases">
+      <p class="rail-title">Phases</p>
+      <a href="#p0"><span>00</span> Cold start</a>
+      <a href="#p1"><span>01</span> Your corpus</a>
+      <a href="#p2"><span>02</span> The registry</a>
+      <a href="#p3"><span>03</span> The graph</a>
+      <a href="#p4"><span>04</span> Break it</a>
+      <a href="#p5"><span>05</span> Sign &amp; fire</a>
+      <a href="#p6"><span>06</span> The gate</a>
+      <a href="#p7"><span>07</span> Other triggers</a>
+      <a href="#p8"><span>08</span> Governance</a>
+      <a href="#p9"><span>09</span> Ceilings</a>
+      <a href="#ref"><span>——</span> Reference</a>
+    </nav>
+
+    <main>
+
+      <!-- ══════════════════════════════════════════════════════ 00 -->
+      <section id="p0">
+        <div class="phase-head"><span class="phase-num">00</span><h2>Cold start</h2></div>
+        <p class="phase-sub">Five minutes. Get the stack honest before you build anything on top of it.</p>
+
+        <ol class="steps">
+          <li>
+            <p><strong>Bring everything up and confirm all eight services.</strong></p>
+            <div class="code">
+              <div class="code-cap">terminal</div>
+<pre><code>cd infra &amp;&amp; docker compose up -d
+docker compose ps --format 'table {{.Name}}\t{{.Status}}'</code></pre>
+            </div>
+            <p>You want <code>postgres</code>, <code>redis</code>, <code>minio</code>, <code>api</code>,
+              <code>worker_workflow</code>, <code>worker_documents</code>, <code>worker_notifications</code>, <code>beat</code>.</p>
+          </li>
+          <li>
+            <p><strong>Start the frontend</strong> — <code>cd apps/web &amp;&amp; npm run dev</code> — and sign in at
+              <code>localhost:3000</code>.</p>
+          </li>
+          <li>
+            <p><strong>Confirm your OpenAI key is stored for this org.</strong> Settings → OpenAI API key should show
+              <code>sk-••••94AA</code>. Every agent call and every embedding in this run bills to it.</p>
+          </li>
+        </ol>
+
+        <div class="note trap">
+          <span class="tag">Worth knowing before you start</span>
+          <p><code>worker_documents</code> and <code>worker_workflow</code> do <strong>not</strong> bind-mount
+            <code>src/</code> — only the <code>api</code> container does. If you change anything under
+            <code>src/workers/</code> today, those containers keep running the old code with no error anywhere.
+            <code>docker compose build worker_documents worker_workflow</code> after any such edit.</p>
+        </div>
+
+        <h3>Decide what to do with the seeded data</h3>
+        <p>Your org currently holds the demo seed: two knowledge bases, three tools, three published workflows.
+          You are about to build your own alongside it. Two clean options:</p>
+        <ul>
+          <li><strong>Leave it.</strong> Nothing you build will collide — names differ, and the guardrail tests below
+            don't touch it. Recommended; it gives you a working reference if something you build misbehaves.</li>
+          <li><strong>Start bare.</strong> Delete the three demo workflows, both KBs and the three tools through the UI.
+            Order matters: a knowledge base <strong>409s while a live tool still searches it</strong>, and a tool
+            <strong>409s while a published version still references it</strong>. So archive the workflows first, then
+            delete the tools, then the KBs.</li>
+        </ul>
+        <div class="note why">
+          <span class="tag">Why those 409s exist</span>
+          <p>Both are the same rule in two places: published means immutable, so anything a published version depends on
+            cannot vanish underneath it. Drafts don't block — you're still editing those.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 01 -->
+      <section id="p1">
+        <div class="phase-head"><span class="phase-num">01</span><h2>Your corpus</h2></div>
+        <p class="phase-sub">Put real documents in, watch them become vectors, then calibrate retrieval against them before a
+          single workflow depends on it.</p>
+
+        <h3>Choose your material</h3>
+        <p>Pick <strong>one domain and three or four documents</strong>. The workflow later assumes a purchasing /
+          spend-policy flavour, but anything with rules and thresholds works — an internal handbook, a supplier
+          agreement, a travel policy, a security standard. What matters is that the documents contain
+          <em>specific, checkable statements</em>: a spending limit, a required approval, a notice period. Marketing
+          prose retrieves badly and gives you nothing to verify against.</p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Accepted</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>.pdf</code></td><td>Must have a real text layer. A scanned page raises <code>UnextractableDocumentError</code> — there is no OCR, deliberately.</td></tr>
+              <tr><td><code>.docx</code></td><td>Paragraph text only.</td></tr>
+              <tr><td><code>.md</code> / <code>.txt</code></td><td>Simplest to iterate on. Extension wins over the declared MIME type.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Hard ceiling: <strong>20 MB per file</strong>.</p>
+
+        <ol class="steps">
+          <li>
+            <p><strong>Create the knowledge base.</strong> Knowledge → New. Name it something you'll recognise in a
+              tool dropdown later — <em>Spend policy</em>. Leave the embedding model on
+              <code>text-embedding-3-small</code>.</p>
+            <div class="note why">
+              <span class="tag">Why -small</span>
+              <p>Both models are requested at 1536 dimensions, so they're interchangeable in the schema and the shared
+                index — but <code>-small</code> is 6.5× cheaper, and you'll re-index while iterating.
+                <strong>The choice is permanent in practice:</strong> <code>embedding_model</code> is deliberately absent
+                from the update schema, because changing it invalidates every chunk already stored. Pick it once.</p>
+            </div>
+          </li>
+          <li>
+            <p><strong>Drop your files onto the dropzone.</strong> Each becomes a row that polls
+              <code>Queued → Processing → Indexed</code>. Polling stops the moment nothing is in flight.</p>
+            <div class="note expect">
+              <span class="tag">Expect</span>
+              <p>All documents reach <strong>Indexed</strong> within a few seconds each. A failure shows
+                <strong>Failed</strong> with the actual reason on the row — that column exists precisely so a bad upload
+                isn't a silent no-op.</p>
+            </div>
+          </li>
+          <li>
+            <p><strong>Drag the same file in again.</strong> It should report that it is already indexed and that
+              nothing was charged.</p>
+            <div class="note why">
+              <span class="tag">What you just proved</span>
+              <p>Deduplication happens at <em>upload</em>, on a content hash of the bytes — not just on re-ingestion.
+                That's the difference between a cost control and a retry guard, and it's what keeps an afternoon of
+                iteration inside a few cents.</p>
+            </div>
+          </li>
+          <li>
+            <p><strong>Open the chunk inspector</strong> on your longest document. Read three or four chunks end to end.</p>
+            <p>Chunking packs whole paragraphs rather than sliding a fixed token window, so a chunk should read as
+              coherent prose. If your chunks cut mid-sentence, the source formatting is fighting the extractor — worth
+              knowing now rather than after a bad answer.</p>
+          </li>
+        </ol>
+
+        <h3>Calibrate the score floor — do not skip this</h3>
+        <p>The retrieval playground is the only place you can see what the cutoff would discard, because it searches with
+          <code>score_floor: 0</code> and draws the 0.3 default as a line instead of applying it.</p>
+
+        <ol class="steps">
+          <li><strong>Ask a question your corpus definitely answers.</strong> Note the top score.</li>
+          <li><strong>Ask something completely unrelated</strong> — "what is the refund policy for parrots". Note that score too.</li>
+          <li><strong>Ask a near-miss</strong>: adjacent to your domain but genuinely not covered. This is the one that matters.</li>
+        </ol>
+
+        <div class="note expect">
+          <span class="tag">Expect</span>
+          <p>A good hit lands well above the line; the nonsense query lands far below it and is marked as discarded.
+            If your near-miss sits <em>above</em> 0.3, your floor is too low for this corpus — remember the number, you'll
+            set it on the tool in the next phase.</p>
+        </div>
+        <div class="note trap">
+          <span class="tag">Trap</span>
+          <p>Cosine scores are only comparable <em>within one corpus and one embedding model</em>. A 0.42 here means
+            nothing about a 0.42 in the demo KB. Calibrate per knowledge base, every time.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 02 -->
+      <section id="p2">
+        <div class="phase-head"><span class="phase-num">02</span><h2>The registry</h2></div>
+        <p class="phase-sub">Three tools, one of each type — including a real external API on the public internet.
+          Register them before you build the graph, so the builder can offer them.</p>
+
+        <div class="note why">
+          <span class="tag">How to read every config block in this document</span>
+          <p>The JSON blocks below and throughout phase 03 are <strong>the row as it is stored</strong> — not something
+            you type. The tool dialog and the node inspector are ordinary forms: dropdowns, labelled inputs, a key/value
+            editor for headers, a row-per-property builder for output schemas. There is no JSON textarea on the path
+            you'll walk today, and <strong>nothing anywhere asks you to paste a UUID</strong>. The stored shapes are
+            reproduced because a node override merges against them, and because these field names are what the error
+            messages name when something is rejected.</p>
+        </div>
+
+        <div class="note why">
+          <span class="tag">Registry vs inline — the thing to understand first</span>
+          <p>A node can carry its tool config <em>inline</em>, or point at a <em>registry</em> row by <code>tool_id</code>.
+            The merge is deliberately asymmetric: a node may override only
+            <code>body</code> / <code>body_fields</code> / <code>payload</code> / <code>payload_fields</code> /
+            <code>query</code> / <code>query_fields</code> — the per-usage wiring. The <code>url</code>,
+            <code>method</code>, <code>headers</code>, <code>action</code>, <code>knowledge_base_id</code> and
+            <code>is_mutating</code> stay registry-owned. Otherwise a node could re-point a reviewed endpoint while the
+            publish gate went on reading <code>is_mutating: false</code> off a row that no longer describes it.</p>
+          <p><strong>And inline always wins.</strong> If a node has both, <code>tool_type</code> beats <code>tool_id</code>.
+            Use registry mode today — you want the audit rows it produces.</p>
+        </div>
+
+        <h3>Tool 1 — retrieval over your corpus</h3>
+        <p>Tools → New. Set <strong>Type</strong> to <em>Knowledge search</em> — the one field that is immutable
+          after create, because changing it orphans the type-specific config. The rest of the dialog is four controls:</p>
+        <ul>
+          <li><strong>Search in</strong> — a dropdown listing this workspace's knowledge bases <em>by name</em>.
+            Pick <em>Spend policy</em>. If the list is empty it tells you so rather than leaving you with a dead box.</li>
+          <li><strong>Default question</strong> — <code>spending approval threshold</code>.</li>
+          <li><strong>Passages to retrieve</strong> — <code>5</code>.</li>
+          <li><strong>Minimum score</strong> — whatever you calibrated in the last phase.</li>
+        </ul>
+        <p>Which stores as:</p>
+        <div class="code">
+          <div class="code-cap">name: policy_search · type: knowledge_search · mutating: no</div>
+<pre><code>{
+  "tool_type": "knowledge_search",
+  "knowledge_base_id": "&lt;resolved from the dropdown&gt;",
+  "query": "spending approval threshold",
+  "top_k": 5,
+  "score_floor": 0.3
+}</code></pre>
+        </div>
+        <p><strong>Default question</strong> is required even though every node will override it — a config with
+          neither <code>query</code> nor <code>query_fields</code> is rejected outright, because a retrieval tool that
+          cannot state its question is not executable.</p>
+        <div class="note why">
+          <span class="tag">Why a picker and not a field</span>
+          <p>The backend resolves the knowledge base against the <code>organization_id</code> taken from the run row,
+            so a hand-typed id belonging to another tenant fails at execution with a config error rather than leaking
+            anything. But failing at run time is a poor substitute for not offering the mistake — so the control only
+            ever lists bases in your own workspace.</p>
+        </div>
+        <div class="note trap">
+          <span class="tag">Trap — and note where it is enforced</span>
+          <p>A <code>knowledge_search</code> tool cannot be marked mutating; the API rejects
+            <code>is_mutating: true</code> on one outright. In the dialog you won't find the switch at all — it is
+            <em>hidden</em> rather than disabled, because there is no decision to present. Retrieval is read-only, and
+            forcing an approval gate upstream of a pure read makes the gate routine, which is exactly what strips it
+            of meaning.</p>
+        </div>
+
+        <h3>Tool 2 — a real external API</h3>
+        <p>This is the one that proves the platform reaches outside itself. Frankfurter is a live public FX rate service:
+          no key, no signup, real data.</p>
+        <p>Type <em>HTTP request</em>, <strong>Method</strong> <code>GET</code>, the URL below, <strong>Timeout</strong>
+          <code>15</code>, and leave <strong>Headers</strong> empty — that control is a key/value editor with an
+          <em>Add header</em> button, not a JSON field. Stored shape:</p>
+        <div class="code">
+          <div class="code-cap">name: fx_lookup · type: http_request · mutating: no</div>
+<pre><code>{
+  "tool_type": "http_request",
+  "url": "https://api.frankfurter.app/latest?from=EUR&amp;to=USD",
+  "method": "GET",
+  "headers": {},
+  "timeout_seconds": 15
+}</code></pre>
+        </div>
+        <div class="note trap">
+          <span class="tag">The URL is static — there is no interpolation</span>
+          <p>You cannot build <code>/latest?from={{currency}}</code>. State reaches a request through
+            <code>body_fields</code> on a POST body, never through the URL. That's a real constraint on today's build;
+            plan the graph around it rather than fighting it.</p>
+        </div>
+        <p>If Frankfurter is unreachable from your network, substitute <code>https://postman-echo.com/get</code> —
+          you lose the meaningful data but keep the round trip.</p>
+
+        <h3>Tool 3 — the mutating write</h3>
+        <p>The only one flagged <code>is_mutating</code>. This is what arms the guardrail in phase 04.</p>
+        <p>Type <em>ERP connector</em>, then pick <strong>Action</strong> from a two-item dropdown and turn on
+          <strong>Writes to an external system</strong>. There is no payload editor here by design — the dialog says
+          so in as many words, because anything it collected would be replaced by the first node that wired a payload
+          up. Stored shape:</p>
+        <div class="code">
+          <div class="code-cap">name: erp_post_entry · type: erp_connector · MUTATING</div>
+<pre><code>{
+  "tool_type": "erp_connector",
+  "action": "create_journal_entry",
+  "is_mutating": true,
+  "payload": {}
+}</code></pre>
+        </div>
+        <div class="note why">
+          <span class="tag">Honest about what this is</span>
+          <p><code>erp_connector</code> makes <strong>no network call</strong>. It returns
+            <code>MOCK-&lt;uuid&gt;</code>. It exists so the mutating-action mechanism — the guardrail, the gate, the
+            audit trail — can be proven end to end before a vendor adapter exists. Everything around it is real; only
+            the far end is simulated.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 03 -->
+      <section id="p3">
+        <div class="phase-head"><span class="phase-num">03</span><h2>The graph</h2></div>
+        <p class="phase-sub">Ten nodes. Two agents, all three tool types, a branch that rejoins, and a human gate in front
+          of the only write. This is the most complex thing the engine can currently express.</p>
+
+        <div class="graph">
+<pre>  start_1
+     │
+  agent_1 ............... agent · reads the webhook payload
+     │
+  tool_1 ................ tool · knowledge_search → YOUR corpus
+     │
+  tool_2 ................ tool · http_request → api.frankfurter.app
+     │
+  agent_2 ............... agent · decides, cites, sets account_code
+     │
+  condition_1 ........... condition
+     ├── requires_approval == true ──→ approval_1 ──┐
+     │                                              │  human gate
+     └── (else) ─────────────────────→ tool_3 ──────┤  http_request → echo
+                                                    │
+                                                tool_4 ... MUTATING
+                                                    │
+                                                 end_1</pre>
+        </div>
+
+        <p>Create a workflow with trigger type <strong>webhook</strong>, open the builder, and drop the nodes.</p>
+
+        <div class="note trap">
+          <span class="tag">You do not name the nodes — and the order you add them decides the names</span>
+          <p>Node keys are assigned by <code>nextNodeKey()</code> as <code>&lt;prefix&gt;_&lt;n&gt;</code> the moment a
+            node lands on the canvas. Since 2026-08-20 the config panel's header <strong>is</strong> an editable key
+            field, and renaming rewrites both ends of every touching edge and every
+            <code>node_outputs.&lt;key&gt;</code> path that referenced it — but the graph below is written against the
+            keys as assigned, so leave them alone today and the paths will match. The graph is keyed
+            <code>agent_1</code>, <code>tool_1</code>, <code>condition_1</code> … not <code>extract</code>,
+            <code>policy_lookup</code>, <code>route</code>. Every dotted path below is written against the real keys.</p>
+          <p><strong>Add the nodes in the order given here.</strong> The number is just a per-type counter, so adding
+            the ERP tool before the retrieval tool makes it <code>tool_1</code> and silently invalidates every path you
+            copy from this page. Order: start, agent, tool (policy), tool (fx), agent, condition, approval,
+            tool (echo), tool (ERP), end.</p>
+        </div>
+
+        <div class="note why">
+          <span class="tag">Two defaults that will catch you</span>
+          <p>Every <strong>Tool</strong> node opens on <em>Inline config</em>, not <em>Registry tool</em> — you must
+            switch it on each of the four. And the inline panel states the real reason to prefer registry:
+            <em>“An inline tool leaves no row in the tool execution log — that trail needs a registry tool to point
+            at.”</em> That is a stronger argument than the override-merge asymmetry described above.</p>
+        </div>
+
+        <details class="spec">
+          <summary><span class="k">agent_1</span> <span class="t">agent · was “extract”</span></summary>
+          <div class="body">
+            <p>Turns the raw webhook body into structured fields. Note the anti-hallucination instruction — it matters more
+              than it looks, because everything downstream cites these numbers.</p>
+            <div class="code">
+              <div class="code-cap">node config</div>
+<pre><code>{
+  "model": "gpt-4.1-mini",
+  "temperature": 0,
+  "input_fields": ["trigger_payload"],
+  "system_prompt": "You read an incoming purchase request and restate it as structured data. Copy figures exactly as they appear. Never invent a value that is not present in the input.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "vendor":     { "type": "string" },
+      "amount":     { "type": "number" },
+      "currency":   { "type": "string" },
+      "category":   { "type": "string" },
+      "line_count": { "type": "integer" },
+      "summary":    { "type": "string" }
+    }
+  }
+}</code></pre>
+            </div>
+            <div class="note trap">
+              <span class="tag">Every property is mandatory</span>
+              <p>The schema is normalised for OpenAI strict mode before it is sent:
+                <code>additionalProperties: false</code> is forced, and <code>required</code> is filled with
+                <strong>every declared property</strong>. There are no optional fields, and you do not control that
+                array. If a value can legitimately be absent, tick <strong>Nullable</strong> on its row in the schema
+                builder — that is what emits <code>{"type": ["string", "null"]}</code>. Omitting a property from
+                <code>required</code> is not available to you and would not help if it were.</p>
+            </div>
+          </div>
+        </details>
+
+        <details class="spec">
+          <summary><span class="k">tool_1</span> <span class="t">tool · registry · was “policy_lookup”</span></summary>
+          <div class="body">
+            <p>Switch <strong>Source</strong> to <em>Registry tool</em>, then pick <code>policy_search</code>. The KB, <code>top_k</code> and
+              <code>score_floor</code> render read-only — registry-owned. Override only the query:</p>
+            <div class="code">
+              <div class="code-cap">node override</div>
+<pre><code>{
+  "query_fields": { "query": "node_outputs.agent_1.summary" }
+}</code></pre>
+            </div>
+            <p>The agent's own summary becomes the retrieval query. That's the whole RAG hop.</p>
+          </div>
+        </details>
+
+        <details class="spec">
+          <summary><span class="k">tool_2</span> <span class="t">tool · registry · was “fx_rate”</span></summary>
+          <div class="body">
+            <p>Switch to <em>Registry tool</em> and pick <code>fx_lookup</code>. No override — the URL is static and it's a GET. This node exists to prove the
+              platform makes a real outbound call and puts the response into graph state.</p>
+            <div class="note expect">
+              <span class="tag">Expect in the run timeline</span>
+              <p>Output shaped <code>{ "status_code": 200, "body": { "amount": 1, "base": "EUR", "rates": { "USD": … } } }</code>.
+                <strong>Headers are never echoed</strong> — request headers routinely carry bearer tokens, and this output
+                is rendered in the viewer.</p>
+            </div>
+            <div class="note trap">
+              <span class="tag">This only works because of a fix on 2026-08-21</span>
+              <p><code>api.frankfurter.app</code> now answers <strong>301</strong> at Cloudflare. httpx does not follow
+                redirects by default, and a 3xx is below 500 and not retryable — so the node used to store
+                <code>{ "status_code": 301, "body": "&lt;html&gt;…Moved Permanently…" }</code> and the agent downstream
+                reasoned over that HTML as though it were an FX rate, with nothing reporting a failure anywhere.
+                <code>get_http_client</code> now follows redirects (max 5). Worth knowing because it is the exact shape
+                of a silent tool failure: a successful-looking status and a body that means nothing.</p>
+            </div>
+          </div>
+        </details>
+
+        <details class="spec">
+          <summary><span class="k">agent_2</span> <span class="t">agent · was “assess”</span></summary>
+          <div class="body">
+            <p>The decision node. It reads all three upstream outputs and must ground its verdict in the retrieved text.</p>
+            <div class="code">
+              <div class="code-cap">node config</div>
+<pre><code>{
+  "model": "gpt-4.1-mini",
+  "temperature": 0,
+  "input_fields": [
+    "node_outputs.agent_1",
+    "node_outputs.tool_1",
+    "node_outputs.tool_2"
+  ],
+  "system_prompt": "You review a purchase request against retrieved policy text. Decide whether it needs human approval. Quote the specific policy sentence you relied on in policy_citation; if the retrieved text does not cover this case, say so plainly and set requires_approval to true. Choose account_code only from a coding table present in the retrieved text; if none is present, use 9999.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "requires_approval": { "type": "boolean" },
+      "risk_score":        { "type": "number" },
+      "account_code":      { "type": "string" },
+      "policy_citation":   { "type": "string" },
+      "rationale":         { "type": "string" }
+    }
+  }
+}</code></pre>
+            </div>
+            <p><strong>Adapt the prompt to your corpus.</strong> If your documents have no account-coding table, the
+              <code>9999</code> fallback keeps the ERP node satisfied. If they do, watch whether it finds the right one —
+              that's the single best signal that retrieval is genuinely working.</p>
+          </div>
+        </details>
+
+        <details class="spec">
+          <summary><span class="k">condition_1</span> <span class="t">condition · was “route”</span></summary>
+          <div class="body">
+            <p>Empty config — <code>{}</code>. A condition node carries nothing; the branching lives on its
+              <strong>outgoing edges</strong>.</p>
+          </div>
+        </details>
+
+        <details class="spec">
+          <summary><span class="k">approval_1</span> <span class="t">human_approval</span></summary>
+          <div class="body">
+            <p>Empty config. There is no message field, and adding one is not the answer — the approval sentence the
+              reviewer sees is <em>derived</em> from upstream node outputs at render time.</p>
+          </div>
+        </details>
+
+        <details class="spec">
+          <summary><span class="k">tool_3</span> <span class="t">tool · inline · was “auto_note”</span></summary>
+          <div class="body">
+            <p>The auto-approved branch. Inline rather than registry, so you exercise both paths in one graph — and it's
+              the only place you'll see <code>body_fields</code> state-mapping proven, because the echo service reflects
+              exactly what you sent.</p>
+            <div class="code">
+              <div class="code-cap">node config · inline</div>
+<pre><code>{
+  "tool_type": "http_request",
+  "url": "https://postman-echo.com/post",
+  "method": "POST",
+  "headers": { "Content-Type": "application/json" },
+  "body": { "channel": "spend-auto" },
+  "body_fields": {
+    "vendor": "node_outputs.agent_1.vendor",
+    "amount": "node_outputs.agent_1.amount",
+    "reason": "node_outputs.agent_2.rationale"
+  },
+  "timeout_seconds": 15
+}</code></pre>
+            </div>
+            <p><code>body</code> is the static base; <code>body_fields</code> merges resolved state over it.</p>
+          </div>
+        </details>
+
+        <details class="spec">
+          <summary><span class="k">tool_4</span> <span class="t">tool · registry · MUTATING · was “post_to_erp”</span></summary>
+          <div class="body">
+            <p>Switch to <em>Registry tool</em> and pick <code>erp_post_entry</code> — the picker tags it with an amber <code>writes</code> marker. Override the payload wiring only:</p>
+            <div class="code">
+              <div class="code-cap">node override</div>
+<pre><code>{
+  "payload_fields": {
+    "vendor":       "node_outputs.agent_1.vendor",
+    "amount":       "node_outputs.agent_1.amount",
+    "account_code": "node_outputs.agent_2.account_code"
+  }
+}</code></pre>
+            </div>
+            <p>The mapping control is a two-column editor — destination key on the left, dotted state path on the
+              right — with an <em>Add mapping</em> button. You are picking and typing paths, not authoring JSON.</p>
+            <div class="note trap">
+              <span class="tag">What the editor catches, and the one thing it can't</span>
+              <p><code>create_journal_entry</code> requires <code>vendor</code>, <code>amount</code> and
+                <code>account_code</code> to be non-null. Two of the three ways to get this wrong <em>are</em> caught
+                on the canvas: leave a required key out entirely and the field shows
+                <em>“Missing at run time: …”</em>; mistype the <strong>root</strong> of a path and the editor warns
+                that it is not a state root and will resolve to <code>null</code>.</p>
+              <p><strong>What nothing catches is a typo further along a valid root.</strong>
+                <code>node_outputs.agent_1.vendr</code> has a legitimate root, passes both checks, resolves to
+                <code>null</code>, and fails the run mid-flight — <em>after</em> the approval was given. That is the
+                one to proofread, and it is the only one.</p>
+            </div>
+          </div>
+        </details>
+
+        <h3>The edges — and the one ordering rule</h3>
+        <div class="tw">
+          <table>
+            <thead><tr><th>From → To</th><th>Condition</th></tr></thead>
+            <tbody>
+              <tr><td><code>start_1 → agent_1</code></td><td>—</td></tr>
+              <tr><td><code>agent_1 → tool_1</code></td><td>—</td></tr>
+              <tr><td><code>tool_1 → tool_2</code></td><td>—</td></tr>
+              <tr><td><code>tool_2 → agent_2</code></td><td>—</td></tr>
+              <tr><td><code>agent_2 → condition_1</code></td><td>—</td></tr>
+              <tr><td><b>1st</b> <code>condition_1 → approval_1</code></td><td><code>node_outputs.agent_2.requires_approval</code> <code>eq</code> <code>true</code></td></tr>
+              <tr><td><b>2nd</b> <code>condition_1 → tool_3</code></td><td>none — the fallback</td></tr>
+              <tr><td><code>approval_1 → tool_4</code></td><td>—</td></tr>
+              <tr><td><code>tool_3 → tool_4</code></td><td>—</td></tr>
+              <tr><td><code>tool_4 → end_1</code></td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note trap">
+          <span class="tag">Create the conditional edge before the fallback</span>
+          <p>Outgoing edges are evaluated <strong>in order, first match wins</strong>, and an edge with no condition
+            <em>always</em> matches. Draw the unconditional edge first and it swallows every request — the approval branch
+            becomes unreachable and nothing warns you. If none match, the <strong>last</strong> edge is taken.</p>
+        </div>
+
+        <p>Available operators: <code>eq</code> <code>neq</code> <code>gt</code> <code>gte</code> <code>lt</code>
+          <code>lte</code> <code>in</code> <code>contains</code>. There is no expression language and no
+          <code>eval</code> — a structured <code>field / operator / value</code> triple is the whole DSL, on purpose.</p>
+        <p>The <strong>Value</strong> box parses what you type and reports what it decided: enter <code>true</code> and
+          the hint under the field reads <em>“Typed as a boolean”</em>. Quote it to force a string — <code>0.8</code> is
+          a number, <code>"0.8"</code> is text. Read that line rather than guessing.</p>
+
+        <div class="note gate">
+          <span class="tag">Notice what this graph does to the guardrail</span>
+          <p><code>tool_4</code> is mutating, and the <strong>auto branch reaches it without passing an approval</strong>.
+            Publishing still succeeds. That is <em>∃-semantics</em>, and it is deliberate: a mutating node passes if
+            <em>any</em> human approval exists among its ancestors, not if every path reaches one. Requiring every path
+            would reject the reference workflows the platform was specified against. Know this before you rely on the
+            gate as an absolute — it is a design-time prompt to think, not a runtime interlock on every branch.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 04 -->
+      <section id="p4">
+        <div class="phase-head"><span class="phase-num">04</span><h2>Break it</h2></div>
+        <p class="phase-sub">Four deliberate failures. Do these <em>before</em> publishing for real — this is the part of the
+          product worth demonstrating to anyone, and each takes under a minute.</p>
+
+        <div class="note expect">
+          <span class="tag">All four ran on 2026-08-21 — and the canvas is faster than described below</span>
+          <p>Each test is written as “save, then try to publish”. In practice the canvas flags every one of them
+            <strong>the moment you make the mistake</strong>, with the offending node outlined and the reason on hover —
+            you never have to reach Publish to see it. Publish is still the authority and still returns a real
+            <strong>HTTP 422</strong>; the toast just says <em>“Publish rejected — see the highlighted nodes”</em> and
+            leaves the naming to the node itself. Do both halves: the inline flag is the daily experience, the 422 is
+            the guarantee.</p>
+        </div>
+
+        <h3>Test A — the mutating-action guardrail</h3>
+        <ol class="steps">
+          <li>Delete <code>approval_1</code> and reconnect <code>route → post_to_erp</code> directly.</li>
+          <li>Save. <strong>It saves fine.</strong></li>
+          <li>Hit Publish.</li>
+        </ol>
+        <div class="note gate">
+          <span class="tag">Expect · HTTP 422</span>
+          <p>Rejected, naming <code>post_to_erp</code> specifically. Not a warning, not a toast you can dismiss — the
+            version does not become publishable. Put the approval node back.</p>
+        </div>
+        <div class="note why">
+          <span class="tag">Why it saved but wouldn't publish</span>
+          <p>Draft and publish validate at different strictnesses, deliberately. The canvas autosaves after every node
+            you drop, and every intermediate graph is broken by definition — so a draft only checks the two rules that
+            would corrupt storage. Start/end presence, orphans, cycles and the approval walk are all publish-time.</p>
+        </div>
+
+        <h3>Test B — a cycle</h3>
+        <p>Drag an edge from <code>assess</code> back to <code>extract</code>. The canvas should flag it inline before you
+          even try to publish. Loops are not supported; the compiler builds a DAG.</p>
+
+        <h3>Test C — an orphan</h3>
+        <p>Drop a bare agent node on the canvas and connect nothing. Save — fine. Publish — rejected. Delete it.</p>
+
+        <h3>Test D — a tool that vanishes underneath a node</h3>
+        <p>Which of the two outcomes you get depends on whether anything <em>published</em> still points at the tool,
+          so run both halves.</p>
+        <ol class="steps">
+          <li><strong>Published reference → 409.</strong> Tools → <code>fx_lookup</code> → Delete. It is refused:
+            <em>“Cannot delete tool because 1 node(s) in published workflow version(s) reference it.”</em> Note that this
+            is rendered <strong>in the dialog</strong>, not as a toast you might miss.</li>
+          <li><strong>Draft-only reference → 204, then <code>unknown_tool</code>.</strong> Register a throwaway HTTP
+            tool, point <code>tool_2</code> at it in the draft, then delete it. The delete succeeds — a draft is still
+            being edited and does not block — and the node turns red on the canvas with
+            <em>“tool_2 points at a tool that is no longer in the registry.”</em> Re-select <code>fx_lookup</code>.</li>
+        </ol>
+        <div class="note why">
+          <span class="tag">Both deletes are SOFT</span>
+          <p>The row is flagged inactive, never removed: <code>tool_executions.tool_id</code> is NOT NULL with
+            <code>ON DELETE CASCADE</code>, so a hard delete would erase the very audit trail the mutating-tool rule
+            exists to create. The dialog says as much — <em>“Existing runs and the tool's execution history are kept.”</em></p>
+        </div>
+
+        <p>Now fix everything and <strong>publish for real</strong>. Note the version number.</p>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 05 -->
+      <section id="p5">
+        <div class="phase-head"><span class="phase-num">05</span><h2>Sign &amp; fire</h2></div>
+        <p class="phase-sub">Generate the signing secret, build a signed request by hand, and confirm that forged ones are
+          indistinguishable from unknown ones.</p>
+
+        <ol class="steps">
+          <li>
+            <p>On the workflow detail page, open the <strong>Webhook secret</strong> card and generate one.</p>
+            <div class="note trap">
+              <span class="tag">Shown exactly once</span>
+              <p>Copy it now. It is encrypted at rest, not hashed — HMAC verification needs the plaintext — and there is
+                no code path that reads it back out. Lose it and your only option is rotation.</p>
+            </div>
+          </li>
+          <li><p>Save this script and fill in the two constants at the top.</p></li>
+        </ol>
+
+        <div class="code">
+          <div class="code-cap">fire.py — the only thing you need to trigger a signed run</div>
+<pre><code>import hashlib, hmac, json, time, urllib.request
+
+WORKFLOW_ID = "&lt;workflow uuid from the URL&gt;"
+SECRET      = "&lt;the secret you just copied&gt;"
+URL = f"http://localhost:8000/api/v1/triggers/workflows/{WORKFLOW_ID}"
+
+payload = {
+    "request_ref": "PR-4471",
+    "requester":   {"name": "A. Novak", "department": "Sales"},
+    "vendor":      {"name": "Acme Vendor LLC", "supplier_ref": "SUP-0442"},
+    "currency":    "EUR",
+    "lines": [
+        {"description": "Component assembly AC-2291-B", "qty": 120,
+         "unit_price": 35.0, "line_total": 4200.0}
+    ],
+    "total": 4200.0,
+}
+
+body      = json.dumps(payload).encode()          # sign the EXACT bytes you send
+timestamp = int(time.time())
+material  = f"{timestamp}.".encode() + body
+signature = "sha256=" + hmac.new(SECRET.encode(), material, hashlib.sha256).hexdigest()
+
+req = urllib.request.Request(URL, data=body, method="POST", headers={
+    "Content-Type":    "application/json",
+    "X-AAP-Timestamp": str(timestamp),
+    "X-AAP-Signature": signature,
+})
+with urllib.request.urlopen(req) as r:
+    print(r.status, r.read().decode())</code></pre>
+        </div>
+
+        <div class="note expect">
+          <span class="tag">Expect · HTTP 202</span>
+          <p>Accepted, with a run id. The run appears in Executions within a second or two.</p>
+        </div>
+
+        <div class="note why">
+          <span class="tag">Two details in that script that are the design</span>
+          <p><strong>The timestamp is inside the signed material.</strong> That's what makes the five-minute freshness
+            window enforceable — change the timestamp to dodge expiry and the signature no longer matches, so a captured
+            request cannot be replayed forever.</p>
+          <p><strong>The signature covers the exact bytes sent</strong>, never re-serialised JSON. Re-encoding
+            <code>payload</code> separately for signing and sending is the classic way to produce a signature that
+            doesn't match the body — key order and spacing both change the hash.</p>
+        </div>
+
+        <h3>Now forge it</h3>
+        <p>Run three variants and compare the responses byte for byte:</p>
+        <ul>
+          <li>Replace the signature with <code>"sha256=" + "0"*64</code>.</li>
+          <li>Set <code>timestamp = int(time.time()) - 4000</code> (outside the window).</li>
+          <li>Point <code>WORKFLOW_ID</code> at a random UUID that doesn't exist.</li>
+        </ul>
+        <div class="note expect">
+          <span class="tag">Expect · three identical 401s</span>
+          <p>Same status, same body, no hint about which failed. This is the only unauthenticated route in the product;
+            a helpful error here would turn it into an oracle for enumerating workflow UUIDs across every tenant with no
+            credentials. The missing-secret path even runs a dummy HMAC so the miss costs the same wall-clock time.</p>
+        </div>
+        <div class="note gate">
+          <span class="tag">And check the quota wasn't touched</span>
+          <p>Forged requests must not consume run quota — otherwise anyone knowing a workflow UUID could exhaust a
+            tenant's whole day. The claim happens <em>after</em> the signature verifies. Your Executions list should
+            show only the one genuine run.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 06 -->
+      <section id="p6">
+        <div class="phase-head"><span class="phase-num">06</span><h2>The gate</h2></div>
+        <p class="phase-sub">Watch a real run hold, read the forensics, then decide it. Both ways.</p>
+
+        <ol class="steps">
+          <li>
+            <p>Open the run from Executions. It polls every ~2.5s and stops on a terminal status.</p>
+          </li>
+          <li>
+            <p><strong>Walk the timeline node by node.</strong> This is the payoff for everything above:</p>
+            <ul>
+              <li><code>extract</code> — structured output, real prompt/completion token counts, real USD.</li>
+              <li><code>policy_lookup</code> — <code>hit_count</code> and the actual chunk text with scores. <em>Read the
+                chunks.</em> If they're irrelevant, your floor or your query mapping is wrong, and nothing downstream can
+                recover from it.</li>
+              <li><code>fx_rate</code> — a live rate from the public internet, sitting in your graph state.</li>
+              <li><code>assess</code> — check <code>policy_citation</code> against what <code>policy_lookup</code>
+                actually returned. <strong>This is the hallucination test.</strong> A citation that doesn't appear in the
+                retrieved text means your prompt isn't holding.</li>
+              <li><code>post_to_erp</code> — still <strong>pending</strong>. Nothing has been written.</li>
+            </ul>
+          </li>
+          <li>
+            <p><strong>Read the approval prompt.</strong> It should name the vendor and the amount, derived from upstream
+              outputs. If it falls back to a generic headline, that's the derivation deciding it couldn't read a figure
+              honestly — by design it never invents one.</p>
+          </li>
+          <li>
+            <p><strong>Approve, with a comment.</strong> The second leg runs; <code>post_to_erp</code> returns
+              <code>MOCK-…</code>; the run completes.</p>
+          </li>
+        </ol>
+
+        <div class="note expect">
+          <span class="tag">Check the duration</span>
+          <p>Total duration should include the time it sat waiting for you, not just the post-approval leg. A paused run
+            costs nothing while it waits — the Celery task exits and the graph state lives in the checkpoint table, so a
+            second task resumes it. That's why the timeline can span minutes with no worker held open.</p>
+        </div>
+
+        <ol class="steps" start="5">
+          <li><strong>Fire it again and reject.</strong> Run status → <code>rejected</code>, and
+            <code>post_to_erp</code> never executes.</li>
+          <li><strong>Fire a third time with a small amount</strong> (change <code>total</code> to <code>85.00</code>)
+            so <code>assess</code> sets <code>requires_approval: false</code>. It should take the
+            <code>auto_note</code> branch, echo your mapped fields back, and complete <em>without stopping</em>.</li>
+        </ol>
+
+        <div class="note trap">
+          <span class="tag">What actually happened on 2026-08-21 — read this before demoing</span>
+          <p>The amounts behaved <strong>backwards</strong>, and the reason matters more than any other note on this
+            page. The EUR 4,200 request <em>did not</em> hold: <code>agent_2</code> set
+            <code>requires_approval: false</code> and it was posted to the ledger with no human involved. The EUR 85
+            one <em>did</em> hold. The policy corpus is unambiguous that anything at or above EUR 1,000 needs approval,
+            so this is not the corpus being wrong.</p>
+          <p>The cause is one mapping. <code>tool_1</code> searches on
+            <code>node_outputs.agent_1.summary</code> — a <em>product description</em> — so it retrieves the account
+            <em>coding</em> guide and never the spend-authority threshold table. On the 4,200 run retrieval came back
+            confident and on-topic (it found the coding guide's worked example for this exact part number), so the agent
+            answered confidently and wrongly. On the 85 run retrieval was vague, so the agent escalated. <strong>The gate
+            is firing on retrieval uncertainty, not on risk.</strong></p>
+          <p>This is what ∃-semantics costs in practice: the auto branch reaches the mutating node with no gate, so the
+            safety of the whole graph rests on one LLM boolean. Fixes worth considering — retrieve against the
+            <em>decision</em> rather than the description, add a second retrieval for thresholds, or put a deterministic
+            value condition upstream of the branch so money decides rather than prose.</p>
+        </div>
+
+        <div class="note why">
+          <span class="tag">Then look at the dashboard</span>
+          <p>Success rate should read 100% with a sample size of 2, not 67%. Rejected runs are excluded from the
+            denominator on purpose: a rejection is the gate working, and counting it as failure would mean an
+            organisation's score drops the more carefully it reviews.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 07 -->
+      <section id="p7">
+        <div class="phase-head"><span class="phase-num">07</span><h2>Other triggers</h2></div>
+        <p class="phase-sub">Two more entry points, ten minutes.</p>
+
+        <h3>Manual, with a payload</h3>
+        <p>Workflows → row menu → <strong>Run now</strong>. Paste the same JSON body into the trigger-payload box.
+          Identical execution, no signature. Blank input parses to <code>{}</code>, so one-click still works for graphs
+          that don't read a payload.</p>
+
+        <h3>Cron</h3>
+        <p>Clone the workflow, set trigger type <strong>schedule</strong>, and give it a cron a couple of minutes out.
+          Crons evaluate in the org's IANA timezone and convert to UTC — <code>0 9 * * 1-5</code> means 9am local.</p>
+        <div class="note expect">
+          <span class="tag">Expect</span>
+          <p><code>beat</code> ticks every 60s; the run appears on its own with <code>actor_type: system</code> in the
+            audit log, and <code>next_run_at</code> re-arms to the next boundary.</p>
+        </div>
+        <div class="note trap">
+          <span class="tag">Two things that will confuse you if you don't know them</span>
+          <p><strong>Catch-up is suppressed.</strong> A workflow six hours overdue fires <em>once</em> and re-arms from
+            now — it never replays the backlog. Deliberate: the alternative is an unattended spend spike.</p>
+          <p><strong>A draft carrying a cron never fires.</strong> Only <code>published</code> workflows with a current
+            version are picked up. Sub-minute crons are rejected outright.</p>
+        </div>
+        <div class="note gate">
+          <span class="tag">Then turn it off</span>
+          <p>Archive the scheduled clone when you're done. An unattended cron pointed at a workflow you're still tuning is
+            the one realistic way to burn an LLM budget overnight.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 08 -->
+      <section id="p8">
+        <div class="phase-head"><span class="phase-num">08</span><h2>Governance</h2></div>
+        <p class="phase-sub">The part an enterprise buyer asks about first. All of it is now real and visible.</p>
+
+        <h3>The audit trail</h3>
+        <p>Open <strong>Audit log</strong>. Every material action from this morning is there: the publish, three run
+          starts, the approval and the rejection, the webhook-secret generation, plus your credential store from earlier.
+          Expand a row to see the verbatim stored <code>metadata</code>.</p>
+        <div class="note expect">
+          <span class="tag">Prove the immutability yourself</span>
+          <div class="code">
+            <div class="code-cap">terminal — this should FAIL</div>
+<pre><code>docker exec aap_postgres psql -h 127.0.0.1 -U aap_user -d aap_db \
+  -c "UPDATE audit_logs SET action = 'nope' WHERE true;"</code></pre>
+          </div>
+          <p>Postgres refuses it — a trigger, not application code. Try <code>DELETE</code> too. The point is that the
+            control does not depend on the API being correct.</p>
+        </div>
+
+        <h3>Roles and members</h3>
+        <ol class="steps">
+          <li>Settings → <strong>Roles &amp; permissions</strong>. Expand the matrix. Note that <strong>Viewer has no
+            audit-trail tick</strong> despite holding a read-everything wildcard — those rows carry actor identity and
+            client IPs, so three read permissions are deliberately exempted from the wildcard.</li>
+          <li><strong>Invite yourself at a second address</strong> as Viewer. Copy the link — no email is sent, and the
+            link is unrecoverable once the dialog closes.</li>
+          <li>Open the link in a private window. It should name the org and the role, and refuse to be accepted by any
+            account other than the addressed one.</li>
+          <li>Accept as the new user, switch org, and confirm the sidebar's <strong>Audit log</strong> renders a locked
+            card rather than data.</li>
+          <li>Back as Owner, use <strong>Change role…</strong> and read the gained/lost diff before applying it.</li>
+          <li>Try to remove yourself. <strong>409</strong> — the last active Owner cannot be removed, because no endpoint
+            could repair an org with nobody able to administer it.</li>
+        </ol>
+
+        <h3>The quota</h3>
+        <p>Your dev cap is <strong>50 runs/day</strong>, so you won't hit it by accident today. To see the 429, drop
+          <code>DAILY_RUN_QUOTA_PER_ORG</code> to <code>2</code> in <code>infra/.env</code>, restart
+          <code>api</code>, and fire three times: <strong>202, 202, 429</strong>, the last carrying a
+          <code>Retry-After</code> counted to the next 00:00 UTC. <strong>Put the value back.</strong></p>
+        <div class="note trap">
+          <span class="tag">No audit row on this path — corrected 2026-08-21</span>
+          <p>An earlier version of this page said a <code>workflow.run.quota_exceeded</code> row appears. It does not,
+            on the HTTP paths. That action is written only by the <em>schedule tick</em>, which cannot raise an HTTP
+            status and would otherwise skip a cron run silently. A tenant that exhausts its quota through the API or a
+            webhook leaves no trace in the trail an admin would actually look at.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ 09 -->
+      <section id="p9">
+        <div class="phase-head"><span class="phase-num">09</span><h2>Ceilings</h2></div>
+        <p class="phase-sub">What will not work today, so you don't spend the morning discovering it. Every one of these is
+          a decision with a reason, not an unfinished edge.</p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>If you try</th><th>What happens, and why</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><b>A subgraph node</b></td>
+                <td>It's in the palette and raises if invoked. Composition is not built.</td>
+              </tr>
+              <tr>
+                <td><b>An agent that calls tools itself</b></td>
+                <td>Not supported. The OpenAI function-call array is built and tested; the loop isn't — because tool calls
+                  an agent emits have <em>no node in the graph</em>, so the publish-time guardrail structurally cannot see
+                  them. Shipping it without a runtime refusal would hollow out the product's main safety property.</td>
+              </tr>
+              <tr>
+                <td><b><code>python_function</code> or <code>mcp</code> tools</b></td>
+                <td>Rejected by name at create time, not stored as rows that explode later.</td>
+              </tr>
+              <tr>
+                <td><b>A loop / retry cycle</b></td>
+                <td>Rejected at publish. The compiler builds a DAG.</td>
+              </tr>
+              <tr>
+                <td><b>Variables in a tool URL</b></td>
+                <td>No interpolation. State reaches a request through <code>body_fields</code> only.</td>
+              </tr>
+              <tr>
+                <td><b>A scanned PDF</b></td>
+                <td>Fails loudly. No OCR — a document that silently indexes to nothing is a KB that answers "I don't know"
+                  forever with nothing explaining why.</td>
+              </tr>
+              <tr>
+                <td><b>Keyword / hybrid search</b></td>
+                <td>Dense vectors only. The full-text index exists and is unqueried — deliberately cut first.</td>
+              </tr>
+              <tr>
+                <td><b>Transferring ownership</b></td>
+                <td>Owner isn't assignable in either direction. It has different consequences from a role change and
+                  deserves its own reviewed operation.</td>
+              </tr>
+              <tr>
+                <td><b>Live run updates</b></td>
+                <td>Polling, not WebSockets. Every poll stops when nothing on screen can still move.</td>
+              </tr>
+              <tr>
+                <td><b>A real ERP write</b></td>
+                <td><code>erp_connector</code> is a mock returning <code>MOCK-&lt;uuid&gt;</code>. Everything around it is real.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ REF -->
+      <section id="ref">
+        <div class="phase-head"><span class="phase-num">——</span><h2>Reference</h2></div>
+        <p class="phase-sub">Keep this open in a second tab.</p>
+
+        <h4>Graph state — the dotted paths</h4>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Path</th><th>What's there</th></tr></thead>
+            <tbody>
+              <tr><td><code>trigger_payload</code></td><td>The webhook body, or the Run-now box, verbatim.</td></tr>
+              <tr><td><code>node_outputs.&lt;node_key&gt;</code></td><td>That node's output, keyed by its <em>node key</em>. An agent's parsed object sits here directly — <code>node_outputs.agent_1.amount</code>, not <code>.output.amount</code>. Keys are auto-assigned
+                (<code>agent_1</code>, <code>tool_1</code>, …) and are renameable from the config panel header, which
+                rewrites every dotted path that referenced the old key.</td></tr>
+              <tr><td><code>organization_id</code></td><td>Seeded from the run row. Never from node config — that's what scopes retrieval.</td></tr>
+              <tr><td><code>run_id</code></td><td>This run.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>A path that doesn't resolve returns <code>null</code> rather than raising. The mapping editor flags an
+          unrecognised <em>root</em> before you leave the canvas, but everything after the first dot is unchecked —
+          so proofread the tail of every path.</p>
+
+        <h4>Troubleshooting</h4>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Symptom</th><th>Cause</th></tr></thead>
+            <tbody>
+              <tr><td>Run sits at <code>pending</code> forever</td><td><code>worker_workflow</code> isn't consuming. <code>docker compose logs worker_workflow</code>.</td></tr>
+              <tr><td>Document stuck at <code>processing</code></td><td><code>worker_documents</code> down, or MinIO unreachable.</td></tr>
+              <tr><td>Every document <code>failed</code></td><td>No OpenAI key resolvable for the org. Settings → OpenAI API key.</td></tr>
+              <tr><td>Publish 422 naming a node</td><td>The mutating-approval walk, or an unresolvable <code>tool_id</code>. The message names the node key.</td></tr>
+              <tr><td>Run fails at the ERP node <em>after</em> approval</td><td>A <code>payload_fields</code> path resolved to <code>null</code>. Required keys are checked at run time.</td></tr>
+              <tr><td>Agent node raises on config</td><td>Missing <code>system_prompt</code> or <code>output_schema</code>. Both are mandatory — structured output is not optional.</td></tr>
+              <tr><td>Retrieval returns 0 hits</td><td>Floor too high, or the query field resolved empty. An empty hit list is a <em>result</em>, not an error — the run continues.</td></tr>
+              <tr><td>Webhook 401 on a request you believe is correct</td><td>Body re-serialised between signing and sending, or clock skew &gt; 5 min.</td></tr>
+              <tr><td>Approval branch never taken</td><td>The unconditional edge was created first and swallowed everything.</td></tr>
+              <tr><td>429 on trigger</td><td>Daily quota. Rejected attempts also increment the counter.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Two things this morning cannot verify</h4>
+        <ul>
+          <li><strong>The landing page on a real phone.</strong> Open <code>localhost:3000</code> on your handset —
+            the room photograph is a 1.51-aspect image and a portrait viewport crops it hard. Genuinely never been seen.</li>
+          <li><strong>The nav icon animation.</strong> Hover each sidebar item. Automation can't focus the tab, so nobody
+            has actually watched these move. Tell me if it's overdone.</li>
+        </ul>
+      </section>
+
+      <footer>
+        <p>Every claim here was read from the code, not from memory. Where the platform's behaviour is surprising, the
+          reason is stated rather than smoothed over — those are the parts most worth checking against what you actually
+          see.</p>
+      </footer>
+
+    </main>
+  </div>
+</div>
+
+<script>
+  // Scroll-spy for the phase rail. Highlights the section nearest the top of
+  // the viewport rather than the first intersecting one, so a short section
+  // sandwiched between two long ones still registers.
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll(".rail a"));
+    var sections = links
+      .map(function (a) { return document.querySelector(a.getAttribute("href")); })
+      .filter(Boolean);
+    if (!sections.length) return;
+
+    function sync() {
+      var best = 0;
+      var bestDist = Infinity;
+      for (var i = 0; i < sections.length; i++) {
+        var d = Math.abs(sections[i].getBoundingClientRect().top - 80);
+        if (sections[i].getBoundingClientRect().top - 120 <= 0 && d < bestDist) { bestDist = d; best = i; }
+      }
+      links.forEach(function (a, i) { a.classList.toggle("on", i === best); });
+    }
+
+    var ticking = false;
+    window.addEventListener("scroll", function () {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function () { sync(); ticking = false; });
+    }, { passive: true });
+    sync();
+  })();
+</script>
+
+</body></html>

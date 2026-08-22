@@ -249,3 +249,72 @@ teardown). Total OpenAI spend for the session: **under $0.01**.
 - Phase 03 / Reference: **node keys ARE renameable** as of 2026-08-20
   (`lib/node-rename.ts`). The "there is no rename control anywhere" warning and
   the "cannot be renamed" line in the Reference table are both stale.
+
+---
+
+# Session 3 — 2026-08-22: H2 closed, plus two engine limitations found in the process
+
+## J. Status of the section-H findings
+
+- **H1 (redirect) — CLOSED 2026-08-21 in code.** `get_http_client` follows
+  redirects (max 5). Nothing further to do; the artifact's phase 03 now says so
+  and keeps the note, because a successful-looking status over a meaningless body
+  is the exact shape of a silent tool failure and is worth teaching.
+- **H2 (gate fires on retrieval uncertainty) — CLOSED 2026-08-22 by graph
+  redesign.** No product change, and deliberately none: the *seeded* flagship
+  demo (`Invoice approval` in `src/db/demo/graphs.py`) was never affected — it
+  already routes on `check_amount` (`total_amount > 1000`) with the structured
+  DSL and retrieves against a purpose-built `policy_question`. The bug was in
+  the **runbook graph the artifact's phase 03 teaches**, which retrieved against
+  `node_outputs.agent_1.summary` — a product description — and let one LLM
+  boolean guard the mutating write. Both halves are now fixed in the artifact:
+  `extract` emits a `policy_question` and retrieval searches on that, and a
+  deterministic `check_amount` decides on the money before any model opinion is
+  consulted.
+- **H3 (no `workflow.run.quota_exceeded` row on the HTTP paths)** — still open as
+  a product decision. The artifact correction was already published.
+- **H4 (webhook runs audited as `actor_type: system`, no IP)** — still open.
+- **H5 (Cost MTD renders `$0.00` sub-cent) — FIXED 2026-08-22.**
+  `formatMonthlyCost` in `apps/web/lib/dashboard-stats.ts` now uses 4 decimals
+  for a non-zero figure below `$0.01`. Exact zero stays `$0.00`; the $0.01–$1
+  band keeps 2 decimals, so the docstring's existing "`$0.0412` as a headline
+  looks like a rendering bug" reasoning is untouched. 3 tests.
+- **H6 (detail dialog shows the version UUID) — FIXED 2026-08-22.**
+  `Workflow.current_version` (viewonly, `lazy="joined"`, explicit `foreign_keys`
+  for the circular FK pair) + a `current_version_number` `@property`, surfaced as
+  `WorkflowResponse.current_version_number`. The dialog renders `v2`. 1 test that
+  publishes twice, which is what proves the relationship reloads rather than
+  serving a warm identity map.
+
+## K. Three engine facts found while fixing H2
+
+Found by checking whether the obvious H2 fix — *amount over threshold **OR** the
+model flagged it → the same approval node* — is expressible. It is not. Only the
+first was fixed; the other two are recorded, not closed.
+
+1. **FIXED — condition-edge evaluation order was unspecified.**
+   `WorkflowVersion.edges` carried no `order_by` and `_build_condition_router`
+   (`src/graphs/compiler.py`) is first-match-wins over that list, while
+   `evaluate_condition` returns `True` for an edge with no predicate. So a
+   catch-all fallback that happened to sort first made every predicate behind it
+   dead code and **silently skipped the branch they guard** — on this graph, the
+   approval gate in front of a mutating ERP write. It only ever worked because a
+   plain select over unmodified rows tends to come back in insertion order.
+   Now: `_ordered_condition_edges` sorts catch-all edges last, then by
+   `(created_at, id)`; `has_predicate()` moved into `condition_eval.py` and is
+   used *by* `evaluate_condition` so the two definitions of "matches everything"
+   cannot drift; `order_by` added to the relationship. The `id` tiebreak is
+   load-bearing — `save_draft` deletes and re-inserts every edge in one
+   transaction, so `created_at` ties across the whole graph. 3 tests.
+2. **OPEN — two edges between the same pair of nodes are not authorable.**
+   `edgeId` in `apps/web/lib/graph-mapping.ts` is `` `${source}->${target}` `` and
+   edge ids are derived rather than persisted, so a parallel edge collides with
+   the first and one is lost on the next round trip. Nothing warns. Fixing it
+   means persisting edge ids or folding a condition hash into the derived id.
+3. **OPEN — condition nodes cannot chain.** `_compile_state_graph` skips
+   condition nodes as LangGraph nodes and attaches the router to the condition
+   node's *predecessor*, so a `condition → condition` edge puts a key in the
+   `path_map` that was never registered. Nothing validates it — not
+   `validate_graph_structure`, not `lib/graph-validation.ts` — so it fails at
+   compile, after publish. The workaround (and what the artifact now teaches) is
+   an ordinary node between the two conditions.

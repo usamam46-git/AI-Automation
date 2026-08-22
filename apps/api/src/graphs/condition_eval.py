@@ -25,6 +25,26 @@ def resolve_field_path(state: dict[str, Any], field_path: str) -> Any:
     return current
 
 
+def has_predicate(condition: dict[str, Any] | None) -> bool:
+    """
+    Whether `condition` actually compares anything.
+
+    False for a null condition and for branch-only metadata (a dict carrying a
+    `branch` label but no `field`/`operator`). `evaluate_condition` returns True
+    for both of those, i.e. they match every state — so an edge carrying one is a
+    catch-all fallback, not a test.
+
+    This lives next to `evaluate_condition` and is used *by* it so the two
+    definitions of "matches everything" cannot drift. The compiler's condition
+    router depends on the answer: it sorts catch-all edges last, and a fallback
+    that sorted first would make every predicate behind it dead code. See
+    `_ordered_condition_edges` in src/graphs/compiler.py.
+    """
+    if condition is None:
+        return False
+    return condition.get("field") is not None and condition.get("operator") is not None
+
+
 def evaluate_condition(condition: dict[str, Any] | None, state: dict[str, Any]) -> bool:
     """
     Evaluate a structured condition dict against workflow state.
@@ -32,13 +52,12 @@ def evaluate_condition(condition: dict[str, Any] | None, state: dict[str, Any]) 
     Returns True when the condition is absent, lacks predicate fields (branch-only metadata),
     or the comparison succeeds.
     """
-    if condition is None:
+    if not has_predicate(condition):
         return True
+    assert condition is not None  # narrowed by has_predicate
 
-    field = condition.get("field")
-    operator = condition.get("operator")
-    if field is None or operator is None:
-        return True
+    field = condition["field"]
+    operator = condition["operator"]
 
     if operator not in SUPPORTED_OPERATORS:
         raise ValueError(f"Unsupported condition operator: {operator}")

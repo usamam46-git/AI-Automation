@@ -24,6 +24,7 @@ function workflow(id: string, status: WorkflowStatus): Workflow {
     trigger_type: "manual",
     trigger_config: null,
     current_version_id: null,
+    current_version_number: null,
     next_run_at: null,
     last_triggered_at: null,
     has_webhook_secret: false,
@@ -80,6 +81,25 @@ describe("formatMonthlyCost", () => {
 
   it("renders a missing figure as an em dash", () => {
     expect(formatMonthlyCost(null)).toBe("—");
+  });
+
+  // Shakedown finding H5: two decimals rendered every sub-cent month as "$0.00"
+  // while the per-run rows underneath showed "$0.0012". Every development and
+  // demo month is sub-cent, so the card was permanently wrong.
+  it("shows four decimals below a cent rather than rounding to zero", () => {
+    expect(formatMonthlyCost(0.0036)).toBe("$0.0036");
+    expect(formatMonthlyCost(0.0012)).toBe("$0.0012");
+    expect(formatMonthlyCost(0.000001)).toBe("$0.0000");
+  });
+
+  it("keeps two decimals from a cent upwards, and for an exact zero", () => {
+    expect(formatMonthlyCost(0)).toBe("$0.00");
+    expect(formatMonthlyCost(0.01)).toBe("$0.01");
+    expect(formatMonthlyCost(0.0412)).toBe("$0.04");
+  });
+
+  it("carries the sign through a sub-cent refund", () => {
+    expect(formatMonthlyCost(-0.0036)).toBe("-$0.0036");
   });
 });
 

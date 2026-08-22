@@ -37,10 +37,24 @@ export function formatSuccessRate(rate: number | null | undefined): string {
  * hardcodes `$`, so the timeline and the dashboard would disagree on the same
  * page. Costs are USD server-side (LLMClient._MODEL_PRICING); this is a
  * dollar amount, not a localised one.
+ *
+ * Sub-cent months are the exception, added 2026-08-22 (shakedown finding H5). Two
+ * decimals renders any non-zero figure below a cent as `$0.00`, so three runs
+ * costing $0.0036 read as free while the per-run rows underneath correctly showed
+ * `$0.0012`. Every development and demo month is sub-cent, which made the card
+ * permanently and confidently wrong. Below a cent it therefore shows four
+ * decimals. That does not contradict the paragraph above — `$0.0412` looking like
+ * a rendering bug is an argument about the $0.01–$1 band, which still gets two
+ * decimals. An exact zero stays `$0.00`: nothing has run, and that is worth
+ * saying plainly.
  */
+export const SUB_CENT_THRESHOLD = 0.01;
+
 export function formatMonthlyCost(usd: number | null | undefined): string {
   if (usd == null || !Number.isFinite(usd)) return "—";
-  const [whole, fraction] = Math.abs(usd).toFixed(2).split(".");
+  const magnitude = Math.abs(usd);
+  const decimals = magnitude > 0 && magnitude < SUB_CENT_THRESHOLD ? 4 : 2;
+  const [whole, fraction] = magnitude.toFixed(decimals).split(".");
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return `${usd < 0 ? "-" : ""}$${grouped}.${fraction}`;
 }
