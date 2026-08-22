@@ -8,6 +8,7 @@ import { BookText, FileSignature, Loader2, MoreHorizontal, Plus, ScrollText, Tra
 import { toast } from "sonner";
 import { KnowledgeBaseDialog } from "@/components/knowledge/kb-dialog";
 import { ErrorState } from "@/components/shared/error-state";
+import { PageHeader } from "@/components/shared/page-header";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -121,24 +122,25 @@ export default function KnowledgePage() {
   const knowledgeBases = query.data ?? [];
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Knowledge</h1>
-          <p className="text-sm text-muted-foreground">Documents your agents can search and cite.</p>
-        </div>
-        {knowledgeBases.length > 0 ? (
-          <Button
-            onClick={() => {
-              setEditing(null);
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="size-4" />
-            New
-          </Button>
-        ) : null}
-      </div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 pt-1">
+      <PageHeader
+        eyebrow="Build"
+        title="Knowledge"
+        description="Documents your agents can search and cite."
+        action={
+          knowledgeBases.length > 0 ? (
+            <Button
+              onClick={() => {
+                setEditing(null);
+                setDialogOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              New
+            </Button>
+          ) : null
+        }
+      />
 
       {query.isError ? (
         <ErrorState message={getApiErrorMessage(query.error, "Could not load knowledge bases")} onRetry={() => query.refetch()} />
@@ -154,9 +156,9 @@ export default function KnowledgePage() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {knowledgeBases.map((kb) => (
-            <Card key={kb.id} className="group relative flex flex-col gap-3 p-4 transition-colors hover:bg-muted/40">
+            <Card key={kb.id} className="group relative flex flex-col gap-3 p-5 transition-colors hover:bg-surface-2">
               <div className="flex items-start justify-between gap-2">
-                <span className="inline-flex size-9 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground">
+                <span className="app-tile size-9">
                   <BookText className="size-4" />
                 </span>
                 <DropdownMenu>

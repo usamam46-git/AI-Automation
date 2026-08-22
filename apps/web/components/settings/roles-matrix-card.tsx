@@ -108,7 +108,7 @@ export function RolesMatrixCard() {
                                   <span className="flex items-center gap-1.5">
                                     {info.label}
                                     {info.sensitive ? (
-                                      <ShieldAlert className="size-3 shrink-0 text-amber-600 dark:text-amber-400" aria-label="Sensitive" />
+                                      <ShieldAlert className="size-3 shrink-0 text-status-warn" aria-label="Sensitive" />
                                     ) : null}
                                   </span>
                                 </td>
@@ -117,7 +117,7 @@ export function RolesMatrixCard() {
                                   return (
                                     <td key={role.id} className="px-2 py-1.5 text-center">
                                       {granted ? (
-                                        <Check className="mx-auto size-3.5 text-emerald-600 dark:text-emerald-400" aria-label="granted" />
+                                        <Check className="mx-auto size-3.5 text-status-ok" aria-label="granted" />
                                       ) : (
                                         <Minus className="mx-auto size-3.5 text-muted-foreground/35" aria-label="not granted" />
                                       )}
@@ -135,7 +135,7 @@ export function RolesMatrixCard() {
               </div>
 
               <p className="mt-3 flex items-start gap-1.5 text-[11px] text-muted-foreground">
-                <ShieldAlert className="mt-0.5 size-3 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+                <ShieldAlert className="mt-0.5 size-3 shrink-0 text-status-warn" aria-hidden />
                 Marked capabilities change or expose something consequential — credentials, spend, published workflows, or the
                 audit trail.
               </p>

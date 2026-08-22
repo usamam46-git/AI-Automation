@@ -90,7 +90,7 @@ export function InviteMemberDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200">
+            <div className="rounded-xl bg-status-warn-soft p-3.5 text-xs text-status-warn">
               <p className="font-medium">Copy this now.</p>
               <p className="mt-0.5">
                 No email is sent — this platform has no mail delivery yet. If you close this without copying, you will have to
@@ -101,7 +101,7 @@ export function InviteMemberDialog({
             <div className="flex items-center gap-2">
               <Input readOnly value={result.accept_url} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
               <Button variant="outline" size="icon" onClick={copyLink} aria-label="Copy invite link">
-                {copied ? <Check className="size-4 text-emerald-600" /> : <Copy className="size-4" />}
+                {copied ? <Check className="size-4 text-status-ok" /> : <Copy className="size-4" />}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">

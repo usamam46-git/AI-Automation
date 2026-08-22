@@ -1,13 +1,28 @@
 import type { Metadata } from "next";
-import { Instrument_Sans, JetBrains_Mono } from "next/font/google";
+import { Instrument_Sans, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { AppProviders } from "@/components/providers/app-providers";
 
 /**
- * Display face for the marketing surface. Body copy stays on the system
- * SF/Segoe stack declared in `globals.css` — that stack IS the macOS feel the
- * product is modelled on, and swapping it for a webfont would make the app
- * chrome read as a generic SaaS dashboard.
+ * UI face for the product behind the login (2026-08-22, the Atomie pass).
+ *
+ * Scoped, not global: `globals.css`'s `.app-root` rebinds `--font-sans` to this
+ * for `app/(dashboard)/` and `app/(auth)/` only, so marketing body copy keeps
+ * the system stack it was designed and contrast-measured against.
+ *
+ * Plus Jakarta Sans over Poppins — the reference's face is a pure geometric,
+ * which is exactly what falls apart at the 11-13px this app spends most of its
+ * pixels on. Jakarta reads geometric at heading sizes and stays a real UI face
+ * at label sizes.
+ */
+const plusJakarta = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  variable: "--font-jakarta",
+  display: "swap",
+});
+
+/**
+ * Display face for the marketing surface.
  */
 const instrumentSans = Instrument_Sans({
   subsets: ["latin"],
@@ -38,7 +53,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html
       lang="en"
-      className={`h-full font-sans antialiased ${instrumentSans.variable} ${jetbrainsMono.variable}`}
+      className={`h-full font-sans antialiased ${instrumentSans.variable} ${jetbrainsMono.variable} ${plusJakarta.variable}`}
       suppressHydrationWarning
     >
       <body className="min-h-full">

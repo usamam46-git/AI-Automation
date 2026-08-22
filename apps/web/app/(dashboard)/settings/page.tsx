@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@/components/shared/page-header";
 import { MembersCard } from "@/components/settings/members-card";
 import { OpenAiKeyCard } from "@/components/settings/openai-key-card";
 import { RolesMatrixCard } from "@/components/settings/roles-matrix-card";
@@ -16,11 +17,8 @@ import { RolesMatrixCard } from "@/components/settings/roles-matrix-card";
  */
 export default function SettingsPage() {
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
-      <div>
-        <h2 className="text-xl font-semibold">Settings</h2>
-        <p className="text-sm text-muted-foreground">People, credentials and integrations for this organization.</p>
-      </div>
+    <div className="mx-auto flex max-w-3xl flex-col gap-5 pt-1">
+      <PageHeader eyebrow="Govern" title="Settings" description="People, credentials and integrations for this organization." />
       <MembersCard />
       <RolesMatrixCard />
       <OpenAiKeyCard />

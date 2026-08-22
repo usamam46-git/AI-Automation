@@ -47,14 +47,14 @@ export default function LoginPage() {
   }
 
   return (
-    <Card className="w-full max-w-[400px] rounded-2xl shadow-md shadow-black/10">
+    <Card className="mx-auto w-full max-w-[400px] bg-popover shadow-pop">
       <CardHeader className="pb-3">
         <CardTitle className="text-xl">Sign in</CardTitle>
         <CardDescription>Continue to AI Automation Platform.</CardDescription>
       </CardHeader>
       <CardContent>
         <form className="grid gap-4" onSubmit={onSubmit} noValidate>
-          {serverError ? <div className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">{serverError}</div> : null}
+          {serverError ? <div className="rounded-xl bg-status-bad-soft px-3.5 py-2.5 text-sm text-status-bad">{serverError}</div> : null}
           <div className="grid gap-1.5"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} aria-invalid={Boolean(errors.email)} />{errors.email ? <p className="text-xs text-destructive">{errors.email}</p> : null}</div>
           <div className="grid gap-1.5"><Label htmlFor="password">Password</Label><Input id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(errors.password)} />{errors.password ? <p className="text-xs text-destructive">{errors.password}</p> : null}</div>
           <Button className="w-full" disabled={isPending || (submitted && hasErrors)}>{isPending ? <Loader2 className="size-4 animate-spin" /> : null}Login</Button>

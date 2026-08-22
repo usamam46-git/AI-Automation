@@ -26,11 +26,16 @@ export function BuilderNodeCard({ data, selected }: NodeProps<BuilderNode>) {
     <div
       data-status="idle"
       className={cn(
-        "group flex min-w-[190px] items-center gap-2.5 rounded-xl border bg-card px-3 py-2 shadow-sm shadow-black/5 transition-shadow",
+        // A node is a floating chip on the canvas, so unlike a page Card it DOES
+        // take the popover fill and a shadow — it has to read as sitting above
+        // the grid rather than as a hole cut in it. That is the one deliberate
+        // exception to the borderless-fill rule, and the reference's own nodes
+        // are drawn the same way.
+        "group flex min-w-[190px] items-center gap-2.5 rounded-xl bg-popover px-3 py-2.5 shadow-soft transition-shadow",
         "ring-0 ring-offset-2 ring-offset-background",
-        issues.length > 0 ? "border-destructive/50 ring-destructive/50" : "border-border ring-ring/40",
+        issues.length > 0 ? "ring-status-bad" : "ring-ring",
         issues.length > 0 && "ring-2",
-        selected && "shadow-md shadow-black/10 ring-2",
+        selected && "shadow-pop ring-2",
       )}
     >
       {entry.hasTarget ? <Handle type="target" position={Position.Top} /> : null}
@@ -45,7 +50,7 @@ export function BuilderNodeCard({ data, selected }: NodeProps<BuilderNode>) {
           {isMutating ? " · writes" : ""}
         </span>
       </span>
-      {issues.length > 0 ? <CircleAlert className="size-4 shrink-0 text-destructive" /> : null}
+      {issues.length > 0 ? <CircleAlert className="size-4 shrink-0 text-status-bad" /> : null}
 
       {entry.hasSource ? <Handle type="source" position={Position.Bottom} /> : null}
     </div>

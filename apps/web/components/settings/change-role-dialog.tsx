@@ -155,6 +155,6 @@ function DiffColumn({
 
 function cnTone(tone: "gain" | "loss"): string {
   return tone === "gain"
-    ? "mt-0.5 size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
-    : "mt-0.5 size-3 shrink-0 text-rose-600 dark:text-rose-400";
+    ? "mt-0.5 size-3 shrink-0 text-status-ok"
+    : "mt-0.5 size-3 shrink-0 text-status-bad";
 }

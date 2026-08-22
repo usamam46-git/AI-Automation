@@ -54,6 +54,7 @@ from datetime import UTC, datetime
 
 from celery import Task
 from sqlalchemy import select
+from sqlalchemy.orm import lazyload
 
 from src.core.cache import RunQuotaExceeded, consume_run_quota
 from src.core.redis import get_redis_client
@@ -118,6 +119,16 @@ async def _dispatch_due_schedules_async() -> list[uuid.UUID]:
             )
             .order_by(Workflow.next_run_at)
             .limit(MAX_DISPATCH_PER_TICK)
+            # `Workflow.current_version` is `lazy="joined"` (see its comment in
+            # modules/workflows/models.py) because it feeds
+            # `current_version_number` on every workflow list and detail
+            # response. That eager LEFT OUTER JOIN is fatal HERE: Postgres
+            # rejects `FOR UPDATE` on the nullable side of an outer join with
+            # `FeatureNotSupportedError`, so the tick raised before dispatching
+            # anything and every scheduled workflow silently stopped firing.
+            # This query needs the columns, never the relationship, so switch it
+            # back to the lazy default for this statement only.
+            .options(lazyload(Workflow.current_version))
             # Two ticks can overlap if one runs long. SKIP LOCKED lets the second
             # pass over rows the first already claimed instead of blocking on
             # them or, worse, double-firing them.

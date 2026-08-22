@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, CircleDollarSign, Gauge, TriangleAlert } from "lucide-react";
+import { PageHeader } from "@/components/shared/page-header";
 import { ErrorState } from "@/components/shared/error-state";
 import { RecentExecutions } from "@/components/dashboard/recent-executions";
 import { StatCard } from "@/components/dashboard/stat-card";
@@ -76,11 +77,8 @@ export default function DashboardPage() {
   const stats = statsQuery.data;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">{greeting()}</h1>
-        <p className="text-sm text-muted-foreground">Here&apos;s what your automation has been doing.</p>
-      </div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-7 pt-1">
+      <PageHeader eyebrow="Dashboard" title={greeting()} description="Here's what your automation has been doing." />
 
       {statsQuery.isError ? (
         <ErrorState message={getApiErrorMessage(statsQuery.error, "Could not load dashboard stats")} onRetry={() => statsQuery.refetch()} />
@@ -109,7 +107,7 @@ export default function DashboardPage() {
             value={formatMonthlyCost(stats?.cost_mtd_usd)}
             caption={formatCostPeriod(stats?.cost_period_start)}
             icon={CircleDollarSign}
-            accent="neutral"
+            accent="brand"
             loading={statsQuery.isLoading}
           />
           <StatCard
@@ -118,6 +116,7 @@ export default function DashboardPage() {
             caption={stats ? successRateCaption(stats) : undefined}
             icon={Gauge}
             accent="success"
+            arcValue={stats?.success_rate ?? null}
             loading={statsQuery.isLoading}
           />
         </div>

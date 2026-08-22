@@ -8,7 +8,18 @@ export type NodeCatalogEntry = {
   description: string;
   icon: LucideIcon;
   /** Tint for the node's icon chip. Kept to icon + chip only — node bodies stay
-   *  neutral card surfaces so the canvas reads as one system in both themes. */
+   *  neutral card surfaces so the canvas reads as one system in both themes.
+   *
+   *  Since the Atomie pass these are `--color-status-*` classes plus the brand
+   *  `.app-tile`, not raw Tailwind palette pairs with hand-written `dark:`
+   *  twins. Two consequences worth knowing: a theme change is one token edit
+   *  rather than seven, and the tints now MEAN the same thing they mean on a
+   *  Badge — `human_approval` is warn because a run holding at a gate is warn
+   *  in the timeline and on the dashboard too.
+   *
+   *  `agent` carries the brand tile deliberately: it is the only node type that
+   *  reasons, it is what the product is for, and it is the one place lime
+   *  appears on the canvas. */
   accent: string;
   /** Prefix for auto-incremented node keys (`agent_1`, `tool_2`, ...). */
   keyPrefix: string;
@@ -25,7 +36,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     label: "Start",
     description: "Entry point. Receives the trigger payload.",
     icon: Play,
-    accent: "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10",
+    accent: "bg-status-ok-soft text-status-ok",
     keyPrefix: "start",
     hasSource: true,
     hasTarget: false,
@@ -36,7 +47,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     label: "Agent",
     description: "Calls the LLM with a system prompt and a structured output schema.",
     icon: Sparkles,
-    accent: "text-violet-600 dark:text-violet-400 bg-violet-500/10",
+    accent: "app-tile",
     keyPrefix: "agent",
     hasSource: true,
     hasTarget: true,
@@ -53,7 +64,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     label: "Tool",
     description: "Outbound HTTP request or ERP connector action.",
     icon: Wrench,
-    accent: "text-sky-600 dark:text-sky-400 bg-sky-500/10",
+    accent: "bg-status-info-soft text-status-info",
     keyPrefix: "tool",
     hasSource: true,
     hasTarget: true,
@@ -66,7 +77,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     label: "Condition",
     description: "Routes to different branches. The rule lives on its outgoing edges.",
     icon: GitBranch,
-    accent: "text-amber-600 dark:text-amber-400 bg-amber-500/10",
+    accent: "bg-status-warn-soft text-status-warn",
     keyPrefix: "condition",
     hasSource: true,
     hasTarget: true,
@@ -77,7 +88,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     label: "Human Approval",
     description: "Pauses the run until someone approves or rejects.",
     icon: UserCheck,
-    accent: "text-rose-600 dark:text-rose-400 bg-rose-500/10",
+    accent: "bg-status-warn-soft text-status-warn",
     keyPrefix: "approval",
     hasSource: true,
     hasTarget: true,
@@ -88,7 +99,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     label: "Subgraph",
     description: "Runs another workflow. Not executable yet.",
     icon: Workflow,
-    accent: "text-teal-600 dark:text-teal-400 bg-teal-500/10",
+    accent: "bg-status-info-soft text-status-info",
     keyPrefix: "subgraph",
     hasSource: true,
     hasTarget: true,
@@ -99,7 +110,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     label: "End",
     description: "Terminal node. The run completes here.",
     icon: Flag,
-    accent: "text-neutral-600 dark:text-neutral-300 bg-neutral-500/10",
+    accent: "bg-surface-2 text-muted-foreground",
     keyPrefix: "end",
     hasSource: false,
     hasTarget: true,

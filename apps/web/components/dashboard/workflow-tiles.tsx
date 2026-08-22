@@ -27,7 +27,7 @@ export function WorkflowTiles({
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Your Workflows</h2>
+        <h2 className="app-eyebrow">Your Workflows</h2>
         <button
           onClick={onCreate}
           className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -62,9 +62,9 @@ export function WorkflowTiles({
             <Link
               key={workflow.id}
               href={`/workflows/${workflow.id}/builder`}
-              className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="rounded-2xl focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/30"
             >
-              <Card className="flex h-full flex-col justify-between gap-3 p-4 transition-colors hover:border-ring/40 hover:bg-muted/30">
+              <Card className="flex h-full flex-col justify-between gap-4 p-4 transition-colors hover:bg-surface-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{workflow.name}</p>
                   <p className="mt-0.5 truncate text-xs capitalize text-muted-foreground">{workflow.trigger_type} trigger</p>

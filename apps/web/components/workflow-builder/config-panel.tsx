@@ -81,10 +81,10 @@ export function ConfigPanel({
   const sourceNode = edge ? graph.nodes.find((item) => item.id === edge.source) ?? null : null;
 
   return (
-    <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-card">
-      <header className="flex items-start gap-2 border-b border-border px-3 py-2.5">
+    <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-background">
+      <header className="flex items-start gap-2 border-b border-border px-3 py-3 md:px-4">
         {entry && Icon ? (
-          <span className={cn("mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-lg", entry.accent)}>
+          <span className={cn("mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg", entry.accent)}>
             <Icon className="size-3.5" />
           </span>
         ) : null}

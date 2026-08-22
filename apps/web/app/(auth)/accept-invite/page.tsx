@@ -139,9 +139,9 @@ function AcceptInviteInner() {
   const invite = preview.data!;
 
   return (
-    <Card className="w-full max-w-md">
+    <Card className="mx-auto w-full max-w-md bg-popover shadow-pop">
       <CardHeader>
-        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-status-ok">
           <ShieldCheck className="size-3.5" aria-hidden />
           Invitation
         </div>
@@ -216,7 +216,7 @@ function Shell({
   children?: React.ReactNode;
 }) {
   return (
-    <Card className="w-full max-w-md">
+    <Card className="mx-auto w-full max-w-md bg-popover shadow-pop">
       <CardHeader>
         {tone === "error" ? <TriangleAlert className="mb-1 size-5 text-destructive" aria-hidden /> : null}
         <CardTitle>{title}</CardTitle>

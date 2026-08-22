@@ -1,31 +1,35 @@
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { DotArc } from "@/components/ui/dot-arc";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
  * One of the four §5.1 stat cards.
  *
- * `accent` tints the icon only, never the figure — the numbers stay
+ * `accent` tints the icon tile only, never the figure — the numbers stay
  * `text-foreground` so the row reads as one scale rather than four competing
  * signals.
  *
- * The palettes deliberately mirror components/ui/badge.tsx's run-status
- * variants (sky = running, amber = waiting, emerald = completed), so "amber
- * means something is waiting on you" carries the same meaning on this page as
- * it does in the timeline — Vol. 3 §5's "one status vocabulary everywhere".
- * They are written as Tailwind palette classes rather than `--color-status-*`
- * tokens because that token set does not exist: badge.tsx's cva IS where the
- * vocabulary lives. Each needs its own dark variant for the same reason.
+ * Since the Atomie pass the palettes come from the `--color-status-*` tokens
+ * rather than from hand-written Tailwind pairs with `dark:` twins. That set is
+ * shared with `components/ui/badge.tsx` and `lib/node-catalog.ts`, so "amber
+ * means something is waiting on you" is now literally the same colour value on
+ * this page as in the timeline (Vol. 3 §5's "one status vocabulary everywhere")
+ * instead of three copies that have to be kept in step by hand.
+ *
+ * `brand` is the fourth option and is NOT a status: it is the lime tile, for the
+ * one card on the row that is a headline rather than a condition.
  */
-export type StatAccent = "neutral" | "info" | "warning" | "success";
+export type StatAccent = "neutral" | "info" | "warning" | "success" | "brand";
 
 const ACCENT_CLASS: Record<StatAccent, string> = {
-  neutral: "bg-muted text-muted-foreground",
-  info: "bg-sky-50 text-sky-700 dark:bg-sky-400/10 dark:text-sky-300",
-  warning: "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300",
-  success: "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300",
+  neutral: "bg-surface-2 text-muted-foreground",
+  info: "bg-status-info-soft text-status-info",
+  warning: "bg-status-warn-soft text-status-warn",
+  success: "bg-status-ok-soft text-status-ok",
+  brand: "",
 };
 
 export function StatCard({
@@ -36,6 +40,7 @@ export function StatCard({
   accent = "neutral",
   href,
   loading = false,
+  arcValue,
 }: {
   label: string;
   value: string;
@@ -45,25 +50,38 @@ export function StatCard({
   /** When set, the whole card becomes a link to the filtered list behind it. */
   href?: string;
   loading?: boolean;
+  /**
+   * 0..1 fraction. When present the card draws the dot arc behind the figure
+   * instead of an icon tile. `null` renders the empty track, which is the
+   * correct picture for "nothing has finished yet" — the same distinction
+   * `formatSuccessRate` draws between null and 0.
+   */
+  arcValue?: number | null;
 }) {
+  const showArc = arcValue !== undefined;
+
   const body = (
-    <Card
-      className={cn(
-        "flex h-full flex-col gap-3 p-4 transition-colors",
-        href && "hover:border-ring/40 hover:bg-muted/30"
-      )}
-    >
-      <div className="flex items-center justify-between gap-2">
+    <Card className={cn("flex h-full flex-col gap-3 p-5 transition-colors", href && "hover:bg-surface-2")}>
+      <div className="flex items-start justify-between gap-2">
         <span className="text-sm text-muted-foreground">{label}</span>
-        <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-lg", ACCENT_CLASS[accent])}>
-          <Icon className="size-4" />
-        </span>
+        {/* The arc occupies the icon tile's slot rather than being absolutely
+            positioned behind the figure. Bleeding it off the corner was tried
+            first and the card's own `overflow-hidden` sliced it into an
+            unreadable crescent — the mark has to be wholly inside the card to
+            be a mark at all. */}
+        {showArc ? (
+          <DotArc value={arcValue} size={40} className="-mt-0.5 shrink-0" label={`${label} gauge`} />
+        ) : (
+          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", accent === "brand" ? "app-tile" : ACCENT_CLASS[accent])}>
+            <Icon className="size-4" />
+          </span>
+        )}
       </div>
 
       {loading ? (
         <Skeleton className="h-8 w-20" />
       ) : (
-        <span className="text-2xl font-semibold tabular-nums leading-none">{value}</span>
+        <span className="text-3xl font-semibold tabular-nums leading-none tracking-tight">{value}</span>
       )}
 
       {/* Reserved even while loading so the card doesn't change height when the
@@ -75,7 +93,7 @@ export function StatCard({
   );
 
   return href ? (
-    <Link href={href} className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <Link href={href} className="rounded-2xl focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/30">
       {body}
     </Link>
   ) : (

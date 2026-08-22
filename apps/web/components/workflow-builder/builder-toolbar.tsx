@@ -46,7 +46,7 @@ export function BuilderToolbar({
 
   return (
     <div className="shrink-0 border-b border-border bg-background">
-      <div className="flex h-12 items-center gap-3 px-3">
+      <div className="flex h-14 items-center gap-3 px-3 md:px-4">
         <Button asChild variant="ghost" size="icon" aria-label="Back to workflows">
           <Link href="/workflows">
             <ArrowLeft className="size-4" />
@@ -180,8 +180,8 @@ function Banner({ tone, children }: { tone: "info" | "error"; children: React.Re
       className={cn(
         "flex items-start gap-1.5 border-t px-3 py-1.5 text-[11px] leading-snug",
         tone === "error"
-          ? "border-destructive/30 bg-destructive/5 text-destructive"
-          : "border-border bg-muted/40 text-muted-foreground",
+          ? "border-border bg-status-bad-soft text-status-bad"
+          : "border-border bg-surface-2 text-muted-foreground",
       )}
     >
       {tone === "error" ? <CircleAlert className="mt-px size-3.5 shrink-0" /> : null}

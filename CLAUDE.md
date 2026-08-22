@@ -800,8 +800,9 @@ verified via a full read-only orientation pass — see note below.)
     `app/(dashboard)/agents/page.tsx` — what an agent is in this product today
     (each item linking to a working surface) and what the `agents` module will
     add (each item carrying the engineering reason it is not built). Frontend
-    only; **383 frontend tests** unchanged, since the page is `lib`-free by the
-    same convention as Settings.
+    only; **383 frontend tests** unchanged at the time, since the page is
+    `lib`-free by the same convention as Settings. (The count moved to 399 with
+    the 2026-08-22 Atomie pass — see that bullet.)
   - The headline *product* finding was not a bug and was deliberately not
     "fixed" unilaterally at the time: the approval gate fired on **retrieval
     uncertainty rather than on risk** — a EUR 4,200 purchase was auto-posted
@@ -845,8 +846,106 @@ verified via a full read-only orientation pass — see note below.)
   - **473 backend tests** (469 + 4) and **387 frontend tests** (383 + 4) —
     the touched suites pass (`test_graph_compiler` 33, `test_workflows` 10,
     `dashboard-stats` 25); the FULL suites were not re-run in that session.
+    **That omission shipped a broken schedule tick and a red CI** — see the
+    2026-08-22 CI bullet below. Run the full suite before pushing a model change.
     Note `aap_test` was two migrations behind and needed
     `alembic upgrade head` before it would run at all.
+- **CI was red and the schedule tick was broken in production; fixed 2026-08-22.**
+  Commit `3864a0c` added `Workflow.current_version` as a `lazy="joined"`
+  relationship to feed `current_version_number`, and only re-ran the two touched
+  suites. The eager LEFT OUTER JOIN that emits is added to **every** Workflow
+  query that does not override it — including the schedule tick's
+  `SELECT ... FOR UPDATE SKIP LOCKED`, and Postgres rejects `FOR UPDATE` on the
+  nullable side of an outer join outright:
+
+  ```
+  asyncpg.exceptions.FeatureNotSupportedError:
+  FOR UPDATE cannot be applied to the nullable side of an outer join
+  ```
+
+  So `dispatch_due_schedules` raised **before dispatching anything** and every
+  cron-triggered workflow silently stopped firing. This was not test-only and not
+  flaky: 10 tests failed deterministically across `test_trigger_schedule` (all 6),
+  `test_run_quota` (both schedule cases) and `test_audit_logs` (both system-actor
+  cases).
+
+  Fix: `.options(lazyload(Workflow.current_version))` on that one statement — it
+  reads the `current_version_id` **column** and never touches the relationship.
+  The eager load stays everywhere else, because that is what response
+  serialization needs. The hazard is now documented on the relationship itself in
+  `modules/workflows/models.py`; the codebase has exactly one `lazy="joined"` and
+  one `with_for_update`, so **any new row-locking query over `Workflow` must add
+  the same option** rather than removing the eager load.
+
+  **477 backend tests pass** (473 + 4 that had been failing), verified on a
+  throwaway CI-identical stack — a dedicated `pgvector/pgvector:pg16` plus
+  `redis:7-alpine`, migrated with `alembic upgrade head` and seeded with
+  `seed_roles.py`, exactly as `.github/workflows/ci.yml` does. `ruff check` and
+  `ruff format --check` clean.
+
+  **Two traps this hunt exposed, both worth not repeating:**
+  - **Never run two pytest sessions against the same database.** Truncate-based
+    isolation means the second run's `TRUNCATE` deadlocks against the first run's
+    open transactions, and the result is a spectacular *119 failed, 32 errors*
+    that looks like a systemic breakage and is pure artifact. It was diagnosed
+    only by resolving the deadlock's relation OIDs (`roles` / `workspaces`) and
+    then noticing that the individual suites pass in isolation. A background
+    `docker exec` pytest can also **survive** the local shell being killed, and
+    the image has no `ps`, `pkill` or `pgrep` to check with — walk `/proc/*/cmdline`
+    instead.
+  - **The full suite takes ~7 minutes here, not the 84s recorded on 2026-08-21.**
+    The per-test `TRUNCATE` over a Docker Desktop volume on Windows dominates.
+    Budget for it and run it in the background; do not assume it has hung.
+- **The internal app was redesigned onto the "Atomie" language 2026-08-22**
+  (frontend only, no backend change). Every surface behind the login was
+  untouched shadcn — stock neutral tokens, white-card-on-white-page held apart by
+  a hairline, the system font stack, no brand colour — which meant the landing
+  page sold hard and then dropped the viewer into what looked like a scaffold.
+  Reference: `apps/web/public/{Sample,Sample1,Sample2,sample3}.webp`.
+  Full spec in apps/web/CLAUDE.md's design-system section. The load-bearing
+  points, in the order they will bite someone:
+  - **Depth is a FILL STEP, not a border plus a shadow.** A card is one step from
+    the page in both themes (light `#F7F7F4` → `#EFEFEC` → `#E7E7E3`; dark
+    `#0B0B0B` → `#161616` → `#1E1E1E`). `border` on a `<Card>` is now a bug, a
+    Card nested in a Card is invisible (use the new `<CardInset>`), and anything
+    genuinely floating goes the other way — `bg-popover` + `shadow-pop`.
+  - **`--primary` is lime and it always carries INK, never white**, in both
+    themes. Lime sits at L .87; white on it is ~1.4:1, ink is 12.06:1. One lime
+    action per screen — that is what `PageHeader`'s single `action` prop enforces.
+  - **`--color-status-*` now exists.** Vol. 3 §5 named that set and it never had;
+    `badge.tsx`'s cva was standing in with `stat-card.tsx` and `node-catalog.ts`
+    hand-mirroring it. All three read one set now, and the ~50 remaining
+    hardcoded Tailwind palette classes across the app are gone (zero left outside
+    `components/marketing/`).
+  - **Type is Plus Jakarta Sans, scoped by `.app-root`.** This retires the old
+    "body copy stays on the system SF/Segoe stack" rule for app routes only.
+  - **Marketing is untouched and there are three separate guards keeping it that
+    way** — `.mk-root` re-declares the full light token set, now also pins
+    `--radius: 0.625rem` and every new Atomie token the six shared primitives
+    reference, and the font is scoped rather than global. **Any new token an app
+    primitive uses must be added to `.mk-root` in the same commit**, or a
+    dark-system visitor gets a near-black input on the white landing page.
+    Verified live under `<html class="dark">`.
+  - New: `components/shared/{page-header,filter-tabs}.tsx`, `components/ui/dot-arc.tsx`
+    and the pure `lib/dot-arc.ts`. `PageHeader` removes a real duplication — the
+    shell painted `<h1>{title}</h1>` AND every page painted its own `<h2>` two
+    rows below it; `FilterTabs` was the same markup pasted into three pages, one
+    copy already drifted.
+  - Three things were shipped wrong and fixed in the browser, all recorded with
+    their reasoning: the bloom was three times too strong, the dot arc bled off
+    the card and `overflow-hidden` sliced it into a crescent, and the `-soft`
+    chip fills were tuned against white so they measured ~1.03:1 against the card
+    and were invisible.
+  - Contrast was **measured on the rendered page**, not eyeballed: ink-on-lime
+    12.06:1, chips 5.74–8.00:1, foreground-on-card 15.1/16.1:1 across both
+    themes. One real failure was caught that way — the eyebrow's lime slash at
+    **1.72:1** on the paper — and fixed to 8.59:1.
+  - **399 frontend tests** (387 + 12 on `lib/dot-arc.ts`); `tsc --noEmit`,
+    `eslint` and `npm run build` clean. Verified in a browser in **both themes**
+    across dashboard, workflows, builder, executions list + detail, knowledge,
+    audit log and settings, against the live Docker stack with demo data.
+  - **Not verified: any real mobile viewport** (same automation ceiling as the 3D
+    scene) and the auth pages while genuinely signed out.
 - Next: **look at the 3D scene on a real phone** (layout is now verified; the
   scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
@@ -863,7 +962,7 @@ verified via a full read-only orientation pass — see note below.)
   the members/invitations surface, the Agents preview page and the marketing landing page (see above). `app/(marketing)/` now exists and
   owns `/`; `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, **383 tests** over the pure `lib/` modules only (no React harness;
+  `npm test`, **399 tests** over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

@@ -64,7 +64,7 @@ function PermissionLine({ permission, granted }: { permission: string; granted: 
   return (
     <li className={cn("flex items-start gap-1.5 text-xs", granted ? "text-foreground" : "text-muted-foreground/55")}>
       {granted ? (
-        <Check className="mt-0.5 size-3 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+        <Check className="mt-0.5 size-3 shrink-0 text-status-ok" aria-hidden />
       ) : (
         <Minus className="mt-0.5 size-3 shrink-0" aria-hidden />
       )}
@@ -72,7 +72,7 @@ function PermissionLine({ permission, granted }: { permission: string; granted: 
       {/* Flagged only when actually held — a warning next to something the role
           cannot do would read as a risk it does not carry. */}
       {granted && info.sensitive ? (
-        <ShieldAlert className="mt-0.5 size-3 shrink-0 text-amber-600 dark:text-amber-400" aria-label="Sensitive capability" />
+        <ShieldAlert className="mt-0.5 size-3 shrink-0 text-status-warn" aria-label="Sensitive capability" />
       ) : null}
       <span className="sr-only">{granted ? "granted" : "not granted"}</span>
     </li>

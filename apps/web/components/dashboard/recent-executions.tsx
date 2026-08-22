@@ -29,7 +29,7 @@ export function RecentExecutions({ runs, loading }: { runs: WorkflowRunSummary[]
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Recent Executions</h2>
+        <h2 className="app-eyebrow">Recent Executions</h2>
         <Link href="/executions" className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
           View all <ArrowRight className="size-3.5" />
         </Link>
@@ -38,7 +38,7 @@ export function RecentExecutions({ runs, loading }: { runs: WorkflowRunSummary[]
       <Card className="overflow-hidden">
         {loading ? (
           Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="flex items-center gap-3 border-b border-border p-3 last:border-b-0">
+            <div key={index} className="flex items-center gap-3 border-b border-border p-3.5 last:border-b-0">
               <Skeleton className="h-6 w-24" />
               <div className="flex-1 space-y-2">
                 <Skeleton className="h-4 w-40" />
@@ -60,8 +60,8 @@ export function RecentExecutions({ runs, loading }: { runs: WorkflowRunSummary[]
               onClick={() => router.push(`/executions/${run.id}`)}
               onKeyDown={(event) => event.key === "Enter" && router.push(`/executions/${run.id}`)}
               className={cn(
-                "flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border p-3 text-sm transition-colors last:border-b-0",
-                "cursor-pointer hover:bg-muted/40"
+                "flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border p-3.5 text-sm transition-colors last:border-b-0",
+                "cursor-pointer hover:bg-surface-2"
               )}
             >
               <RunStatusBadge status={run.status} className="shrink-0" />

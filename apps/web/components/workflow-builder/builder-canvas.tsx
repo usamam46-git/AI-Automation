@@ -163,8 +163,15 @@ export function BuilderCanvas({
           minZoom={0.2}
           maxZoom={1.75}
           proOptions={{ hideAttribution: false }}
+          // Dashed connectors are the reference's own idiom for a flow between
+          // steps, and they read as a route rather than as a wire. Applied via
+          // `defaultEdgeOptions` rather than per-edge in `lib/graph-mapping.ts`:
+          // that module round-trips the graph to and from the API and its output
+          // is pinned by tests, so presentation must not leak into it.
+          defaultEdgeOptions={{ style: { strokeDasharray: "5 4" } }}
+          connectionLineStyle={{ strokeDasharray: "5 4" }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} />
           <Controls showInteractive={false} position="bottom-left" />
           <MiniMap pannable zoomable position="bottom-right" className="hidden md:block" />
         </ReactFlow>
@@ -173,7 +180,7 @@ export function BuilderCanvas({
           // A hint, not a blocking EmptyState — the canvas underneath has to stay
           // droppable, which is the whole point of the empty case.
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="rounded-xl border border-dashed border-border bg-background/70 px-5 py-4 text-center backdrop-blur-sm">
+            <div className="rounded-2xl bg-popover/90 px-6 py-5 text-center shadow-pop backdrop-blur-sm">
               <p className="text-sm font-medium">Empty canvas</p>
               <p className="mt-1 max-w-xs text-sm text-muted-foreground">
                 Drag a Start node from the left, then add the steps it should run.

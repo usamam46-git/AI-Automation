@@ -5,9 +5,17 @@
  * follows light/dark automatically without a colorMode prop.
  */
 
+/*
+ * Atomie pass (2026-08-22): every mapping below is unchanged in structure — the
+ * variables still point at design tokens, so the canvas retinted for free when
+ * the tokens did. Two values were re-pointed on purpose, both marked inline.
+ */
 .builder-canvas {
   --xy-background-color: var(--background);
-  --xy-background-pattern-color: var(--border);
+  /* The grid was `--border`, which is now an 7% alpha hairline and disappeared
+     entirely against the paper. `--surface-2` is the inset step and gives the
+     dots something to be. */
+  --xy-background-pattern-color: var(--surface-2);
 
   --xy-edge-stroke: var(--muted-foreground);
   --xy-edge-stroke-selected: var(--foreground);
@@ -20,14 +28,14 @@
   --xy-handle-background-color: var(--background);
   --xy-handle-border-color: var(--muted-foreground);
 
-  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color: var(--popover);
   --xy-controls-button-background-color-hover: var(--accent);
   --xy-controls-button-color: var(--muted-foreground);
   --xy-controls-button-color-hover: var(--foreground);
   --xy-controls-button-border-color: var(--border);
-  --xy-controls-box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.08);
+  --xy-controls-box-shadow: var(--elevation-soft);
 
-  --xy-minimap-background-color: var(--card);
+  --xy-minimap-background-color: var(--popover);
   --xy-minimap-mask-background-color: color-mix(in oklab, var(--background) 65%, transparent);
   --xy-minimap-mask-stroke-color: var(--border);
   --xy-minimap-node-background-color: var(--muted-foreground);
@@ -46,6 +54,13 @@
   border-width: 1.5px;
 }
 
+/* Connecting is the canvas's one creative gesture, so the handle takes the
+   brand on hover — the only lime on the canvas besides an agent node's tile. */
+.builder-canvas .react-flow__handle:hover {
+  background-color: var(--lime);
+  border-color: var(--lime-deep);
+}
+
 .builder-canvas .react-flow__handle-top {
   top: -5px;
 }
@@ -54,16 +69,12 @@
   bottom: -5px;
 }
 
-.builder-canvas .react-flow__controls {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-}
-
+.builder-canvas .react-flow__controls,
 .builder-canvas .react-flow__minimap {
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--elevation-soft);
 }
 
 .builder-canvas .react-flow__attribution {

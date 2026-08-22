@@ -90,7 +90,7 @@ export function WebhookSecretCard({ workflow }: { workflow: Workflow }) {
 
       {revealed ? (
         <div className="grid gap-1.5 rounded-lg bg-muted/50 p-2">
-          <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+          <div className="flex items-center gap-1.5 text-xs text-status-warn">
             <TriangleAlert className="size-3.5 shrink-0" />
             <span>Copy this now — it is never shown again.</span>
           </div>

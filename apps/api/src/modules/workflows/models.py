@@ -137,6 +137,17 @@ class Workflow(UUIDMixin, TenantMixin, TimestampMixin, Base):
     #: than the alternative — pulling the entire `versions` collection to read one
     #: integer off it.
     #:
+    #: **`lazy="joined"` and `FOR UPDATE` are incompatible, and that already bit
+    #: once.** The eager LEFT OUTER JOIN this emits is added to *every* Workflow
+    #: query that does not override it, and Postgres rejects `FOR UPDATE` on the
+    #: nullable side of an outer join outright (`FeatureNotSupportedError`). The
+    #: schedule tick in `src/workers/trigger_tasks.py` locks rows with
+    #: `.with_for_update(skip_locked=True)`, so it raised before dispatching
+    #: anything and every cron-triggered workflow silently stopped firing. It now
+    #: carries `.options(lazyload(Workflow.current_version))`. Any new row-locking
+    #: query over `Workflow` needs the same, so add it there rather than removing
+    #: the eager load here.
+    #:
     #: Identity-map note: `mark_published` sets current_version_id with a bulk
     #: UPDATE and the session runs expire_on_commit=False, so a Workflow already
     #: loaded in that same session keeps a stale `current_version`. Harmless today

@@ -1,5 +1,6 @@
 "use client";
 
+import { Activity } from "lucide-react";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -7,6 +8,8 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
+import { FilterTabs } from "@/components/shared/filter-tabs";
+import { PageHeader } from "@/components/shared/page-header";
 import { ErrorState } from "@/components/shared/error-state";
 import { RunStatusBadge } from "@/components/executions/run-status-badge";
 import { executionsApi, workflowsApi, type WorkflowRunStatus } from "@/lib/api";
@@ -61,30 +64,34 @@ export default function ExecutionsPage() {
   const runs = runsQuery.data ?? [];
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><h2 className="text-xl font-semibold">Executions</h2><p className="text-sm text-muted-foreground">Every workflow run in this organization, newest first.</p></div>
-        <Select value={workflowId} onValueChange={setWorkflowId}>
-          <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="All workflows" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All workflows</SelectItem>
-            {workflows.map((workflow) => <SelectItem key={workflow.id} value={workflow.id}>{workflow.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 pt-1">
+      <PageHeader
+        title="Executions"
+        description="Every workflow run in this organization, newest first."
+        aside={
+          <Select value={workflowId} onValueChange={setWorkflowId}>
+            <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="All workflows" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All workflows</SelectItem>
+              {workflows.map((workflow) => <SelectItem key={workflow.id} value={workflow.id}>{workflow.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        }
+      />
 
-      <div className="flex w-full gap-1 overflow-x-auto rounded-xl border border-border bg-muted/30 p-1 sm:w-fit">
-        {statuses.map((item) => (
-          <button key={item} onClick={() => setStatus(item)} className={cn("whitespace-nowrap rounded-lg px-3 py-1.5 text-sm capitalize transition-colors", status === item ? "bg-background shadow-sm shadow-black/5" : "text-muted-foreground hover:text-foreground")}>
-            {item === "waiting_approval" ? "Waiting" : item}
-          </button>
-        ))}
-      </div>
+      <FilterTabs
+        options={statuses}
+        value={status}
+        onChange={setStatus}
+        label="Filter runs by status"
+        renderLabel={(item) => (item === "waiting_approval" ? "Waiting" : item)}
+      />
 
       {runsQuery.isLoading ? <RunRowsSkeleton /> : null}
       {runsQuery.isError ? <ErrorState message={getApiErrorMessage(runsQuery.error, "Could not load executions")} onRetry={() => runsQuery.refetch()} /> : null}
       {!runsQuery.isLoading && !runsQuery.isError && runs.length === 0 ? (
         <EmptyState
+          icon={Activity}
           title={status === "all" && workflowId === "all" ? "No runs yet" : "No runs match this filter"}
           message={status === "all" && workflowId === "all" ? "Trigger a published workflow with Run now to watch it execute here." : "Try a different workflow or status."}
           actionLabel={status === "all" && workflowId === "all" ? "Go to Workflows" : "Clear filters"}
@@ -94,7 +101,7 @@ export default function ExecutionsPage() {
 
       {!runsQuery.isLoading && !runsQuery.isError && runs.length > 0 ? (
         <Card className="overflow-hidden">
-          <div className={cn("hidden gap-3 border-b border-border px-3 py-2 text-xs font-medium uppercase text-muted-foreground sm:grid", GRID)}><span>Workflow</span><span>Status</span><span>Started</span><span>Duration</span><span>Cost</span></div>
+          <div className={cn("hidden gap-3 border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:grid", GRID)}><span>Workflow</span><span>Status</span><span>Started</span><span>Duration</span><span>Cost</span></div>
           {runs.map((run) => (
             <div
               key={run.id}
@@ -102,7 +109,7 @@ export default function ExecutionsPage() {
               tabIndex={0}
               onClick={() => router.push(`/executions/${run.id}`)}
               onKeyDown={(event) => event.key === "Enter" && router.push(`/executions/${run.id}`)}
-              className={cn("grid gap-2 border-b border-border p-3 text-sm transition-colors last:border-b-0 hover:bg-muted/40 sm:items-center sm:gap-3", GRID)}
+              className={cn("grid cursor-pointer gap-2 border-b border-border p-4 text-sm transition-colors last:border-b-0 hover:bg-surface-2 sm:items-center sm:gap-3", GRID)}
             >
               <div className="min-w-0"><div className="truncate font-medium">{run.workflow_name}</div><div className="truncate font-mono text-xs text-muted-foreground">v{run.version_number} · {run.id.slice(0, 8)}</div></div>
               <div><RunStatusBadge status={run.status} /></div>

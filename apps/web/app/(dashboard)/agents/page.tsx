@@ -119,7 +119,7 @@ const NEXT = [
 
 export default function AgentsPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-10 p-6">
+    <div className="mx-auto w-full max-w-5xl space-y-10 pt-1">
       {/* Hero ---------------------------------------------------------- */}
       <Card className="flex flex-col items-center gap-8 overflow-hidden px-6 py-12">
         <div className="w-full max-w-lg pb-16 pt-2">
@@ -133,7 +133,7 @@ export default function AgentsPage() {
         </div>
 
         <div className="flex max-w-xl flex-col items-center gap-3 text-center">
-          <Badge variant="soon">Preview</Badge>
+          <Badge variant="brand">Preview</Badge>
           <h2 className="text-xl font-medium tracking-tight">Agents are already running here — they just don&apos;t have a page yet</h2>
           <p className="text-sm text-muted-foreground">
             Every reasoning step in this product is an agent node inside a workflow, with a model, a prompt and a schema

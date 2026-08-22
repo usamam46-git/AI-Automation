@@ -400,6 +400,19 @@ Six contracts to know before touching any of it:
   insert, and the select is `FOR UPDATE SKIP LOCKED`, so overlapping ticks can't
   double-fire. (c) **Catch-up is suppressed** (`_advance_from`) — a workflow six
   hours overdue fires once and re-arms from *now*, never replaying the backlog.
+- **The tick's select MUST override `Workflow.current_version`'s eager load,
+  and forgetting it silently stops every scheduled workflow** (2026-08-22).
+  That relationship is `lazy="joined"` so `current_version_number` can be
+  serialized on workflow list/detail responses, which means an eager LEFT OUTER
+  JOIN is bolted onto every Workflow query that does not opt out. Postgres
+  rejects `FOR UPDATE` on the nullable side of an outer join outright
+  (`FeatureNotSupportedError`), so `dispatch_due_schedules` raised before
+  dispatching anything — a total, silent outage of cron triggers, and 10 red
+  tests in CI. The statement now carries
+  `.options(lazyload(Workflow.current_version))`; it reads the
+  `current_version_id` **column** and never the relationship. Any new row-locking
+  query over `Workflow` needs the same option — do not "fix" it by dropping the
+  eager load, which is what the response path depends on.
 - **Crons are evaluated in the config's IANA timezone, then converted to UTC.**
   `0 9 * * 1-5` means 9am local; evaluating it in UTC would shift every run by
   the offset and drift an hour twice a year in DST zones. Sub-minute crons are

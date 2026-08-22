@@ -68,10 +68,10 @@ export function ApprovalActionBar({ run }: { run: WorkflowRun }) {
   const summary = buildApprovalSummary(nodeOutputs);
 
   return (
-    <div className="sticky bottom-0 z-10 -mx-4 mt-2 border-t border-amber-200 bg-amber-50/95 p-4 backdrop-blur md:-mx-5 dark:border-amber-400/20 dark:bg-amber-950/40">
+    <div className="sticky bottom-0 z-10 -mx-4 mt-2 rounded-t-2xl bg-status-warn-soft/95 p-5 backdrop-blur md:-mx-6">
       <div className="mx-auto flex max-w-6xl flex-col gap-3">
         <div className="flex items-start gap-2">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-status-warn" />
           <div className="min-w-0 flex-1 space-y-1">
             <p className={summary.derived ? "text-base font-semibold" : "text-sm font-medium"}>{summary.headline}</p>
             {summary.rationale ? <p className="text-sm">{summary.rationale}</p> : null}
@@ -94,7 +94,7 @@ export function ApprovalActionBar({ run }: { run: WorkflowRun }) {
         </div>
 
         {summary.findings.length > 0 ? (
-          <ul className="flex list-disc flex-col gap-1 rounded-lg border border-amber-200/70 bg-background/50 p-3 pl-7 text-xs dark:border-amber-400/20">
+          <ul className="flex list-disc flex-col gap-1 rounded-xl bg-background/60 p-3 pl-7 text-xs">
             {summary.findings.map((finding) => (
               <li key={finding}>{finding}</li>
             ))}
@@ -102,7 +102,7 @@ export function ApprovalActionBar({ run }: { run: WorkflowRun }) {
         ) : null}
 
         {summary.citation ? (
-          <blockquote className="border-l-2 border-amber-400 pl-3 text-xs italic text-muted-foreground">{summary.citation}</blockquote>
+          <blockquote className="border-l-2 border-status-warn pl-3 text-xs italic text-muted-foreground">{summary.citation}</blockquote>
         ) : null}
 
         {nodeOutputs && Object.keys(nodeOutputs).length > 0 ? (

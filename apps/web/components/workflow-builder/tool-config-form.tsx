@@ -220,7 +220,7 @@ function RegistryFields({
               {(tools ?? []).map((tool) => (
                 <SelectItem key={tool.id} value={tool.id} className="text-xs">
                   <span className="font-mono">{tool.name}</span>
-                  {tool.is_mutating ? <span className="ml-1.5 text-amber-600 dark:text-amber-400">writes</span> : null}
+                  {tool.is_mutating ? <span className="ml-1.5 text-status-warn">writes</span> : null}
                 </SelectItem>
               ))}
             </SelectContent>

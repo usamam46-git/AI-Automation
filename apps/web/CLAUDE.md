@@ -18,47 +18,225 @@ file is frontend-specific only.
   for server confirmation. Optimistic updates are fine for low-risk actions
   like renaming.
 
-## Design system — locked values, do not deviate
+## Design system — the Atomie language (2026-08-22)
 
-The product uses an iOS/macOS-inspired visual language. Full detail in
-`docs/blueprint/volume-3-frontend-architecture.md` §3.1, summarized here:
+The product surface (`app/(dashboard)/` and `app/(auth)/`) was redesigned onto
+the "Atomie" language, sampled from the reference shots in
+`public/{Sample,Sample1,Sample2,sample3}.webp`. Everything before this was
+untouched shadcn: stock neutral tokens, white-card-on-white-page held apart by a
+hairline, and no brand colour anywhere.
 
-- **Corners**: `rounded-xl` (cards/panels/modals), `rounded-lg`
-  (buttons/inputs/badges), `rounded-full`/`rounded-2xl` (avatars). Nothing
-  sharp-cornered.
-- **Shadows**: soft, low-opacity only (`shadow-black/5`–`/10` in light
-  mode). Never a hard single drop-shadow.
-- **Dark mode — important**: TRUE BLACK, not shadcn's default blue-tinted
-  slate. `--background`: `0 0% 4%`–`0 0% 7%`. Card surfaces: `0 0%
-  9%`–`0 0% 11%`, neutral gray. Borders: `white/10`–`white/15`. This is a
-  deliberate override in `globals.css` under `.dark` — never regress to
-  shadcn's untouched dark defaults.
-- **Density**: compact, macOS System Settings / Linear-level density, not
-  marketing-page whitespace.
-- **Document scrollbar** (`globals.css`, added 2026-08-11): thin silver
-  (`#c3c7cf`) floating pill in light, `white/18` in dark, driven by
-  `--scrollbar-thumb*` tokens. Two things to know before touching it.
-  **(1) The standard and `-webkit-` mechanisms are mutually exclusive.**
-  Chromium ignores `::-webkit-scrollbar` completely whenever `scrollbar-width`
-  or `scrollbar-color` is set to a non-initial value — declaring both at once
-  silently discards the rounded thumb and leaves the stock bar. The standard
-  properties are therefore the Firefox baseline, and an
-  `@supports selector(::-webkit-scrollbar)` block resets them to `auto` so
-  Chromium/Safari use the pseudo-elements. To tell which path is live, measure
-  `innerWidth - documentElement.clientWidth`: 12px is the pseudo-element path,
-  11px is the standard `thin` path.
-  **(2) `html:has(.mk-root)` forces the light thumb on marketing routes.** The
-  scrollbar lives on `<html>`, which carries `.dark`, but the marketing page is
-  light-locked inside it — without the override a dark-system visitor gets a
-  dark scrollbar on a white page. `:has()` takes its argument's specificity, so
-  that rule is (0,1,1) and beats `.dark` at (0,1,0) regardless of order.
-  Rules are scoped to `html`, never bare `::-webkit-scrollbar`, so the
-  ScrollArea primitive and the builder canvas keep their own treatments.
-- **Motion**: subtle only, 150–250ms ease-out, no springy overshoot.
-- This will apply to the marketing site too — it should not become a
-  visually separate "brochure site." `app/(marketing)/` was built on
-  2026-08-11; see its own section below for the one deliberate divergence
-  (a committed light-only palette with its own `mk-` token namespace).
+**Marketing is deliberately NOT in this scope.** `app/(marketing)/` keeps its
+sky-and-lime palette, its system font stack and its own measured contrast. The
+two palettes share exactly one thread — lime — and even that is a different hue
+on each side. See "What protects marketing" below; it is load-bearing.
+
+### The one idea: depth is a FILL STEP, not a border plus a shadow
+
+A card sits one step away from the page and an inset sits one step further, in
+both themes. This is the inverse of what the app did before and it is what makes
+the language recognisable.
+
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| `--background` | `#F7F7F4` | `#0B0B0B` | Page |
+| `--card` | `#EFEFEC` | `#161616` | Card fill — **no border, no shadow** |
+| `--surface-2` | `#E7E7E3` | `#1E1E1E` | Inset inside a card; segmented-control tracks |
+| `--popover` | `#FFFFFF` | `#1E1E1E` | Dialogs, menus, tooltips — lifted *above* the page |
+| `--foreground` | `#1A1A1A` | `#F2F2F0` | Ink |
+| `--muted-foreground` | `#6B6B66` | `#8C8C88` | Secondary |
+| `--border` | ink @ 7% | white @ 8% | Hairline. Separators INSIDE a card, and inputs |
+
+Consequences, all of which have already caught something:
+
+- **`border` on a `<Card>` is a bug.** If two cards need separating they need
+  spacing, not a stroke.
+- **A Card inside a Card is invisible** — both resolve to the same fill. Use the
+  new `<CardInset>` (`components/ui/card.tsx`) for the inner one.
+- **A floating surface goes the other way.** Popover fill plus `shadow-pop`, so
+  it reads as above the page rather than as one more card lying on it. The
+  builder's node chips are the one non-overlay exception and say why inline.
+- **The true-black dark rule survives.** `#0B0B0B` is neutral, never shadcn's
+  blue-tinted slate. Greys here must not be warm.
+
+### Brand
+
+```
+--lime:      #C3E455   --primary, and the nav's active pill
+--lime-deep: #A8CC33   button hover/press, focus ring
+--lime-soft: #DCEFA0   .app-tile fills            (dark: lime @ 14%)
+--lime-ink:  #3F4D0C   glyph on a lime tile, and the eyebrow slash in light
+```
+
+**Lime always carries INK, never white.** Lime sits at L .87 — white on it is
+~1.4:1 and fails at every size, while ink measures **12.06:1**.
+`--primary-foreground` is ink in BOTH themes for this reason; do not "fix" it to
+follow the theme.
+
+**One lime action per screen.** That is what makes the accent mean anything, and
+it is why `<PageHeader>` takes a single `action` with everything else going to
+`aside`. A row of three primary buttons is a row of three things none of which
+is primary.
+
+### The status vocabulary is now real tokens
+
+Vol. 3 §5 always named `--color-status-*` and they had never existed;
+`components/ui/badge.tsx`'s cva was standing in, with
+`components/dashboard/stat-card.tsx` and `lib/node-catalog.ts` hand-mirroring it.
+All three now read one set: `--status-{neutral,info,warn,ok,bad}` plus a `-soft`
+fill for each.
+
+- Chips are flat: tinted fill, **no border**, desaturated.
+- **Nothing in the status set is lime.** Lime is the brand and marks the primary
+  action; a lime `completed` chip puts two vocabularies on one screen saying
+  different things in the same colour.
+- **The `-soft` fills are tuned against the CARD, not against white.** The first
+  pass used white-tuned values and every chip measured ~1.03:1 against `--card` —
+  the tints were there in the source and invisible on screen. They now separate
+  from both card and page at 1.08–1.17 while keeping their text at ≥5.9:1. If you
+  retune one, check it on a card, not on the page.
+
+### Measured contrast — re-measure if you touch a colour
+
+Read through a 1×1 canvas, not by regexing `getComputedStyle`: it returns
+`oklab()` here and naively parsing its numbers reads lightness as the red
+channel, flattering every ratio by ~10%. (Same method and same trap as the
+marketing hero — see that section.)
+
+| | light | dark |
+|---|---|---|
+| ink on lime (primary button, nav pill) | 12.06 | 12.06 |
+| ink on lime-deep (hover) | 9.41 | 9.41 |
+| chips (neutral / info / warn / ok / bad) | 5.91–6.98 | 5.74–8.00 |
+| lime-ink on lime-soft (`.app-tile`) | 7.42 | 7.42 |
+| foreground on card | 15.11 | 16.14 |
+| muted-foreground on card | 4.65 | 5.36 |
+| eyebrow slash | 8.59 | 13.64 |
+
+**The eyebrow slash is the one that already failed.** It was `--lime-deep`, which
+measured **1.72:1** on the paper — a pale hue on a near-white page is invisible
+however saturated it is. Light mode uses `--lime-ink`; dark uses the bright
+`--lime`. Do not swap them back for symmetry.
+
+### Shape, depth, type
+
+- **`--radius: 0.75rem`** (was `0.625rem`). Cards `rounded-2xl` (~21px), list
+  containers / inputs / selects `rounded-xl`, buttons and chips `rounded-lg`.
+- **Two shadows only** — `shadow-soft` (a hover lift) and `shadow-pop` (genuinely
+  floating). **Cards get neither.**
+- **Type is Plus Jakarta Sans**, registered in `app/layout.tsx` and bound to
+  `--font-sans` by `.app-root`. This **retires the old rule** that body copy stays
+  on the system SF/Segoe stack: that stack is a neutral OS UI face and the
+  reference is a geometric grotesk, and no amount of colour work bridges that.
+  Jakarta over Poppins because a pure geometric falls apart at the 11–13px this
+  app spends most of its pixels on. `JetBrains_Mono` is unchanged for node keys,
+  cron expressions, run ids and anything quoted as a literal.
+- **Density stays product-grade.** The reference is a case-study poster; this is a
+  working tool. Rows went 12px → 16px, not to marketing whitespace.
+- **Motion**: subtle only, 150–250ms ease-out, no springy overshoot. Unchanged.
+
+### Signature elements
+
+- **`.app-eyebrow`** — the `/ Dashboard` label. The slash is a `::before` so it can
+  take the brand colour without a nested span at every call site, and so it never
+  lands in the accessible name.
+- **`.app-bloom`** — ambient lime in two page corners, on a `fixed` inert layer
+  behind everything, painted over by the sidebar and the cards. **It shipped three
+  times too strong first** (22% over a 60rem radius washed the whole top of the
+  page green); it is now 13%/8% over 34rem, and 6%/4% in dark, where the same
+  alpha reads as coloured haze rather than as light.
+- **`.app-tile`** — the lime icon tile, the reference's recurring motif.
+- **`components/ui/dot-arc.tsx`** + the pure, vitest-covered `lib/dot-arc.ts` — the
+  dot-matrix arc from `Sample2.webp`. Its one consumer is the Success Rate stat
+  card. **Bleeding it off the card corner was tried and the card's own
+  `overflow-hidden` sliced it into an unreadable crescent**; it now occupies the
+  icon tile's slot. `null` renders the empty track, which is the right picture for
+  "nothing has finished yet" — the same distinction `formatSuccessRate` draws
+  between null and 0.
+- **Dashed edges on the builder canvas**, applied via `defaultEdgeOptions` in
+  `builder-canvas.tsx` — NOT per-edge in `lib/graph-mapping.ts`, which round-trips
+  the graph to and from the API and whose output is pinned by tests. Presentation
+  must not leak into that module.
+
+### What protects marketing — check this before editing tokens
+
+Three separate guards, and all three are needed:
+
+1. **`.mk-root` re-declares the full light token set**, as it always did.
+2. **It now also pins `--radius: 0.625rem`** and re-declares `--surface-2`, the
+   four `--lime-*` and all ten `--status-*` tokens. Marketing shares six
+   primitives with the app (Input, Textarea, Select, Switch, Label, Accordion),
+   and `.mk-root` lives inside `<html class="dark">` for a dark-system visitor —
+   without these, an input on the landing page picks `.dark`'s surface off `:root`
+   and renders a near-black field on white paper. **Any new token an app primitive
+   references must be added here in the same commit.** `--lime` maps to the
+   *marketing* lime (`--mk-lime`, `#b9d94a`), not the app's brighter one: the two
+   are different hues on purpose and the landing page's contrast numbers were
+   measured against its own.
+3. **The font is scoped, not global.** `.app-root` rebinds `--font-sans`; `:root`
+   still carries the system stack, which marketing body copy inherits.
+
+Verified live under `<html class="dark">`: marketing resolves `--radius` to
+`.625rem`, `--background` to white, `--lime` to `#b9d94a`, keeps the system font
+stack, and has no horizontal overflow.
+
+### Document scrollbar (unchanged, 2026-08-11)
+
+Thin silver (`#c3c7cf`) floating pill in light, `white/18` in dark, driven by
+`--scrollbar-thumb*` tokens. Two things to know before touching it.
+**(1) The standard and `-webkit-` mechanisms are mutually exclusive.**
+Chromium ignores `::-webkit-scrollbar` completely whenever `scrollbar-width`
+or `scrollbar-color` is set to a non-initial value — declaring both at once
+silently discards the rounded thumb and leaves the stock bar. The standard
+properties are therefore the Firefox baseline, and an
+`@supports selector(::-webkit-scrollbar)` block resets them to `auto` so
+Chromium/Safari use the pseudo-elements. To tell which path is live, measure
+`innerWidth - documentElement.clientWidth`: 12px is the pseudo-element path,
+11px is the standard `thin` path.
+**(2) `html:has(.mk-root)` forces the light thumb on marketing routes.** The
+scrollbar lives on `<html>`, which carries `.dark`, but the marketing page is
+light-locked inside it — without the override a dark-system visitor gets a
+dark scrollbar on a white page. `:has()` takes its argument's specificity, so
+that rule is (0,1,1) and beats `.dark` at (0,1,0) regardless of order.
+Rules are scoped to `html`, never bare `::-webkit-scrollbar`, so the
+ScrollArea primitive and the builder canvas keep their own treatments.
+
+## Page composition — `PageHeader` owns the title
+
+`components/shared/page-header.tsx`. Before this, **the title was rendered twice
+on every page**: the shell painted `<h1>{title}</h1>` from its nav table and then
+each page painted its own `<h2>Workflows</h2>` two rows below it. The shell header
+now carries only workspace / theme / account, and the page owns its heading —
+which is also the only place that knows what its primary action is.
+
+`components/shared/filter-tabs.tsx` is the segmented status filter, extracted from
+Workflows, Executions and Tools, where the same markup had been pasted three times
+and the Executions copy had already drifted. It is **not**
+`components/ui/tabs.tsx`: that primitive is Radix `Tabs`, which owns panel
+association and roving focus for tab PANELS, and this filters a list that stays
+mounted — modelling it as tabs would promise `aria-controls` semantics nothing
+here implements.
+
+**The sidebar is grouped** (`Automate` / `Build` / `Govern`), with `previewItems`
+still below a rule. Eight flat rows read as one undifferentiated list. The
+`startsWith` active-match rule and its "distinct top-level segment" constraint are
+unchanged — see the comment on `navGroups`.
+
+**The shell is `h-screen overflow-hidden` and `main` is the scroll container.**
+It was `min-h-screen` at first and that is a real bug, not a preference: a
+container with a MINIMUM height grows to fit its content, so the document
+scrolls instead of `main` and **the sidebar scrolls away with the page**.
+Reported on `/agents` and `/audit-log`, the first pages tall enough to show it.
+`main` and the `aside` both carry `.app-scroll`, which reapplies the silver-pill
+scrollbar — moving the scroll off `<html>` also moved it off the styled
+scrollbar rules, which are scoped to `html` on purpose. Verified: the document
+does not scroll, `main.scrollTop` moves, and the aside stays at `top: 0`.
+
+**The builder's full-bleed offsets track the shell and will break silently if it
+moves.** `app/(dashboard)/workflows/[workflowId]/builder/page.tsx` uses
+`-mx-4 -mb-10 h-[calc(100dvh-4rem)] md:-mx-6`, matching a `h-16` header and
+`main`'s `px-4 pb-10 md:px-6`. Get these wrong and the canvas either scrolls the
+page or leaves a band of paper under the minimap.
 
 ## API integration
 
@@ -296,9 +474,12 @@ Built 2026-08-07 (Vol. 3 §6). `app/(dashboard)/executions/page.tsx` (list) and
   to the first un-executed `human_approval` node. Pinned by a test; don't
   simplify it back to a straight equality check.
 - Run-status badge variants live in `components/ui/badge.tsx` alongside the
-  workflow-shell ones, deliberately. Vol. 3 §5 names `--color-status-*` tokens
-  that do not exist in this codebase — that cva IS the status vocabulary, so
-  extend it rather than forking a parallel token set.
+  workflow-shell ones, deliberately. **The `--color-status-*` tokens Vol. 3 §5
+  names now DO exist** (Atomie pass, 2026-08-22) — this used to say they did not
+  and that the cva was standing in for them. The cva is still where the
+  vocabulary is *named*; the colours come from the tokens. Extend the cva rather
+  than forking a parallel set, and add a token only if a genuinely new state
+  needs one.
 - No "View raw trace in LangSmith" link from the §6.1 wireframe: the LangSmith
   hook in `LLMClient` is a no-op, so the link would be dead.
 
@@ -333,9 +514,12 @@ pure `lib/dashboard-stats.ts` (vitest-covered).
   "USD 842.10" under some locales while `lib/run-status.ts`'s `formatCost`
   hardcodes `$` — the two would disagree on the same page. It is also distinct
   from `formatCost` on purpose: 2dp for a monthly total, 4dp for a per-run cost.
-- Stat-card accents are Tailwind palette classes mirroring `badge.tsx`'s run
-  statuses (sky/amber/emerald), not `--color-status-*` tokens — that token set
-  does not exist here, as the Execution Viewer section above already notes.
+- Stat-card accents read the `--color-status-*` tokens directly (Atomie pass,
+  2026-08-22). They used to be Tailwind palette classes hand-mirroring
+  `badge.tsx`'s run statuses, with their own `dark:` twins — three copies of one
+  vocabulary that had to be kept in step by hand. `accent="brand"` is the fourth
+  option and is NOT a status: it is the lime `.app-tile`, for the card on the row
+  that is a headline rather than a condition.
 
 ## Workflow triggers (2026-08-09)
 

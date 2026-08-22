@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MoreHorizontal, Plus } from "lucide-react";
+import { MoreHorizontal, Plus, Wrench } from "lucide-react";
 import { DeleteToolDialog } from "@/components/tools/delete-tool-dialog";
 import { ToolDialog } from "@/components/tools/tool-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -11,10 +11,11 @@ import { Card } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
+import { FilterTabs } from "@/components/shared/filter-tabs";
+import { PageHeader } from "@/components/shared/page-header";
 import { ErrorState } from "@/components/shared/error-state";
 import { type Tool, type ToolType, toolsApi, workspacesApi } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -42,7 +43,7 @@ function ToolRowsSkeleton() {
   return (
     <Card className="overflow-hidden">
       {Array.from({ length: 5 }).map((_, index) => (
-        <div key={index} className="grid grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_2rem] items-center gap-3 border-b border-border p-3 last:border-b-0">
+        <div key={index} className="grid grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_2rem] items-center gap-3 border-b border-border p-4 last:border-b-0">
           <div className="space-y-2"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-56" /></div><Skeleton className="h-6 w-16" /><Skeleton className="h-6 w-20" /><Skeleton className="h-4 w-24" /><Skeleton className="size-8" />
         </div>
       ))}
@@ -89,37 +90,30 @@ export default function ToolsPage() {
   const tools = toolsQuery.data ?? [];
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Tools</h2>
-          <p className="text-sm text-muted-foreground">
-            Reusable tool definitions for {activeWorkspace?.name ?? "the selected workspace"}. Nodes reference these instead of carrying their own config.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)} disabled={!activeWorkspace}><Plus className="size-4" />New Tool</Button>
-      </div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 pt-1">
+      <PageHeader
+        title="Tools"
+        description={`Reusable tool definitions for ${activeWorkspace?.name ?? "the selected workspace"}. Nodes reference these instead of carrying their own config.`}
+        action={<Button onClick={() => setCreateOpen(true)} disabled={!activeWorkspace}><Plus className="size-4" />New Tool</Button>}
+      />
 
-      <div className="flex w-full gap-1 overflow-x-auto rounded-xl border border-border bg-muted/30 p-1 sm:w-fit">
-        {toolTypes.map((item) => (
-          <button
-            key={item}
-            onClick={() => setToolType(item)}
-            className={cn("rounded-lg px-3 py-1.5 text-sm transition-colors", toolType === item ? "bg-background shadow-sm shadow-black/5" : "text-muted-foreground hover:text-foreground")}
-          >
-            {typeLabels[item]}
-          </button>
-        ))}
-      </div>
+      <FilterTabs
+        options={toolTypes}
+        value={toolType}
+        onChange={setToolType}
+        label="Filter tools by type"
+        renderLabel={(item) => typeLabels[item]}
+      />
 
       {workspacesQuery.isLoading || toolsQuery.isLoading ? <ToolRowsSkeleton /> : null}
       {workspacesQuery.isError ? <ErrorState message={getApiErrorMessage(workspacesQuery.error, "Could not load workspaces")} onRetry={() => workspacesQuery.refetch()} /> : null}
       {toolsQuery.isError ? <ErrorState message={getApiErrorMessage(toolsQuery.error, "Could not load tools")} onRetry={() => toolsQuery.refetch()} /> : null}
       {!workspacesQuery.isLoading && !workspacesQuery.isError && workspaces.length === 0 ? (
-        <EmptyState title="No workspace available" message="Create a workspace before registering tools." actionLabel="Go to Workspaces" onAction={() => { window.location.href = "/workspaces"; }} />
+        <EmptyState icon={Wrench} title="No workspace available" message="Create a workspace before registering tools." actionLabel="Go to Workspaces" onAction={() => { window.location.href = "/workspaces"; }} />
       ) : null}
       {!toolsQuery.isLoading && !toolsQuery.isError && activeWorkspace && tools.length === 0 ? (
         <EmptyState
+          icon={Wrench}
           title={toolType === "all" ? "No tools yet" : "No tools of this type"}
           message="Register a tool here and any node in this workspace can call it — with an execution record for every call."
           actionLabel="New Tool"
@@ -129,7 +123,7 @@ export default function ToolsPage() {
 
       {!toolsQuery.isLoading && !toolsQuery.isError && tools.length > 0 ? (
         <Card className="overflow-hidden">
-          <div className="hidden grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_2rem] gap-3 border-b border-border px-3 py-2 text-xs font-medium uppercase text-muted-foreground sm:grid">
+          <div className="hidden grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_2rem] gap-3 border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:grid">
             <span>Name</span><span>Type</span><span>Writes</span><span>Created</span><span />
           </div>
           {tools.map((tool) => (
@@ -139,7 +133,7 @@ export default function ToolsPage() {
               tabIndex={0}
               onClick={() => setEditingTool(tool)}
               onKeyDown={(event) => event.key === "Enter" && setEditingTool(tool)}
-              className="grid gap-2 border-b border-border p-3 text-sm transition-colors last:border-b-0 hover:bg-muted/40 sm:grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_2rem] sm:items-center sm:gap-3"
+              className="grid cursor-pointer gap-2 border-b border-border p-4 text-sm transition-colors last:border-b-0 hover:bg-surface-2 sm:grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_2rem] sm:items-center sm:gap-3"
             >
               <div className="min-w-0">
                 <div className="truncate font-mono font-medium">{tool.name}</div>

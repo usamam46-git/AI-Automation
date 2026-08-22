@@ -8,9 +8,9 @@ export const NODE_DRAG_MIME = "application/x-workflow-node-type";
 
 export function NodePalette({ className, onAdd }: { className?: string; onAdd: (nodeType: NodeType) => void }) {
   return (
-    <aside className={cn("flex w-52 shrink-0 flex-col border-r border-border bg-sidebar", className)}>
+    <aside className={cn("flex w-52 shrink-0 flex-col border-r border-border bg-background", className)}>
       <div className="border-b border-border px-3 py-2">
-        <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Nodes</h3>
+        <h3 className="app-eyebrow">Nodes</h3>
       </div>
       <div className="flex flex-col gap-1 overflow-y-auto p-2">
         {PALETTE_ORDER.map((nodeType) => {
@@ -29,9 +29,9 @@ export function NodePalette({ className, onAdd }: { className?: string; onAdd: (
               // gesture, but a click target keeps this usable by keyboard.
               onClick={() => onAdd(nodeType)}
               title={entry.description}
-              className="flex cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent focus:outline-none focus-visible:ring-3 focus-visible:ring-ring/30 active:cursor-grabbing"
+              className="flex cursor-grab items-center gap-2.5 rounded-xl px-2 py-2 text-left text-sm transition-colors hover:bg-card focus:outline-none focus-visible:ring-3 focus-visible:ring-ring/30 active:cursor-grabbing"
             >
-              <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-lg", entry.accent)}>
+              <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-lg", entry.accent)}>
                 <Icon className="size-3.5" />
               </span>
               <span className="truncate">{entry.label}</span>

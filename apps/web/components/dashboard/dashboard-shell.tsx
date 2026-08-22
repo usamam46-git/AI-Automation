@@ -35,18 +35,37 @@ import { useAuthStore } from "@/stores/auth-store";
 // Icons are the animated set in components/ui/animated-icons — same Lucide
 // geometry, driven by the row's hover/focus so nothing moves on its own, and
 // inert under prefers-reduced-motion. See that file's header for the rules.
-const navItems = [
-  { label: "Dashboard", href: "/dashboard", icon: DashboardIcon },
-  { label: "Workflows", href: "/workflows", icon: WorkflowIcon },
-  { label: "Executions", href: "/executions", icon: ActivityIcon },
-  { label: "Tools", href: "/tools", icon: ToolsIcon },
-  { label: "Knowledge", href: "/knowledge", icon: KnowledgeIcon },
-  { label: "Workspaces", href: "/workspaces", icon: WorkspacesIcon },
-  // Owner/Admin only (`audit:read`). Shown to everyone anyway: the page renders
-  // its own locked state, and the JWT carries no role claim to gate on here
-  // without a backend change.
-  { label: "Audit log", href: "/audit-log", icon: AuditIcon },
-  { label: "Settings", href: "/settings", icon: SettingsIcon },
+//
+// Grouped since the Atomie pass: eight flat rows read as one undifferentiated
+// list, and the group labels say what each half of the product is for. The
+// order within each group is unchanged.
+const navGroups = [
+  {
+    label: "Automate",
+    items: [
+      { label: "Dashboard", href: "/dashboard", icon: DashboardIcon },
+      { label: "Workflows", href: "/workflows", icon: WorkflowIcon },
+      { label: "Executions", href: "/executions", icon: ActivityIcon },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      { label: "Tools", href: "/tools", icon: ToolsIcon },
+      { label: "Knowledge", href: "/knowledge", icon: KnowledgeIcon },
+      { label: "Workspaces", href: "/workspaces", icon: WorkspacesIcon },
+    ],
+  },
+  {
+    label: "Govern",
+    items: [
+      // Owner/Admin only (`audit:read`). Shown to everyone anyway: the page
+      // renders its own locked state, and the JWT carries no role claim to gate
+      // on here without a backend change.
+      { label: "Audit log", href: "/audit-log", icon: AuditIcon },
+      { label: "Settings", href: "/settings", icon: SettingsIcon },
+    ],
+  },
 ];
 
 // Sits below a rule, apart from the working rows, because it is the only
@@ -57,6 +76,8 @@ const navItems = [
 const previewItems = [
   { label: "Agents", href: "/agents", icon: AgentsIcon },
 ];
+
+const allNavItems = [...navGroups.flatMap((group) => group.items), ...previewItems];
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -89,11 +110,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     if (currentWorkspace && currentWorkspace.id !== currentWorkspaceId) setCurrentWorkspaceId(currentWorkspace.id);
   }, [currentWorkspace, currentWorkspaceId, setCurrentWorkspaceId]);
 
-  // Preview rows are searched too, or /agents would render the fallback title.
-  const activeNavItem = [...navItems, ...previewItems].find(
+  // Preview rows are searched too, or /agents would match nothing.
+  const activeNavItem = allNavItems.find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
-  const title = activeNavItem?.label ?? "Workflows";
 
   async function logout() {
     try {
@@ -112,64 +132,91 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <aside className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar md:flex md:flex-col">
-        <div className="border-b border-sidebar-border p-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-auto w-full justify-between rounded-xl px-2 py-2">
-                {workspacesQuery.isLoading ? (
-                  <div className="flex w-full items-center gap-2"><Skeleton className="size-8 rounded-2xl" /><Skeleton className="h-8 flex-1" /></div>
-                ) : (
-                  <span className="flex min-w-0 items-center gap-2 text-left">
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-2xl bg-primary text-sm font-semibold text-primary-foreground">{currentWorkspace?.icon || currentWorkspace?.name?.charAt(0)?.toUpperCase() || "A"}</span>
-                    <span className="min-w-0"><span className="block truncate text-sm font-medium">{currentWorkspace?.name ?? "No workspace"}</span><span className="block truncate text-xs text-muted-foreground">Org {orgId?.slice(0, 8) ?? "session"}</span></span>
+    // h-screen + overflow-hidden, NOT min-h-screen. `main` below is the scroll
+    // container, and it can only be one if its ancestors have a FIXED height —
+    // with min-h-screen the shell grows to fit the content, the document
+    // scrolls instead, and the sidebar scrolls away with it. Reported on
+    // /agents and /audit-log, which are the first pages tall enough to show it.
+    <div className="relative flex h-screen overflow-hidden bg-background text-foreground">
+      {/* Ambient lime bloom. Fixed and inert, behind everything — the sidebar
+          and the cards paint their own surfaces over it, so it reads as light
+          in the room rather than as a gradient on a panel. */}
+      <div className="app-bloom" aria-hidden />
+
+      <aside className="app-scroll relative z-10 hidden w-64 shrink-0 flex-col overflow-y-auto px-3 py-4 md:flex">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex w-full items-center gap-2.5 rounded-2xl bg-card p-2.5 text-left transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/30">
+              {workspacesQuery.isLoading ? (
+                <div className="flex w-full items-center gap-2.5"><Skeleton className="size-9 rounded-xl" /><Skeleton className="h-9 flex-1" /></div>
+              ) : (
+                <>
+                  <span className="app-tile size-9 shrink-0 text-sm font-semibold">
+                    {currentWorkspace?.icon || currentWorkspace?.name?.charAt(0)?.toUpperCase() || "A"}
                   </span>
-                )}
-                <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-60" align="start">
-              <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-              {workspaces.map((workspace) => (
-                <DropdownMenuItem key={workspace.id} onSelect={() => setCurrentWorkspaceId(workspace.id)}>
-                  <span className="flex size-6 items-center justify-center rounded-lg bg-muted text-xs font-medium">{workspace.icon || workspace.name.charAt(0).toUpperCase()}</span>
-                  <span className="flex-1 truncate">{workspace.name}</span>
-                  {workspace.is_default ? <Badge variant="soon">Default</Badge> : null}
-                </DropdownMenuItem>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold leading-tight">{currentWorkspace?.name ?? "No workspace"}</span>
+                    <span className="block truncate text-xs leading-tight text-muted-foreground">Org {orgId?.slice(0, 8) ?? "session"}</span>
+                  </span>
+                  <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                </>
+              )}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-60" align="start">
+            <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+            {workspaces.map((workspace) => (
+              <DropdownMenuItem key={workspace.id} onSelect={() => setCurrentWorkspaceId(workspace.id)}>
+                <span className="app-tile size-6 text-xs font-medium">{workspace.icon || workspace.name.charAt(0).toUpperCase()}</span>
+                <span className="flex-1 truncate">{workspace.name}</span>
+                {workspace.is_default ? <Badge variant="brand">Default</Badge> : null}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setWorkspaceDialogOpen(true)}><Plus className="size-4" />Create workspace</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <nav className="mt-5 flex flex-1 flex-col gap-5">
+          {navGroups.map((group) => (
+            <div key={group.label} className="flex flex-col gap-0.5">
+              <span className="app-eyebrow mb-1.5 px-2.5">{group.label}</span>
+              {group.items.map((item) => (
+                <NavLink key={item.href} item={item} active={item.href === activeNavItem?.href} />
               ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => setWorkspaceDialogOpen(true)}><Plus className="size-4" />Create workspace</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        <nav className="flex flex-1 flex-col gap-1 p-3">
-          {navItems.map((item) => (
-            <NavLink key={item.href} item={item} active={item.href === activeNavItem?.href} />
+            </div>
           ))}
-          <div className="mt-3 border-t border-sidebar-border pt-3">
+          <div className="mt-auto flex flex-col gap-0.5 border-t border-border pt-4">
             {previewItems.map((item) => (
               <NavLink key={item.href} item={item} active={item.href === activeNavItem?.href} badge="Preview" />
             ))}
           </div>
         </nav>
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b border-border px-4">
-          <div><h1 className="text-xl font-semibold">{title}</h1><p className="text-xs text-muted-foreground">{currentWorkspace?.name ?? "Workspace session"}</p></div>
-          <div className="flex items-center gap-1">
-            <ThemeToggle />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="rounded-full"><span className="flex size-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">{userId?.slice(0, 1).toUpperCase() ?? "U"}</span></Button></DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel><span className="block">Profile</span><span className="block truncate text-xs font-normal text-muted-foreground">{userId ?? "Current user"}</span></DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={logout}><LogOut className="size-4" />Logout</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col">
+        {/* The title used to live here AND on every page. It now lives only on
+            the page, via components/shared/page-header.tsx — this bar carries
+            the account context that is genuinely global. */}
+        <header className="flex h-16 shrink-0 items-center justify-end gap-1 px-4 md:px-6">
+          <span className="mr-auto truncate text-sm font-medium md:hidden">
+            {activeNavItem?.label ?? "Orkest"}
+          </span>
+          <ThemeToggle />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="rounded-full">
+                <span className="flex size-8 items-center justify-center rounded-full bg-card text-xs font-semibold">{userId?.slice(0, 1).toUpperCase() ?? "U"}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel><span className="block">Profile</span><span className="block truncate text-xs font-normal text-muted-foreground">{userId ?? "Current user"}</span></DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={logout}><LogOut className="size-4" />Logout</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
-        <main className="flex-1 overflow-auto p-4 md:p-5">{children}</main>
+        <main className="app-scroll flex-1 overflow-y-auto px-4 pb-10 md:px-6">{children}</main>
       </div>
       <WorkspaceDialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen} />
     </div>
@@ -185,6 +232,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
  *
  * Focus counts as hover so the animation is reachable by keyboard, and the
  * active row animates on mount-in as a small acknowledgement of arrival.
+ *
+ * The active state is the reference's lime pill, and it carries INK text — lime
+ * sits at L .87, so its foreground is near-black in BOTH themes. This is the one
+ * place the brand colour appears in the nav, which is what keeps it meaning
+ * "you are here" rather than becoming decoration.
  */
 function NavLink({
   item,
@@ -207,13 +259,19 @@ function NavLink({
       onFocus={() => setHovered(true)}
       onBlur={() => setHovered(false)}
       className={cn(
-        "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent",
-        active && "bg-sidebar-accent font-medium",
+        "flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors",
+        active
+          ? "bg-primary font-semibold text-primary-foreground"
+          : "text-muted-foreground hover:bg-card hover:text-foreground",
       )}
     >
       <Icon className="size-4" active={hovered} />
       {item.label}
-      {badge ? <Badge variant="soon" className="ml-auto">{badge}</Badge> : null}
+      {badge ? (
+        <span className={cn("ml-auto rounded-md px-1.5 py-0.5 text-[10px] font-medium", active ? "bg-foreground/10" : "bg-surface-2 text-muted-foreground")}>
+          {badge}
+        </span>
+      ) : null}
     </Link>
   );
 }

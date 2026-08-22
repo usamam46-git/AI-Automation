@@ -29,7 +29,7 @@ export function FieldMapEditor({ value, onChange }: { value: Record<string, stri
         addLabel="Add mapping"
       />
       {unknownRoots.length > 0 ? (
-        <p className="text-[11px] leading-snug text-amber-600 dark:text-amber-400">
+        <p className="text-[11px] leading-snug text-status-warn">
           {`"${unknownRoots[0]}" is not a state root, so this path will resolve to null at run time. Roots: ${STATE_ROOTS.join(", ")}.`}
         </p>
       ) : null}

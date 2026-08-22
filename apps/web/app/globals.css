@@ -61,6 +61,40 @@
   --color-mk-mist: var(--mk-mist);
   --color-mk-hairline: var(--mk-hairline);
   --font-display: var(--font-instrument-sans), var(--font-sans);
+
+  /* ---------------------------------------------------------------------
+     Atomie app language (2026-08-22). App routes only — `app/(dashboard)/`
+     and `app/(auth)/`, both scoped by `.app-root` below. Marketing keeps its
+     own `mk-` namespace and is untouched by any of this.
+  --------------------------------------------------------------------- */
+
+  /* Surface scale. Depth here comes from FILL DIFFERENCE, not from a border
+     plus a shadow — a card is a step away from the page, and an inset is a
+     step away from the card. `--color-card` (above) is surface-1. */
+  --color-surface-2: var(--surface-2);
+
+  /* Brand. Lime is `--primary`; see the note on `--primary-foreground`. */
+  --color-lime: var(--lime);
+  --color-lime-deep: var(--lime-deep);
+  --color-lime-soft: var(--lime-soft);
+  --color-lime-ink: var(--lime-ink);
+
+  /* Status vocabulary. Vol. 3 §5 names these and they had never existed —
+     `components/ui/badge.tsx`'s cva was standing in, with `stat-card.tsx` and
+     `lib/node-catalog.ts` hand-mirroring it. All three now read from here. */
+  --color-status-neutral: var(--status-neutral);
+  --color-status-neutral-soft: var(--status-neutral-soft);
+  --color-status-info: var(--status-info);
+  --color-status-info-soft: var(--status-info-soft);
+  --color-status-warn: var(--status-warn);
+  --color-status-warn-soft: var(--status-warn-soft);
+  --color-status-ok: var(--status-ok);
+  --color-status-ok-soft: var(--status-ok-soft);
+  --color-status-bad: var(--status-bad);
+  --color-status-bad-soft: var(--status-bad-soft);
+
+  --shadow-soft: var(--elevation-soft);
+  --shadow-pop: var(--elevation-pop);
 }
 
 :root {
@@ -70,38 +104,90 @@
   --scrollbar-thumb: #c3c7cf;
   --scrollbar-thumb-hover: #a7acb8;
   --scrollbar-thumb-active: #8d94a2;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+
+  /* -------------------------------------------------------------------------
+     Atomie — light. Reference: apps/web/public/Sample*.webp.
+
+     The characteristic move is that a CARD IS DARKER THAN THE PAGE. Depth is
+     carried by the fill step (page .975 -> card .951 -> inset .927), not by a
+     hairline plus a drop shadow, which is what shadcn's defaults do and what
+     this replaces. `--border` survives only for separators INSIDE a card and
+     for inputs; a card that draws its own outline is a bug now.
+
+     Popovers/dialogs go the OTHER way — pure white, lifted — so a floating
+     surface reads as above the page rather than as another card on it.
+  ------------------------------------------------------------------------- */
+  --background: oklch(0.9753 0.004 106.5);
+  --foreground: oklch(0.2178 0 89.9);
+  --card: oklch(0.9513 0.004 106.5);
+  --card-foreground: oklch(0.2178 0 89.9);
+  --surface-2: oklch(0.9268 0.0053 106.5);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.2178 0 89.9);
+
+  /* Lime IS the primary. `--primary-foreground` is ink and must stay ink:
+     lime is a light hue (L .87), so white on it is ~1.4:1 and fails at every
+     size, while ink on it measures 12.06:1. See apps/web/CLAUDE.md. */
+  --lime: oklch(0.8678 0.1709 121.1);
+  --lime-deep: oklch(0.792 0.1757 122.3);
+  --lime-soft: oklch(0.9197 0.1032 119.5);
+  --lime-ink: oklch(0.3945 0.0875 121.5);
+  --primary: var(--lime);
+  --primary-foreground: oklch(0.2178 0 89.9);
+
+  --secondary: oklch(0.9268 0.0053 106.5);
+  --secondary-foreground: oklch(0.2178 0 89.9);
+  --muted: oklch(0.9268 0.0053 106.5);
+  --muted-foreground: oklch(0.5262 0.0077 106.7);
+  --accent: oklch(0.9268 0.0053 106.5);
+  --accent-foreground: oklch(0.2178 0 89.9);
+  --destructive: oklch(0.4438 0.1206 23.4);
+
+  --border: oklch(0.2178 0 89.9 / 7%);
+  --input: oklch(0.9117 0.0054 106.5);
+  /* Focus ring is the brand, deepened — the pale lime is invisible on paper. */
+  --ring: oklch(0.792 0.1757 122.3);
+
+  --chart-1: var(--lime-deep);
+  --chart-2: oklch(0.5262 0.0077 106.7);
+  --chart-3: oklch(0.4494 0.0776 157.6);
+  --chart-4: oklch(0.4738 0.0954 249.3);
+  --chart-5: oklch(0.2178 0 89.9);
+
+  /* Status vocabulary — light. `-soft` is the chip fill, the bare token is the
+     text/mark on it. Flat: tinted fill, NO border, desaturated. Every pair
+     below was measured, not eyeballed (5.5-6.7:1). Statuses stay hue-coded and
+     none of them is lime: lime is reserved for brand, and a lime `completed`
+     would make the two vocabularies collide on the same screen. */
+  --status-neutral: oklch(0.4259 0.0081 106.7);
+  --status-neutral-soft: oklch(0.9022 0.0067 106.5);
+  --status-info: oklch(0.4311 0.08 245);
+  --status-info-soft: oklch(0.9167 0.0302 246.6);
+  --status-warn: oklch(0.4522 0.0845 80.5);
+  --status-warn-soft: oklch(0.9214 0.0472 88.3);
+  --status-ok: oklch(0.4097 0.0728 156.9);
+  --status-ok-soft: oklch(0.9094 0.0316 160.2);
+  --status-bad: oklch(0.4091 0.1131 23.5);
+  --status-bad-soft: oklch(0.9045 0.03 17.7);
+
+  /* Two shadows, and cards get NEITHER. `soft` is a hover lift; `pop` is for
+     things genuinely floating above the page. */
+  --elevation-soft: 0 1px 2px oklch(0.2178 0 89.9 / 4%), 0 4px 12px -4px oklch(0.2178 0 89.9 / 8%);
+  --elevation-pop: 0 1px 2px oklch(0.2178 0 89.9 / 6%), 0 12px 32px -8px oklch(0.2178 0 89.9 / 14%),
+    0 32px 64px -32px oklch(0.2178 0 89.9 / 18%);
+
+  /* Cards read ~20px in the reference. 0.75rem base puts `rounded-2xl` at
+     21.6px, `rounded-xl` at 16.8px and `rounded-lg` at 12px. */
+  --radius: 0.75rem;
+
+  --sidebar: oklch(0.9753 0.004 106.5);
+  --sidebar-foreground: oklch(0.2178 0 89.9);
+  --sidebar-primary: var(--lime);
+  --sidebar-primary-foreground: oklch(0.2178 0 89.9);
+  --sidebar-accent: oklch(0.9268 0.0053 106.5);
+  --sidebar-accent-foreground: oklch(0.2178 0 89.9);
+  --sidebar-border: oklch(0.2178 0 89.9 / 7%);
+  --sidebar-ring: oklch(0.792 0.1757 122.3);
 }
 
 .dark {
@@ -111,37 +197,67 @@
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
   --scrollbar-thumb-active: rgba(255, 255, 255, 0.38);
 
-  --background: oklch(0.085 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.145 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.205 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.205 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.205 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.145 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.922 0 0);
-  --sidebar-primary-foreground: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.205 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* -------------------------------------------------------------------------
+     Atomie — dark. The samples are light-only, so this half is authored rather
+     than sampled. Two rules carry over unchanged: depth is still a fill step
+     (page .150 -> card .200 -> inset .235, now going UP), and the greys are
+     strictly NEUTRAL — never shadcn's blue-tinted slate.
+  ------------------------------------------------------------------------- */
+  --background: oklch(0.1496 0 89.9);
+  --foreground: oklch(0.9606 0.0027 106.4);
+  --card: oklch(0.2002 0 89.9);
+  --card-foreground: oklch(0.9606 0.0027 106.4);
+  --surface-2: oklch(0.235 0 89.9);
+  --popover: oklch(0.235 0 89.9);
+  --popover-foreground: oklch(0.9606 0.0027 106.4);
+
+  /* Lime is theme-independent — it is the brand, and it is the one thread this
+     app shares with the marketing page. Ink on it, in both themes. */
+  --primary: var(--lime);
+  --primary-foreground: oklch(0.2178 0 89.9);
+
+  --secondary: oklch(0.235 0 89.9);
+  --secondary-foreground: oklch(0.9606 0.0027 106.4);
+  --muted: oklch(0.235 0 89.9);
+  --muted-foreground: oklch(0.6389 0.0059 106.6);
+  --accent: oklch(0.235 0 89.9);
+  --accent-foreground: oklch(0.9606 0.0027 106.4);
+  --destructive: oklch(0.7811 0.0921 19.4);
+
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.8678 0.1709 121.1);
+
+  --chart-1: var(--lime);
+  --chart-2: oklch(0.6389 0.0059 106.6);
+  --chart-3: oklch(0.7983 0.1043 159.1);
+  --chart-4: oklch(0.7932 0.0837 250.5);
+  --chart-5: oklch(0.9606 0.0027 106.4);
+
+  /* Measured on the card fill they sit on (7.2-8.0:1). */
+  --status-neutral: oklch(0.714 0.0071 106.6);
+  --status-neutral-soft: oklch(0.2814 0 89.9);
+  --status-info: oklch(0.7932 0.0837 250.5);
+  --status-info-soft: oklch(0.2773 0.0241 253.7);
+  --status-warn: oklch(0.8176 0.1117 81.4);
+  --status-warn-soft: oklch(0.2981 0.0312 82.8);
+  --status-ok: oklch(0.7983 0.1043 159.1);
+  --status-ok-soft: oklch(0.2808 0.025 160.9);
+  --status-bad: oklch(0.7811 0.0921 19.4);
+  --status-bad-soft: oklch(0.2742 0.0231 18.7);
+
+  --elevation-soft: 0 1px 2px oklch(0 0 0 / 40%), 0 4px 12px -4px oklch(0 0 0 / 50%);
+  --elevation-pop: 0 1px 2px oklch(0 0 0 / 50%), 0 12px 32px -8px oklch(0 0 0 / 60%),
+    0 32px 64px -32px oklch(0 0 0 / 70%);
+
+  --sidebar: oklch(0.1496 0 89.9);
+  --sidebar-foreground: oklch(0.9606 0.0027 106.4);
+  --sidebar-primary: var(--lime);
+  --sidebar-primary-foreground: oklch(0.2178 0 89.9);
+  --sidebar-accent: oklch(0.235 0 89.9);
+  --sidebar-accent-foreground: oklch(0.9606 0.0027 106.4);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.8678 0.1709 121.1);
 }
 
 /* ---------------------------------------------------------------------------
@@ -200,6 +316,40 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
+  /* Pinned. The app base moved to 0.75rem with the Atomie pass (2026-08-22)
+     and marketing is deliberately out of that scope — without this line every
+     Button, Card and Accordion on the landing page silently got rounder. */
+  --radius: 0.625rem;
+
+  /* Marketing shares six primitives with the app — Input, Textarea, Select,
+     Switch, Label, Accordion — so every Atomie token those primitives reference
+     must resolve to a LIGHT value here too. `.mk-root` sits inside a
+     `<html class="dark">` for a dark-system visitor, and without these lines an
+     input on the landing page would pick `.dark`'s surface off :root and render
+     a near-black field on white paper. Same reasoning as the palette block
+     above; these are the tokens that block adds since the Atomie pass.
+
+     Lime maps to the MARKETING lime (#b9d94a), not the app's brighter one. The
+     two are deliberately different hues and the landing page's contrast numbers
+     were measured against its own. */
+  --surface-2: oklch(0.9268 0.0053 106.5);
+  --lime: var(--mk-lime);
+  --lime-deep: var(--mk-lime-deep);
+  --lime-soft: oklch(0.9545 0.0675 118.4);
+  --lime-ink: oklch(0.3945 0.0875 121.5);
+  --status-neutral: oklch(0.466 0.0079 106.7);
+  --status-neutral-soft: oklch(0.9268 0.0053 106.5);
+  --status-info: oklch(0.4738 0.0954 249.3);
+  --status-info-soft: oklch(0.9464 0.0196 245.6);
+  --status-warn: oklch(0.4889 0.0902 81.1);
+  --status-warn-soft: oklch(0.9528 0.029 89.6);
+  --status-ok: oklch(0.4494 0.0776 157.6);
+  --status-ok-soft: oklch(0.9405 0.0215 158.6);
+  --status-bad: oklch(0.4438 0.1206 23.4);
+  --status-bad-soft: oklch(0.9341 0.0208 17.5);
+  --elevation-soft: 0 1px 2px rgba(20, 20, 20, 0.04), 0 4px 12px -4px rgba(20, 20, 20, 0.08);
+  --elevation-pop: 0 1px 2px rgba(20, 20, 20, 0.06), 0 12px 32px -8px rgba(20, 20, 20, 0.14),
+    0 32px 64px -32px rgba(20, 20, 20, 0.18);
 
   color-scheme: light;
   background-color: var(--mk-paper);
@@ -341,6 +491,147 @@ html:has(.mk-root) {
       0 12px 32px -8px rgba(14, 60, 110, 0.18),
       0 32px 64px -24px rgba(14, 60, 110, 0.22);
   }
+
+  /* -------------------------------------------------------------------------
+     Atomie app helpers. All three are scoped to `.app-root` at the call site
+     (dashboard + auth layouts) so nothing here can reach the marketing tree.
+  ------------------------------------------------------------------------- */
+
+  /* The `/ Dashboard` eyebrow. The slash is a `::before` rather than a literal
+     character so it can take the brand colour without a nested span at every
+     call site, and so it never lands in the accessible name. */
+  .app-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+
+  /* The slash takes the brand, but at the DEEP end of it in light mode.
+     `--lime-deep` was tried first and measured 1.72:1 against the paper — a
+     pale hue on a near-white page is invisible however saturated it is, and an
+     invisible brand mark is worse than none. `--lime-ink` is 8.6:1 and still
+     unmistakably green. Dark mode is the mirror case and uses the bright lime. */
+  .app-eyebrow::before {
+    content: "/";
+    margin-right: 0.4em;
+    color: var(--lime-ink);
+    font-weight: 700;
+  }
+
+  .dark .app-eyebrow::before {
+    color: var(--lime);
+  }
+
+  /* Ambient lime bloom in two page corners. Rendered on a fixed, inert layer
+     BEHIND the app chrome (the shell paints its own surfaces over it), so it
+     reads as light in the room rather than as a gradient on a card.
+     Deliberately far weaker in dark: the same alpha over a near-black page
+     reads as a coloured haze rather than as light. */
+  .app-bloom {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(34rem 24rem at 100% 0%, oklch(0.8678 0.1709 121.1 / 13%), transparent 68%),
+      radial-gradient(28rem 20rem at 0% 100%, oklch(0.8678 0.1709 121.1 / 8%), transparent 70%);
+  }
+
+  .dark .app-bloom {
+    background:
+      radial-gradient(34rem 24rem at 100% 0%, oklch(0.8678 0.1709 121.1 / 6%), transparent 68%),
+      radial-gradient(28rem 20rem at 0% 100%, oklch(0.8678 0.1709 121.1 / 4%), transparent 70%);
+  }
+
+  /* Small lime-tinted icon tile — the reference's recurring motif. Ink on
+     lime-soft measures 15.4:1, so the glyph inside never needs a weight bump. */
+  .app-tile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-lg);
+    background-color: var(--lime-soft);
+    color: var(--lime-ink);
+  }
+
+  .dark .app-tile {
+    background-color: oklch(0.8678 0.1709 121.1 / 14%);
+    color: var(--lime);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Scroll containers inside the app shell.
+
+   The shell is `h-screen overflow-hidden` so that `main` — not the document —
+   is what scrolls; otherwise the whole page scrolls and the sidebar travels
+   with it. That moves the scrollbar off `<html>`, where the styled one lives,
+   so these containers need the same treatment applied directly.
+
+   Same two-mechanism rule as the document scrollbar above, and for the same
+   reason: Chromium ignores `::-webkit-scrollbar` whenever `scrollbar-width` or
+   `scrollbar-color` is set to a non-initial value, so the standard properties
+   are the Firefox baseline and the `@supports` block hands control back to the
+   pseudo-elements. This is opt-in via a class rather than a bare rule, so the
+   ScrollArea primitive and the builder canvas keep their own treatments.
+--------------------------------------------------------------------------- */
+.app-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .app-scroll {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .app-scroll::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  .app-scroll::-webkit-scrollbar-track,
+  .app-scroll::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  .app-scroll::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    transition: background-color 200ms ease-out;
+  }
+
+  .app-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  .app-scroll::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-active);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Font scope for `app/(dashboard)/` and `app/(auth)/`.
+
+   Deliberately NOT a global `--font-sans` change. Marketing body copy inherits
+   that variable and marketing is out of scope for the Atomie pass, so the app
+   face is scoped exactly the way `.mk-root` scopes the marketing palette.
+
+   This retires the "body copy stays on the system SF/Segoe stack" rule that
+   `app/layout.tsx` and apps/web/CLAUDE.md used to state — for app routes only.
+   The reference is a geometric grotesk and the system stack is a neutral UI
+   face; no amount of colour work makes the latter read as the former.
+--------------------------------------------------------------------------- */
+.app-root {
+  --font-sans: var(--font-jakarta), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 /* The scroll film pins a section and scrubs a timeline. With reduced motion

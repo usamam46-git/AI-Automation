@@ -27,7 +27,7 @@ function AlertDialogContent({ className, ...props }: React.ComponentProps<typeof
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
-      <AlertDialogPrimitive.Content className={cn("fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border bg-card p-5 shadow-lg shadow-black/10 outline-none", className)} {...props} />
+      <AlertDialogPrimitive.Content className={cn("fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border bg-card p-5 shadow-pop outline-none", className)} {...props} />
     </AlertDialogPortal>
   );
 }

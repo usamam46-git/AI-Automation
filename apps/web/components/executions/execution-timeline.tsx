@@ -9,12 +9,14 @@ import { cn } from "@/lib/utils";
 // Node icons come from NODE_CATALOG so the viewer and the builder canvas speak
 // one visual language (Vol. 3 §6.1) — never redefine the taxonomy here.
 
+// State glyphs read the same `--color-status-*` tokens as the run badges, so a
+// row's tick and its status chip cannot end up different greens.
 const STATE_GLYPH: Record<TimelineRowState, { icon: typeof Check; className: string }> = {
-  succeeded: { icon: Check, className: "text-emerald-600 dark:text-emerald-400" },
-  failed: { icon: X, className: "text-red-600 dark:text-red-400" },
+  succeeded: { icon: Check, className: "text-status-ok" },
+  failed: { icon: X, className: "text-status-bad" },
   skipped: { icon: SkipForward, className: "text-muted-foreground" },
-  waiting: { icon: Hourglass, className: "text-amber-600 dark:text-amber-400" },
-  running: { icon: LoaderCircle, className: "text-sky-600 dark:text-sky-400 animate-spin" },
+  waiting: { icon: Hourglass, className: "text-status-warn" },
+  running: { icon: LoaderCircle, className: "text-status-info animate-spin" },
   pending: { icon: CircleDashed, className: "text-muted-foreground/50" },
 };
 
@@ -46,13 +48,13 @@ export function ExecutionTimeline({ rows, selectedNodeKey, onSelect }: { rows: T
               onClick={() => onSelect(row.nodeKey)}
               aria-current={selected}
               className={cn(
-                "flex w-full items-start gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted/60",
-                selected && "bg-muted",
+                "flex w-full items-start gap-2.5 rounded-xl p-2.5 text-left transition-colors hover:bg-surface-2",
+                selected && "bg-surface-2",
                 row.state === "pending" && "opacity-60",
               )}
             >
               <span className="relative flex flex-col items-center self-stretch">
-                <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-lg", entry.accent)}><Icon className="size-4" /></span>
+                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", entry.accent)}><Icon className="size-4" /></span>
                 {index < rows.length - 1 ? <span className="mt-1 w-px flex-1 bg-border" aria-hidden /> : null}
               </span>
               <span className="min-w-0 flex-1 pb-3">

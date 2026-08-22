@@ -86,18 +86,18 @@ export default function ExecutionDetailPage() {
   const tokens = totalTokens(run.node_executions);
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 pt-1">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <Link href="/executions" className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"><ArrowLeft className="size-3" />Executions</Link>
-          <h2 className="mt-1 truncate text-xl font-semibold">
-            <span className="font-mono text-base text-muted-foreground">Run #{run.id.slice(0, 8)}</span> · {run.workflow_name} <span className="text-muted-foreground">v{run.version_number}</span>
-          </h2>
+          <Link href="/executions" className="app-eyebrow transition-colors hover:text-foreground"><ArrowLeft className="mr-1 size-3" />Executions</Link>
+          <h1 className="mt-1.5 truncate text-2xl font-semibold tracking-tight">
+            <span className="font-mono text-lg text-muted-foreground">Run #{run.id.slice(0, 8)}</span> · {run.workflow_name} <span className="text-muted-foreground">v{run.version_number}</span>
+          </h1>
         </div>
         <RunStatusBadge status={run.status} className="shrink-0" />
       </div>
 
-      <Card className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-4">
+      <Card className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-4">
         <Stat label="Started" value={run.started_at ? new Date(run.started_at).toLocaleString() : "Not started"} />
         <Stat label="Duration" value={formatDuration(elapsedMs(run.started_at, run.completed_at))} />
         <Stat label="Total cost" value={formatCost(run.total_cost_usd)} />
@@ -105,15 +105,15 @@ export default function ExecutionDetailPage() {
       </Card>
 
       {run.error ? (
-        <Card className="border-destructive/40 p-4">
-          <h3 className="mb-2 text-sm font-medium text-destructive">Run error</h3>
+        <Card className="bg-status-bad-soft p-5">
+          <h3 className="mb-2 text-sm font-semibold text-status-bad">Run error</h3>
           <JsonBlock value={run.error} />
         </Card>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,20rem)_1fr] lg:items-start">
         <Card className="p-2">
-          <h3 className="px-2 py-1.5 text-sm font-medium text-muted-foreground">Timeline</h3>
+          <h3 className="app-eyebrow px-2.5 py-2">Timeline</h3>
           {versionQuery.isLoading && rows.length === 0 ? (
             <div className="space-y-2 p-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
           ) : (
@@ -121,7 +121,7 @@ export default function ExecutionDetailPage() {
           )}
         </Card>
 
-        <Card className="p-4"><NodeDetailPanel row={selectedRow} /></Card>
+        <Card className="p-5"><NodeDetailPanel row={selectedRow} /></Card>
       </div>
 
       {run.status === "waiting_approval" ? <ApprovalActionBar run={run} /> : null}

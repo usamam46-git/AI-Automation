@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Lock, ShieldCheck } from "lucide-react";
+import { PageHeader } from "@/components/shared/page-header";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -79,34 +80,37 @@ export default function AuditLogPage() {
   const forbidden = query.isError && statusFromError(query.error) === 403;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Audit log</h2>
-          <p className="text-sm text-muted-foreground">Every material action in this organization, newest first.</p>
-        </div>
-        {!forbidden ? (
-          <Select value={action} onValueChange={setAction}>
-            <SelectTrigger className="w-full sm:w-64">
-              <SelectValue placeholder="All actions" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All actions</SelectItem>
-              {AUDIT_ACTIONS.map((item) => (
-                <SelectItem key={item} value={item}>
-                  {auditActionMeta(item).label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
-      </div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 pt-1">
+      <PageHeader
+        eyebrow="Govern"
+        title="Audit log"
+        description="Every material action in this organization, newest first."
+        aside={
+          !forbidden ? (
+            <Select value={action} onValueChange={setAction}>
+              <SelectTrigger className="w-full sm:w-64">
+                <SelectValue placeholder="All actions" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All actions</SelectItem>
+                {AUDIT_ACTIONS.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    {auditActionMeta(item).label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null
+        }
+      />
 
       {forbidden ? (
-        <Card className="flex min-h-64 flex-col items-center justify-center p-6 text-center">
-          <Lock className="size-5 text-muted-foreground" aria-hidden />
-          <h3 className="mt-3 text-sm font-semibold">Owners and admins only</h3>
-          <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+        <Card className="flex min-h-64 flex-col items-center justify-center p-8 text-center">
+          <span className="flex size-11 items-center justify-center rounded-xl bg-surface-2 text-muted-foreground">
+            <Lock className="size-5" aria-hidden />
+          </span>
+          <h3 className="mt-4 text-base font-semibold tracking-tight">Owners and admins only</h3>
+          <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">
             Audit rows name the person who acted and the IP address they acted from, so reading them needs the{" "}
             <code className="font-mono text-xs">audit:read</code> permission. Ask an owner of this organization.
           </p>
@@ -119,8 +123,8 @@ export default function AuditLogPage() {
               halves of Vol. 2 §13 §700 are real: the row is written inside the
               same transaction as the action, and a Postgres trigger rejects
               UPDATE and DELETE independently of this application. */}
-          <div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+          <div className="flex items-start gap-2.5 rounded-xl bg-status-ok-soft p-3.5 text-xs text-status-ok">
+            <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden />
             <p>
               Append-only. Each row is written inside the same database transaction as the action it records, and Postgres
               rejects any attempt to update or delete one — including from this application. Nothing here can be edited after

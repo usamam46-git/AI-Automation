@@ -247,7 +247,11 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
     null;
 
   return (
-    <div className="-m-4 flex h-[calc(100dvh-3.5rem)] flex-col md:-m-5">
+    // Breaks out of <main>'s padding to run edge to edge. The offsets MUST track
+    // the shell: the header is h-16 (4rem) and main is `px-4 pb-10 md:px-6` with
+    // no top padding since the Atomie pass. Get these wrong and the canvas
+    // either scrolls the page or leaves a band of paper under the minimap.
+    <div className="-mx-4 -mb-10 flex h-[calc(100dvh-4rem)] flex-col md:-mx-6">
       {workflowQuery.data ? (
         <BuilderToolbar
           workflow={workflowQuery.data}
