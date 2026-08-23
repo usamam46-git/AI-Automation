@@ -23,6 +23,7 @@ would need a migration to add a state. Same reasoning as `audit_logs.action`.
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260823_notify"

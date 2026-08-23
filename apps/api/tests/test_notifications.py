@@ -171,11 +171,14 @@ async def test_delivery_marks_the_row_delivered(client: AsyncClient, session):
     data = await register_and_get_token(client, "N-deliver")
     org_id = uuid.UUID(decode_access_token(data["access_token"])["org_id"])
     row = Notification(
-        organization_id=org_id, user_id=None, channel="webhook",
+        organization_id=org_id,
+        user_id=None,
+        channel="webhook",
         payload={"title": "Coverage conflict", "body": "", "fields": {"employee": "Dana Okafor"}, "url": "https://hooks.example.com/x"},
         status="pending",
     )
-    session.add(row); await session.commit()
+    session.add(row)
+    await session.commit()
 
     mock, posted = _patched_post(httpx.Response(200, text="ok"))
     try:
@@ -201,11 +204,13 @@ async def test_a_failed_delivery_is_recorded_on_the_row_not_only_in_a_log(client
     data = await register_and_get_token(client, "N-fail")
     org_id = uuid.UUID(decode_access_token(data["access_token"])["org_id"])
     row = Notification(
-        organization_id=org_id, channel="webhook",
+        organization_id=org_id,
+        channel="webhook",
         payload={"title": "t", "body": "", "fields": {}, "url": "https://hooks.example.com/secret?token=SHOULD-NOT-LEAK"},
         status="pending",
     )
-    session.add(row); await session.commit()
+    session.add(row)
+    await session.commit()
 
     mock, _ = _patched_post(*[httpx.Response(500) for _ in range(3)])
     try:
@@ -226,7 +231,8 @@ async def test_delivery_is_idempotent_on_an_already_delivered_row(client: AsyncC
     data = await register_and_get_token(client, "N-idem")
     org_id = uuid.UUID(decode_access_token(data["access_token"])["org_id"])
     row = Notification(organization_id=org_id, channel="webhook", payload={"url": "https://hooks.example.com/x"}, status="delivered")
-    session.add(row); await session.commit()
+    session.add(row)
+    await session.commit()
 
     with patch("httpx.Client") as http:
         assert deliver_notification_sync(str(row.id)) == "delivered"
@@ -250,11 +256,13 @@ async def test_a_user_sees_their_own_and_org_wide_notifications_but_not_a_collea
     # UUID cannot stand in for a colleague here.
     other = uuid.UUID(decode_access_token((await register_and_get_token(client, "N-read2"))["access_token"])["user_id"])
 
-    session.add_all([
-        Notification(organization_id=org_id, user_id=me, channel="in_app", payload={"title": "mine"}, status="delivered"),
-        Notification(organization_id=org_id, user_id=None, channel="in_app", payload={"title": "broadcast"}, status="delivered"),
-        Notification(organization_id=org_id, user_id=other, channel="in_app", payload={"title": "colleague"}, status="delivered"),
-    ])
+    session.add_all(
+        [
+            Notification(organization_id=org_id, user_id=me, channel="in_app", payload={"title": "mine"}, status="delivered"),
+            Notification(organization_id=org_id, user_id=None, channel="in_app", payload={"title": "broadcast"}, status="delivered"),
+            Notification(organization_id=org_id, user_id=other, channel="in_app", payload={"title": "colleague"}, status="delivered"),
+        ]
+    )
     await session.commit()
 
     body = (await client.get("/api/v1/notifications", headers=headers)).json()
@@ -269,7 +277,8 @@ async def test_marking_read_and_the_unread_filter(client: AsyncClient, session):
     headers = {"Authorization": f"Bearer {data['access_token']}"}
     org_id = uuid.UUID(decode_access_token(data["access_token"])["org_id"])
     row = Notification(organization_id=org_id, channel="in_app", payload={"title": "x"}, status="delivered")
-    session.add(row); await session.commit()
+    session.add(row)
+    await session.commit()
 
     assert len((await client.get("/api/v1/notifications?unread_only=true", headers=headers)).json()) == 1
     marked = await client.patch(f"/api/v1/notifications/{row.id}/read", json={"read": True}, headers=headers)
@@ -285,11 +294,10 @@ async def test_another_orgs_notification_is_a_404_never_a_403(client: AsyncClien
     b = await register_and_get_token(client, "N-orgB")
     org_b = uuid.UUID(decode_access_token(b["access_token"])["org_id"])
     row = Notification(organization_id=org_b, channel="in_app", payload={"title": "b"}, status="delivered")
-    session.add(row); await session.commit()
+    session.add(row)
+    await session.commit()
 
-    resp = await client.patch(
-        f"/api/v1/notifications/{row.id}/read", json={"read": True}, headers={"Authorization": f"Bearer {a['access_token']}"}
-    )
+    resp = await client.patch(f"/api/v1/notifications/{row.id}/read", json={"read": True}, headers={"Authorization": f"Bearer {a['access_token']}"})
     assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 

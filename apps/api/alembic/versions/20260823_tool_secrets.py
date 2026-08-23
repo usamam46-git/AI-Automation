@@ -31,6 +31,7 @@ be re-entered by hand. See the root CLAUDE.md warning about `infra/.env`.
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260823_tool_secrets"
