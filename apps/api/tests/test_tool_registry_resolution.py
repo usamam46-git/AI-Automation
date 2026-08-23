@@ -340,3 +340,90 @@ async def test_registry_backed_node_runs_through_the_engine(client: AsyncClient)
     assert posted["posted"] is True
     assert posted["confirmation_id"].startswith("MOCK-")
     assert posted["payload"] == {"vendor": "Acme", "amount": 42, "account_code": "5000"}
+
+
+# ---------------------------------------------------------------------------
+# Encrypted credentials (2026-08-23)
+# ---------------------------------------------------------------------------
+
+SECRET_HTTP_CONFIG = {
+    "url": "https://erp.example.com/api/journal-entries",
+    "method": "POST",
+    "headers": {"Authorization": "Bearer {{secrets.erp_token}}"},
+}
+
+
+@pytest.mark.asyncio
+async def test_a_registry_secret_is_substituted_only_at_run_start(client: AsyncClient, session):
+    """
+    The decrypted credential exists in the worker's memory for the duration of the
+    run and nowhere else: not on the node, not in any API response, and not in
+    `tool_executions` (whose `_audit_input` drops headers wholesale).
+    """
+    ctx = await _ctx(client, "R-secret")
+    tool = await _make_tool(
+        client,
+        ctx,
+        "post_je_secure",
+        tool_type="http_request",
+        config=SECRET_HTTP_CONFIG,
+        secrets={"erp_token": "sk-live-DO-NOT-LEAK-0002"},
+    )
+
+    node = _node("post_je", {"tool_id": tool["id"]})
+    resolved = await ToolService(session).resolve_node_configs(ctx["org_id"], [node])
+
+    assert resolved["post_je"]["headers"]["Authorization"] == "Bearer sk-live-DO-NOT-LEAK-0002"
+    assert node.config == {"tool_id": tool["id"]}
+
+
+@pytest.mark.asyncio
+async def test_a_node_cannot_grant_itself_the_idempotency_assertion(client: AsyncClient, session):
+    """
+    `idempotency` asserts the TARGET ENDPOINT dedupes replays — the registry's claim
+    to make, because the only thing it does is re-enable retries on a mutating
+    write. A node granting it to itself would restore the double-post hazard on a
+    server that never promised to dedupe anything.
+    """
+    ctx = await _ctx(client, "R-idem")
+    tool = await _make_tool(client, ctx, "post_je_plain", tool_type="http_request", config=SECRET_HTTP_CONFIG, secrets={"erp_token": "x"})
+
+    node = _node("post_je", {"tool_id": tool["id"], "idempotency": {"header": "Idempotency-Key"}})
+    resolved = await ToolService(session).resolve_node_configs(ctx["org_id"], [node])
+
+    assert resolved["post_je"].get("idempotency") is None
+
+
+@pytest.mark.asyncio
+async def test_a_node_may_wire_url_placeholders_but_not_the_url_itself(client: AsyncClient, session):
+    """
+    `url_fields` joined NODE_OVERRIDABLE_KEYS with URL templating; `url` did not.
+    The registry owns the template, so a node can only say where this call site's
+    `{vendor_id}` comes from — it cannot re-point the host.
+    """
+    ctx = await _ctx(client, "R-urlf")
+    tool = await _make_tool(
+        client,
+        ctx,
+        "get_vendor",
+        tool_type="http_request",
+        is_mutating=False,
+        config={
+            "url": "https://erp.example.com/api/vendors/{vendor_id}",
+            "method": "GET",
+            "url_fields": {"vendor_id": "trigger_payload.vendor_id"},
+        },
+    )
+
+    node = _node(
+        "get_vendor",
+        {
+            "tool_id": tool["id"],
+            "url_fields": {"vendor_id": "node_outputs.extract.vendor_id"},
+            "url": "https://attacker.example.com/{vendor_id}",
+        },
+    )
+    resolved = await ToolService(session).resolve_node_configs(ctx["org_id"], [node])
+
+    assert resolved["get_vendor"]["url"] == "https://erp.example.com/api/vendors/{vendor_id}"
+    assert resolved["get_vendor"]["url_fields"] == {"vendor_id": "node_outputs.extract.vendor_id"}

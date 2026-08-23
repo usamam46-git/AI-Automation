@@ -15,13 +15,50 @@ from typing import Any
 SUPPORTED_OPERATORS = frozenset({"eq", "neq", "gt", "gte", "lt", "lte", "in", "contains"})
 
 
+def _as_index(part: str) -> int | None:
+    """`"0"` / `"-1"` -> int; anything else -> None. No exceptions on the hot path."""
+    candidate = part[1:] if part.startswith("-") else part
+    return int(part) if candidate.isdigit() else None
+
+
 def resolve_field_path(state: dict[str, Any], field_path: str) -> Any:
-    """Traverse a dotted path against nested dict state (no code execution)."""
+    """
+    Traverse a dotted path against nested state (no code execution).
+
+    Dicts are traversed by key and **sequences by integer index**, so
+    `node_outputs.get_vendor.body.data.0.id` reaches into a list-shaped response.
+    Negative indices count from the end (`...results.-1`), which is the idiomatic
+    way to ask for "the latest" record.
+
+    List indexing was added 2026-08-23. Before it, hitting a list returned None
+    and stopped: `{"data": [{...}]}` is the single most common shape a real REST
+    API returns, so every `http_request` tool node pointed at one had an
+    unreachable payload — the condition DSL, agent `input_fields` and a tool's
+    `body_fields` all route through here, so all three were affected at once.
+
+    A dict is always traversed as a dict, even when the key looks numeric, so a
+    JSON object keyed by id (`{"1042": {...}}`) still resolves by key. Strings are
+    NOT indexable: `resolve_field_path` addresses structure, and slicing a string
+    by position is a text operation that belongs nowhere near routing.
+
+    Any miss — absent key, out-of-range index, or a scalar with path left to walk
+    — returns None rather than raising. Callers distinguish "resolved to nothing"
+    themselves; `evaluate_condition` treats None as a failed comparison, and
+    `_resolve_url_fields` in node_handlers raises on it because a URL with a None
+    in the path is a request to the wrong resource.
+    """
     current: Any = state
     for part in field_path.split("."):
-        if not isinstance(current, dict):
-            return None
-        current = current.get(part)
+        if isinstance(current, dict):
+            current = current.get(part)
+            continue
+        if isinstance(current, list | tuple):
+            index = _as_index(part)
+            if index is None or not -len(current) <= index < len(current):
+                return None
+            current = current[index]
+            continue
+        return None
     return current
 
 

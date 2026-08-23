@@ -25,7 +25,7 @@ from src.graphs.compiler import (
     initial_state_from_trigger,
     run_graph_sync,
 )
-from src.graphs.condition_eval import evaluate_condition, has_predicate
+from src.graphs.condition_eval import evaluate_condition, has_predicate, resolve_field_path
 from src.graphs.node_handlers import AgentNodeConfigError
 from src.modules.workflows.models import WorkflowEdge, WorkflowNode, WorkflowVersion
 
@@ -498,3 +498,55 @@ async def test_publish_sets_workflow_status(client: AsyncClient):
     wf_resp = await client.get(f"/api/v1/workflows/{wf['id']}", headers=headers)
     assert wf_resp.json()["status"] == "published"
     assert wf_resp.json()["current_version_id"] == version_id
+
+
+# ---------------------------------------------------------------------------
+# resolve_field_path — list indexing (2026-08-23)
+#
+# Added while closing the gaps found scoping a real ERP integration. `{"data":
+# [{...}]}` is the ordinary shape a REST API returns, and until this the path
+# stopped dead at the list and returned None — so a real endpoint's payload was
+# unreachable from a condition, from an agent's `input_fields` and from a tool's
+# `body_fields` all at once, since all three resolve through this one function.
+# ---------------------------------------------------------------------------
+
+
+REST_RESPONSE = {
+    "node_outputs": {
+        "get_vendor": {
+            "status_code": 200,
+            "body": {"data": [{"id": "V-1", "balance": 0}, {"id": "V-2", "balance": 815.40}]},
+        }
+    }
+}
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        ("node_outputs.get_vendor.body.data.0.id", "V-1"),
+        ("node_outputs.get_vendor.body.data.1.balance", 815.40),
+        ("node_outputs.get_vendor.body.data.-1.id", "V-2"),
+        pytest.param("node_outputs.get_vendor.body.data.9.id", None, id="index_out_of_range_is_None_not_IndexError"),
+        pytest.param("node_outputs.get_vendor.body.data.name", None, id="non_numeric_index_into_a_list_is_None"),
+        pytest.param("node_outputs.get_vendor.status_code.0", None, id="a_scalar_with_path_remaining_is_None"),
+    ],
+)
+def test_resolve_field_path_indexes_into_lists(path, expected):
+    assert resolve_field_path(REST_RESPONSE, path) == expected
+
+
+def test_a_dict_with_numeric_keys_still_resolves_by_key():
+    """An API keyed by id (`{"1042": {...}}`) must not be treated as a sequence."""
+    assert resolve_field_path({"vendors": {"1042": {"name": "Acme"}}}, "vendors.1042.name") == "Acme"
+
+
+def test_a_string_is_not_indexable():
+    """resolve_field_path addresses structure; slicing text by position belongs nowhere near routing."""
+    assert resolve_field_path({"code": "5100"}, "code.0") is None
+
+
+def test_a_condition_can_route_on_a_list_element():
+    """The end-to-end point of the change: a real REST payload reaching the routing DSL."""
+    condition = {"field": "node_outputs.get_vendor.body.data.0.id", "operator": "eq", "value": "V-1"}
+    assert evaluate_condition(condition, REST_RESPONSE) is True

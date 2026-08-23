@@ -109,6 +109,7 @@ from src.modules.auth.router import router as auth_router
 from src.modules.executions.router import router as executions_router
 from src.modules.integrations.router import router as integrations_router
 from src.modules.knowledge_base.router import router as knowledge_base_router
+from src.modules.notifications.router import router as notifications_router
 from src.modules.organizations.router import router as organizations_router
 from src.modules.tools.router import router as tools_router
 from src.modules.workflows.router import router as workflows_router
@@ -133,6 +134,7 @@ app.include_router(audit_logs_router, prefix="/api/v1/audit-logs", tags=["audit-
 app.include_router(organizations_router, prefix="/api/v1/organizations", tags=["organizations"])
 # Read-only aggregates over workflow_runs — owns no tables, gated on execution:read.
 app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["analytics"])
+app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["notifications"])
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

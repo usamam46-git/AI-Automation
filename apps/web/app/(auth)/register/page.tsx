@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authApi } from "@/lib/api";
@@ -51,22 +50,20 @@ export default function RegisterPage() {
   }
 
   return (
-    <Card className="mx-auto w-full max-w-[400px] bg-popover shadow-pop">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-xl">Create account</CardTitle>
-        <CardDescription>Create your organization and default workspace.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form className="grid gap-4" onSubmit={onSubmit} noValidate>
-          {serverError ? <div className="rounded-xl bg-status-bad-soft px-3.5 py-2.5 text-sm text-status-bad">{serverError}</div> : null}
-          <div className="grid gap-1.5"><Label htmlFor="fullName">Name</Label><Input id="fullName" value={fullName} onChange={(event) => setFullName(event.target.value)} aria-invalid={Boolean(errors.fullName)} />{errors.fullName ? <p className="text-xs text-destructive">{errors.fullName}</p> : null}</div>
-          <div className="grid gap-1.5"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} aria-invalid={Boolean(errors.email)} />{errors.email ? <p className="text-xs text-destructive">{errors.email}</p> : null}</div>
-          <div className="grid gap-1.5"><Label htmlFor="password">Password</Label><Input id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(errors.password)} />{errors.password ? <p className="text-xs text-destructive">{errors.password}</p> : null}</div>
-          <div className="grid gap-1.5"><Label htmlFor="org">Organization name</Label><Input id="org" value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} aria-invalid={Boolean(errors.organizationName)} />{errors.organizationName ? <p className="text-xs text-destructive">{errors.organizationName}</p> : null}</div>
-          <Button className="w-full" disabled={isPending || (submitted && hasErrors)}>{isPending ? <Loader2 className="size-4 animate-spin" /> : null}Register</Button>
-          <p className="text-center text-sm text-muted-foreground">Already registered? <Link className="font-medium text-foreground hover:underline" href="/login">Sign in</Link></p>
-        </form>
-      </CardContent>
-    </Card>
+    <div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Create account</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">Creates your organization and its first workspace.</p>
+      </div>
+      <form className="grid gap-4" onSubmit={onSubmit} noValidate>
+        {serverError ? <div className="rounded-xl bg-status-bad-soft px-3.5 py-2.5 text-sm text-status-bad">{serverError}</div> : null}
+        <div className="grid gap-1.5"><Label htmlFor="fullName">Name</Label><Input id="fullName" value={fullName} onChange={(event) => setFullName(event.target.value)} aria-invalid={Boolean(errors.fullName)} />{errors.fullName ? <p className="text-xs text-destructive">{errors.fullName}</p> : null}</div>
+        <div className="grid gap-1.5"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} aria-invalid={Boolean(errors.email)} />{errors.email ? <p className="text-xs text-destructive">{errors.email}</p> : null}</div>
+        <div className="grid gap-1.5"><Label htmlFor="password">Password</Label><Input id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(errors.password)} />{errors.password ? <p className="text-xs text-destructive">{errors.password}</p> : null}</div>
+        <div className="grid gap-1.5"><Label htmlFor="org">Organization name</Label><Input id="org" value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} aria-invalid={Boolean(errors.organizationName)} />{errors.organizationName ? <p className="text-xs text-destructive">{errors.organizationName}</p> : null}</div>
+        <Button className="w-full" disabled={isPending || (submitted && hasErrors)}>{isPending ? <Loader2 className="size-4 animate-spin" /> : null}Register</Button>
+        <p className="text-center text-sm text-muted-foreground">Already registered? <Link className="font-medium text-foreground hover:underline" href="/login">Sign in</Link></p>
+      </form>
+    </div>
   );
 }

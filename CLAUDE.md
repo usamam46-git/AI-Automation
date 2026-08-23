@@ -95,6 +95,26 @@ inventing an approach that isn't documented anywhere.
   condition DSL (`field`/`operator`/`value`) already established in
   `apps/api/src/graphs/condition_eval.py`.
 
+## External systems — the honest line
+
+**No real external system has ever been called by this platform.** Everything
+below was proven against systems we control: a mock `erp_connector` returning
+`MOCK-<uuid>`, our own signed webhook, our own MinIO, our own corpus. All of that
+passes end to end, in a browser, through real Celery workers, without exercising
+one third-party API — which is exactly why the gaps went unnoticed until someone
+asked what pointing at a real ERP would take (2026-08-23).
+
+Connecting to a real system today means an **`http_request` registry tool**.
+`erp_connector` is a mock and is not that path. The full real/mock/missing table
+lives in apps/api/CLAUDE.md; the one that bites hardest is that
+`worker_notifications` still has an empty task registry and there is no `notify`
+NodeType, so **every Vol. 5 HR workflow's terminal Notify step has no
+implementation**.
+
+Keep this section current. A feature list that reads as a victory lap while
+"ERP" appears throughout is how three weeks of work leaves someone believing the
+integration side is done.
+
 ## Current build status
 
 (Keep this section updated daily — it's the fastest way for a fresh Claude
@@ -946,6 +966,72 @@ verified via a full read-only orientation pass — see note below.)
     audit log and settings, against the live Docker stack with demo data.
   - **Not verified: any real mobile viewport** (same automation ceiling as the 3D
     scene) and the auth pages while genuinely signed out.
+- **Real-ERP readiness fixes landed 2026-08-23** — four gaps found scoping a live
+  ERP integration, all invisible against the mock connector. Full contracts in
+  apps/api/CLAUDE.md's `http_request` section.
+  - **URL templating + query parameters.** The URL was entirely static, so
+    `GET /invoices/{id}` was unbuildable. `url_fields` fills `{placeholder}`
+    segments from state (percent-encoded with `safe=""`, validated both
+    directions at write time); `params`/`params_fields` build the query string.
+  - **A mutating call is no longer retried when the outcome is unknown.** Every
+    `http_request` node used to retry 3× on any timeout or 5xx, so a
+    `POST /journal-entries` the ERP committed and failed to acknowledge in time
+    was posted three times with nothing reporting it. Replays now require proof
+    the request never landed, or an explicit `idempotency` assertion (key is
+    `uuid5(run_id:node_key)`, stable across retries and Celery redelivery).
+  - **Tool credentials are encrypted at rest** — `tools.secrets_encrypted`,
+    AES-256-GCM, migration `20260823_tool_secrets`. They were plaintext JSONB in
+    `tools.config` and returned verbatim by every read endpoint. Write-only;
+    only `secret_keys` comes back; referenced from config as
+    `{{secrets.<name>}}` and substituted in the worker at run start.
+  - **`resolve_field_path` indexes into lists.** `{"data": [...]}` was
+    unreachable from the condition DSL, agent `input_fields` and tool
+    `body_fields` simultaneously.
+  - Frontend: the tool dialog gained all four (secrets editor, URL placeholders,
+    query params, idempotency switch); `lib/api.ts` gained `secret_keys`/`secrets`.
+  - **511 backend tests** (477 + 34), verified with `MINIO_ENDPOINT` on TEST-NET-3.
+    **399 frontend tests** unchanged (the touched surfaces are `lib`-free).
+    Proven live end to end against the real stack: a registry tool with a
+    templated URL, merged query params and an encrypted secret reached a real
+    endpoint as `/api/vendors/AC%2FME%201042/invoices?include=lines&period=2026-08`
+    with the decrypted `Authorization` header, the unresolved `status` param
+    dropped, no headers in the node output, and the list-shaped response readable
+    by dotted path.
+- **Auth screens redesigned 2026-08-23** (frontend only) — `app/(auth)/layout.tsx`
+  is a two-column split with a photographic panel (the app's only remote image;
+  `next.config.ts` gained a narrowed `remotePatterns`). Login and register lost
+  their card chrome. Contrast measured on the composited panel, and one line
+  failed at `white/40` (3.82:1) and was fixed to `/55`. Verified in both themes.
+- **Notifications + the `notify` tool type landed 2026-08-23** (Vol. 5 §14–§16's
+  missing primitive). `notifications` had never been written to and
+  `worker_notifications` had booted with an **empty task registry** since the
+  initial commit — so every Vol. 5 HR workflow's terminal Notify step had nothing
+  to compile to. `modules/notifications/` went models-only → real,
+  `src/workers/notification_tasks.py` is the notifications queue's first task,
+  migration `20260823_notify` adds delivery state. **All three worker containers
+  now have a non-empty task registry.**
+  Shipped as a **tool type, not a NodeType**, on the `knowledge_search`
+  precedent. Delivery is **asynchronous** — the node returns `queued`, never
+  `delivered` — because Vol. 5 puts Notify after the approval gate and a Slack
+  outage must not fail a run whose work is already done and signed off. Channels
+  with a transport: `in_app` and `webhook` (Slack/Teams/Zapier). Contracts in
+  apps/api/CLAUDE.md.
+- **HR: Leave approval demo workflow landed 2026-08-23** (Vol. 5 §14) — the
+  fourth demo graph. §14's three HR tools are deliberately **not** invented:
+  there is no HR system wired to this platform, so what is built is §14's actual
+  subject — two independent exception paths (negative balance, notice/coverage)
+  converging on one outcome, grounded in the employee handbook. Balance routes
+  **deterministically** (`balance_after < 0`); notice/coverage routes on an agent
+  grounded in retrieved handbook text. **It decides and notifies; it does not
+  write back to an HR system**, which is pinned by a test rather than left to
+  drift — adding `hr.approve_leave` is one mutating `http_request` registry tool,
+  at which point the publish guardrail starts requiring the gates it already has.
+  Proven live end to end through the real Celery worker, both branches: the
+  sample request held at gate 1 (balance −2), approved → retrieval → held at
+  gate 2 quoting handbook §4.1 ("five working days or more … at least four weeks
+  in advance", 9 days given), approved → notification row written and delivered →
+  `completed`, $0.001833. The clean variant ran start → notify with no gate at
+  all, $0.001873.
 - Next: **look at the 3D scene on a real phone** (layout is now verified; the
   scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect

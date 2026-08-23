@@ -12,7 +12,13 @@ Design notes:
   type string, not by SQLAlchemy polymorphism — keeping the ORM simple).
 - input_schema (JSON Schema) is what gets sent to OpenAI as a function-
   calling / tool spec — the tool registry IS the function-calling contract.
-- config stores type-specific config (endpoint URL, auth reference, etc.)
+- config stores type-specific config (endpoint URL, method, headers). It is
+  plaintext JSONB and is returned verbatim by the API, so it must never hold a
+  credential: put those in `secrets_encrypted` (AES-256-GCM, same scheme as
+  `integrations.credentials`) and reference them from config as
+  `{{secrets.<name>}}`, which ToolService substitutes at run start. Before
+  2026-08-23 this line read "auth reference", which implied a pointer and
+  described a column that in practice held the raw bearer token.
   encrypted at the application layer for secrets (see Vol. 2 §13).
 - is_mutating is a TYPED COLUMN, deviating from Vol. 4 §4.3, which says tools
   "are marked `is_mutating: true` in their config". Free-form JSONB fails open
@@ -25,7 +31,7 @@ Design notes:
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, LargeBinary, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -70,7 +76,13 @@ class Tool(UUIDMixin, TenantMixin, TimestampMixin, Base):
     config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
-        comment="Type-specific config (endpoint URL, auth refs, etc.).",
+        comment="Type-specific config (endpoint URL, method, headers). Plaintext and API-visible — "
+        "a credential belongs in secrets_encrypted, referenced here as {{secrets.<name>}}.",
+    )
+    secrets_encrypted: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+        comment="AES-256-GCM blob of {name: value} credentials referenced from config as {{secrets.<name>}}.",
     )
     is_mutating: Mapped[bool] = mapped_column(
         Boolean,
@@ -92,6 +104,26 @@ class Tool(UUIDMixin, TenantMixin, TimestampMixin, Base):
         "Workspace", back_populates="tools"
     )
     executions: Mapped[list["ToolExecution"]] = relationship("ToolExecution", back_populates="tool")
+
+    @property
+    def secret_keys(self) -> list[str]:
+        """
+        Names of the stored secrets, for `ToolResponse`. Never their values.
+
+        A model property rather than a service-built response for the same reason
+        `Workflow.current_version_number` is one — every read path (list, detail,
+        create, update) needs it, and `from_attributes` finds it here without four
+        call sites remembering to add it.
+
+        The import is deferred because `service.py` imports this module; the cycle
+        is real, not stylistic. Decryption cost is a single AES-GCM open over a few
+        hundred bytes, and `decode_secrets` returns {} rather than raising if the
+        encryption key has been rotated — so a tools list still renders and the
+        failure surfaces at run time, where it names the tool.
+        """
+        from src.modules.tools.service import decode_secrets
+
+        return sorted(decode_secrets(self.secrets_encrypted))
 
 
 class ToolExecution(UUIDMixin, TimestampMixin, Base):

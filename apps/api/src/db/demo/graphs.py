@@ -543,11 +543,236 @@ def _hr_workflow(*, handbook_tool_id: uuid.UUID) -> DemoWorkflow:
     )
 
 
+# ---------------------------------------------------------------------------
+# 4. HR: Leave approval — Vol. 5 §14 (added 2026-08-23)
+# ---------------------------------------------------------------------------
+
+_READ_LEAVE_REQUEST_PROMPT = """\
+You are reading an annual-leave request submitted at Northwind Operations Ltd.
+
+Return the request exactly as submitted. Do not judge it, do not apply policy, \
+and do not correct anything you think looks wrong — the assessment steps \
+downstream need the raw request.
+
+Two fields you must compute rather than copy:
+
+- `working_days_requested`: the number of WORKING days the request covers. \
+  Weekends and public holidays are not working days. If the payload states a \
+  day count, trust it over your own arithmetic.
+- `balance_after`: the employee's stated remaining balance minus \
+  `working_days_requested`. This may be negative, and a negative number is a \
+  legitimate answer — return it rather than clamping to zero. It is what routes \
+  the request to a manager.
+
+`notice_days` is the whole days between the submission date and the first day \
+of leave. `policy_question` should be a specific search query for the employee \
+handbook covering the notice period and coverage rules that apply to a request \
+of this length.
+"""
+
+_ASSESS_LEAVE_PROMPT = """\
+You are assessing an annual-leave request against Northwind Operations Ltd's \
+own employee handbook.
+
+You are given the request and the handbook passages retrieved for it. Assess it \
+ONLY against those passages. If the passages do not cover a point, say so in \
+`findings` — do not fall back on general employment knowledge, and do not invent \
+a rule the handbook does not state.
+
+Set `requires_manager_review` to true when the handbook's own conditions for \
+manager attention are met — for example a request at or above the length that \
+requires advance notice where that notice was not given, or a stated coverage \
+condition the request appears to breach. Set it to false when the request \
+plainly satisfies the retrieved rules.
+
+`policy_citation` must quote the handbook clause you relied on, with its section \
+number. `notice_required_days` is the notice the handbook demands for a request \
+of this length, or null if the passages do not state one.
+
+A borderline request is a review, not a refusal: this workflow never rejects \
+leave, it decides whether a person needs to look at it.
+"""
+
+
+def _leave_workflow(*, handbook_tool_id: uuid.UUID, notify_tool_id: uuid.UUID) -> DemoWorkflow:
+    """
+    Vol. 5 §14, built on what exists rather than on an HR API this platform does
+    not have.
+
+    §14's diagram calls three HR tools — `hr.get_leave_balance`,
+    `hr.check_team_coverage`, `hr.approve_leave`. There is no HR system wired to
+    this platform, so inventing three `http_request` rows pointed at a URL nobody
+    has would produce a graph that publishes and then fails on its first run.
+    What is kept is the part that is real and is the actual subject of §14: **two
+    independent exception paths, each converging on the same outcome**, with the
+    decision grounded in the company's own published policy rather than in the
+    model's employment-law priors.
+
+    - The balance check is arithmetic and routes **deterministically** on
+      `balance_after < 0` — the same asymmetry the invoice workflow draws
+      between "money and rules decide" and "retrieval decides".
+    - The coverage/notice check routes on an agent boolean **grounded in
+      retrieved handbook text**, which is where the handbook's real rules live
+      (§4.1: five days or more needs four weeks' notice; assessed on team
+      coverage).
+
+    **It decides and tells someone; it does not write back to an HR system.**
+    That is the honest state, not an oversight: `hr.approve_leave` is one
+    `http_request` registry tool away, and the moment there is a real endpoint it
+    slots in front of `notify_employee` marked `is_mutating` — at which point the
+    publish-time guardrail starts requiring exactly the gates this graph already
+    has. Nothing else about the shape changes.
+
+    **No node here is mutating, so `validate_mutating_approval` does not fire.**
+    The two `human_approval` nodes are in the graph because the POLICY asks for a
+    manager, not because the guardrail forced them. Worth knowing before someone
+    "simplifies" them away: they are load-bearing for §14, invisible to the
+    validator.
+
+    Note the two conditions are separated by `handbook_lookup` and
+    `assess_coverage`. That is required, not stylistic — condition nodes cannot
+    chain (the router attaches to the condition's PREDECESSOR), so two in
+    sequence would silently mis-route. See `Docs/shakedown-fixes.md` §K.
+    """
+    return DemoWorkflow(
+        name="Leave approval",
+        description=(
+            "An annual-leave request is checked against the employee's balance and then against the "
+            "handbook's notice and coverage rules. A negative balance or a policy exception stops at the "
+            "line manager; anything clean is confirmed straight to the employee."
+        ),
+        trigger_type="manual",
+        demo_hint="Run now with the sample payload printed by the seed (Vol. 5 §14).",
+        nodes=[
+            DemoNode("start_1", "start", 0, 240),
+            DemoNode(
+                "read_request",
+                "agent",
+                220,
+                240,
+                {
+                    "model": DEMO_MODEL,
+                    "system_prompt": _READ_LEAVE_REQUEST_PROMPT,
+                    "input_fields": ["trigger_payload"],
+                    "temperature": 0.0,
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "employee_name": {"type": "string"},
+                            "employee_email": {"type": ["string", "null"]},
+                            "leave_type": {"type": "string", "description": "annual | sick | other, as submitted."},
+                            "start_date": {"type": "string", "description": "ISO date of the first day of leave."},
+                            "end_date": {"type": "string", "description": "ISO date of the last day of leave."},
+                            "working_days_requested": {"type": "number"},
+                            "notice_days": {"type": "number", "description": "Whole days between submission and the first day of leave."},
+                            "balance_before": {"type": "number", "description": "Remaining entitlement as stated in the request."},
+                            "balance_after": {"type": "number", "description": "balance_before minus working_days_requested. May be negative."},
+                            "reason": {"type": ["string", "null"]},
+                            "policy_question": {"type": "string", "description": "Search query for the handbook's notice and coverage rules."},
+                        },
+                    },
+                },
+            ),
+            DemoNode("check_balance", "condition", 440, 240),
+            DemoNode("approval_balance", "human_approval", 660, 110),
+            DemoNode(
+                "handbook_lookup",
+                "tool",
+                880,
+                240,
+                {
+                    "tool_id": str(handbook_tool_id),
+                    "query_fields": {"query": "node_outputs.read_request.policy_question"},
+                },
+            ),
+            DemoNode(
+                "assess_coverage",
+                "agent",
+                1100,
+                240,
+                {
+                    "model": DEMO_MODEL,
+                    "system_prompt": _ASSESS_LEAVE_PROMPT,
+                    "input_fields": ["node_outputs.read_request", "node_outputs.handbook_lookup"],
+                    "temperature": 0.0,
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "requires_manager_review": {"type": "boolean"},
+                            "notice_sufficient": {"type": "boolean"},
+                            "notice_required_days": {"type": ["number", "null"]},
+                            "coverage_risk": {"type": "boolean"},
+                            "findings": {"type": "array", "items": {"type": "string"}},
+                            "policy_citation": {"type": "string"},
+                            "recommendation": {"type": "string"},
+                        },
+                    },
+                },
+            ),
+            DemoNode("check_coverage", "condition", 1320, 240),
+            DemoNode("approval_coverage", "human_approval", 1540, 110),
+            DemoNode(
+                "notify_employee",
+                "tool",
+                1760,
+                240,
+                # Registry-backed: the channel is owned by the tool row, the
+                # message and its fields are per-usage
+                # (ToolService.NODE_OVERRIDABLE_KEYS).
+                {
+                    "tool_id": str(notify_tool_id),
+                    "title": "Leave request processed",
+                    "body_fields": {
+                        "employee": "node_outputs.read_request.employee_name",
+                        "dates": "node_outputs.read_request.start_date",
+                        "working_days": "node_outputs.read_request.working_days_requested",
+                        "balance_after": "node_outputs.read_request.balance_after",
+                        "outcome": "node_outputs.assess_coverage.recommendation",
+                        "policy": "node_outputs.assess_coverage.policy_citation",
+                    },
+                },
+            ),
+            DemoNode("end_1", "end", 1980, 240),
+        ],
+        edges=[
+            DemoEdge("start_1", "read_request"),
+            DemoEdge("read_request", "check_balance"),
+            # Deterministic: a request that takes the employee past their
+            # entitlement is a manager decision, and the handbook has no clause
+            # that makes it automatic. Catch-all last and predicate-free — the
+            # router is first-match-wins and falls through to the final edge.
+            DemoEdge(
+                "check_balance",
+                "approval_balance",
+                {"field": "node_outputs.read_request.balance_after", "operator": "lt", "value": 0, "branch": "negative_balance"},
+            ),
+            DemoEdge("check_balance", "handbook_lookup", {"branch": "within_balance"}),
+            DemoEdge("approval_balance", "handbook_lookup"),
+            DemoEdge("handbook_lookup", "assess_coverage"),
+            DemoEdge("assess_coverage", "check_coverage"),
+            DemoEdge(
+                "check_coverage",
+                "approval_coverage",
+                {
+                    "field": "node_outputs.assess_coverage.requires_manager_review",
+                    "operator": "eq",
+                    "value": True,
+                    "branch": "manager_review",
+                },
+            ),
+            DemoEdge("check_coverage", "notify_employee", {"branch": "auto_confirm"}),
+            DemoEdge("approval_coverage", "notify_employee"),
+            DemoEdge("notify_employee", "end_1"),
+        ],
+    )
+
+
 def build_workflows(
     *,
     policy_tool_id: uuid.UUID,
     handbook_tool_id: uuid.UUID,
     erp_tool_id: uuid.UUID,
+    notify_tool_id: uuid.UUID,
 ) -> list[DemoWorkflow]:
     """
     The three demo workflows, wired to registry tools the seed script created.
@@ -558,6 +783,7 @@ def build_workflows(
     """
     return [
         _hr_workflow(handbook_tool_id=handbook_tool_id),
+        _leave_workflow(handbook_tool_id=handbook_tool_id, notify_tool_id=notify_tool_id),
         _expense_workflow(policy_tool_id=policy_tool_id, erp_tool_id=erp_tool_id),
         _invoice_workflow(policy_tool_id=policy_tool_id, erp_tool_id=erp_tool_id),
     ]
@@ -566,6 +792,41 @@ def build_workflows(
 # ---------------------------------------------------------------------------
 # Sample trigger payloads
 # ---------------------------------------------------------------------------
+
+#: The leave request `Leave approval` is demoed with (Vol. 5 §14).
+#:
+#: Tuned to exercise BOTH gates in one run, because a demo that only shows the
+#: happy path proves nothing about the shape: 8 working days against a 6-day
+#: balance is negative (first gate), and 9 days' notice is short of the
+#: handbook's four weeks for a request of five days or more (second gate). Field
+#: names are the ones an HR feed would use rather than the ones `read_request`
+#: emits, so the extraction step is doing real work.
+#:
+#: For the clean path, raise `balance_days` above 8 and push `start_date` out
+#: past four weeks — the run then goes start → notify with no gate at all.
+SAMPLE_LEAVE_REQUEST_PAYLOAD: dict[str, Any] = {
+    "source": "hr-portal",
+    "submitted_at": "2026-08-23T08:40:00Z",
+    "employee": {
+        "name": "Dana Okafor",
+        "email": "dana.okafor@northwind.example",
+        "team": "Finance Operations",
+        "manager": "Priya Raman",
+    },
+    "request": {
+        "type": "annual",
+        "from": "2026-09-01",
+        "to": "2026-09-10",
+        "working_days": 8,
+        "reason": "Family holiday",
+    },
+    "entitlement": {
+        "annual_days": 25,
+        "taken_days": 19,
+        "balance_days": 6,
+    },
+}
+
 
 #: The invoice `send_invoice.py` signs and POSTs, and the one the landing page's
 #: 3D scene renders. Deliberately raw-ish: field names a real AP feed would use,

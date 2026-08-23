@@ -1561,6 +1561,94 @@ endpoints before the Settings page. `toolsApi` is the sixth client in
   mutating tool is normal, and what the badge signals is that publishing will
   need an upstream approval node.
 
+## Signed-out surface — the split auth screens (2026-08-23)
+
+`app/(auth)/layout.tsx` is a two-column split: form left, photograph right. It
+was a single centred card before, which read as a scaffold — the landing page
+opens on a photographed room and sells hard, and the first thing after "Get
+started" was an unadorned box. The login/register pages consequently **dropped
+their `<Card>` chrome**: a card inside a framed column is a second box for no
+reason. `/accept-invite` inherits the same layout and still renders its own card,
+which is correct — it is a decision surface, not a bare form.
+
+- **The photograph is the app's only remote image.** `next.config.ts` gained
+  `remotePatterns` narrowed to `images.unsplash.com` and the `/photo-**` path, so
+  the allowance cannot quietly widen into "any URL a component feels like
+  rendering".
+- **`priority` is DEPRECATED in Next 16** (`next/dist/docs/01-app/03-api-reference/
+  02-components/image.md`), which points at `loading="eager"` / `fetchPriority="high"`
+  instead. Same rule the 3D scene's room plate already follows. It earns eager
+  loading here — on a two-element page it IS the LCP candidate — and below `lg`
+  the panel is not rendered at all, so a phone never pays for it.
+- **The panel is its own dark surface in BOTH themes.** Verified live under
+  `.dark` and light. The scrim fixes contrast independently of the viewer's
+  theme, so there is no `dark:` variant to keep in step and no light-mode
+  combination where white type lands on a bright patch of glass.
+- **The contrast was measured, and one line failed.** The method is a canvas
+  composite of the same layers (photo → `neutral-950/55` wash → the gradient),
+  sampling the worst pixel under each line's box **with that line's own text
+  alpha applied** — measuring against pure white flatters every translucent line
+  and would have hidden the failure. The photo credit at `text-white/40`
+  measured **3.82:1** against a needed 4.5; it is `/55` (6.09:1) now. That is the
+  translucent-ink ceiling already documented for the marketing hero, and the
+  reason to measure: it looks like a deliberately quiet caption at either value.
+  The full table is in the layout's own docstring. Re-measure if the photograph
+  or either scrim changes.
+- **The photographer is not named, deliberately.** Unsplash's licence does not
+  require attribution and crediting by name is the decent version of it, but
+  unsplash.com sits behind a bot wall returning 401 to any automated fetch, so
+  the name could not be verified — and inventing a plausible one under a
+  photograph is worse than a generic credit. The source id is in a comment; fill
+  it in if you know it.
+- **The panel's claim is the product's actual guarantee**, the one
+  `validate_mutating_approval` enforces at publish. Not a slogan about AI: a
+  visitor who reads it and then uses the product finds the same sentence true.
+
+## Tool dialog — the fields the 2026-08-23 backend work added
+
+`components/tools/tool-dialog.tsx` grew four sections. Backend contracts are in
+apps/api/CLAUDE.md's `http_request` section; what matters here:
+
+- **Secrets are write-only and the editor cannot pre-fill them.** The API returns
+  `secret_keys`, never a value. So an existing tool shows its stored names and a
+  warning that adding a row **replaces the whole set** — because PATCH does. The
+  dialog tracks `secretsTouched` and omits `secrets` from the payload entirely
+  unless the author edited it; without that, an unrelated rename would wipe every
+  credential the tool has.
+- **The headers placeholder is now `Bearer {{secrets.erp_token}}`**, and the help
+  text says config is plaintext and API-visible. That is the whole point of the
+  change — a credential typed directly into a header still works and is still
+  wrong.
+- **The idempotency switch only appears on a mutating `http_request`**, because
+  that is the only case where it changes behaviour. Its two help strings say what
+  each state actually does; "off" is the safe default and must not read as a
+  missing feature.
+- **`idempotency: null` is sent explicitly, not omitted.** `buildConfig` drops the
+  old key from `preserved` first, so an omission would leave the field absent and
+  indistinguishable — null is what the backend reads as "no dedupe promise".
+
+## The `notify` tool type in the UI (2026-08-23)
+
+`components/tools/tool-dialog.tsx` gained a fourth type and `ToolType` in
+`lib/api.ts` gained `"notify"`. Backend contracts are in apps/api/CLAUDE.md's
+notifications section; the frontend-specific points:
+
+- **`notify` has no mutating switch**, joining `knowledge_search` in that. Both
+  are rejected by the backend outright, so `canMutate` excludes them — the
+  switch keeps its state across a type change, and offering it would send a flag
+  that 422s.
+- **Only `in_app` and `webhook` appear.** `email`/`whatsapp`/`slack` are in the
+  `notifications.channel` vocabulary with nothing delivering them, and the
+  backend rejects them by name. Same rule as the trigger dropdown dropping
+  `email`/`event`: never offer a value the API refuses.
+- **The webhook URL field appears only on the webhook channel**, because
+  `_notify_config` rejects a `url` on a channel that does not use one — so
+  `buildConfig` omits the key entirely rather than sending an empty string.
+- **There is no in-app notification bell yet.** `GET /api/v1/notifications`
+  exists and is unconsumed, exactly the shape `/api/v1/tools` was in before the
+  Tools page. `in_app` rows are real and readable through the API; nothing in
+  `apps/web` renders them. That is the next frontend piece, not an oversight.
+
 ## Settings page (2026-08-08)
 
 `app/(dashboard)/settings/page.tsx` + `components/settings/openai-key-card.tsx`,

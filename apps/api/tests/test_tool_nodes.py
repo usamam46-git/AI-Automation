@@ -33,6 +33,7 @@ from src.graphs.node_handlers import (
     ToolAuthenticationError,
     ToolExecutionError,
     ToolNodeConfigError,
+    _tool_config,
     get_http_client,
     tool_handler,
 )
@@ -666,3 +667,209 @@ async def test_erp_tool_workflow_runs_through_approval_and_persists_null_cost(cl
 
     # The run total reflects the agent only; the tool added nothing.
     assert float(run.total_cost_usd) == pytest.approx(0.00096)
+
+
+# ---------------------------------------------------------------------------
+# URL templating, query params and retry safety (2026-08-23)
+#
+# All four gaps closed here were found while scoping a real ERP integration, and
+# every one of them was invisible against the mock `erp_connector` the demo
+# workflows use — which is exactly why they survived this long. These tests exist
+# so the next reader does not have to point at a live system to know the shape.
+# ---------------------------------------------------------------------------
+
+
+TEMPLATED_CONFIG: dict[str, Any] = {
+    "tool_type": "http_request",
+    "method": "GET",
+    "url": "https://erp.example.com/api/vendors/{vendor_id}/invoices",
+    "url_fields": {"vendor_id": "node_outputs.extract.vendor_id"},
+    "params": {"include": "lines"},
+    "params_fields": {"period": "trigger_payload.period", "status": "trigger_payload.status"},
+}
+
+TEMPLATED_STATE: dict[str, Any] = {
+    "run_id": "11111111-1111-1111-1111-111111111111",
+    "node_outputs": {"extract": {"vendor_id": "V-1042"}},
+    "trigger_payload": {"period": "2026-08", "status": None},
+}
+
+
+def test_url_placeholders_resolve_from_state():
+    mock, mock_client = _patched_httpx(httpx.Response(200, json={}))
+    try:
+        _run_tool(TEMPLATED_CONFIG, TEMPLATED_STATE)
+    finally:
+        mock.stop()
+
+    call = mock_client.return_value.request.call_args
+    assert call.args == ("GET", "https://erp.example.com/api/vendors/V-1042/invoices")
+
+
+def test_query_params_merge_static_and_state_and_drop_unresolved_ones():
+    """`status` resolves to None and must be absent, not sent as the string 'None'."""
+    mock, mock_client = _patched_httpx(httpx.Response(200, json={}))
+    try:
+        _run_tool(TEMPLATED_CONFIG, TEMPLATED_STATE)
+    finally:
+        mock.stop()
+
+    assert mock_client.return_value.request.call_args.kwargs["params"] == {"include": "lines", "period": "2026-08"}
+
+
+def test_a_url_placeholder_value_cannot_escape_its_path_segment():
+    """
+    The security property of `_resolve_url`. State is model output and webhook
+    payload — attacker-influenced by construction — so a value that walks up the
+    path or appends a query parameter would be an SSRF primitive handed to whoever
+    can influence a trigger.
+    """
+    mock, mock_client = _patched_httpx(httpx.Response(200, json={}))
+    try:
+        _run_tool(TEMPLATED_CONFIG, {**TEMPLATED_STATE, "node_outputs": {"extract": {"vendor_id": "../../admin?x=1"}}})
+    finally:
+        mock.stop()
+
+    url = mock_client.return_value.request.call_args.args[1]
+    assert url == "https://erp.example.com/api/vendors/..%2F..%2Fadmin%3Fx%3D1/invoices"
+    assert "/admin" not in url and "?" not in url
+
+
+def test_an_unresolvable_url_placeholder_raises_instead_of_requesting_the_wrong_resource():
+    mock, mock_client = _patched_httpx(httpx.Response(200, json={}))
+    try:
+        with pytest.raises(ToolNodeConfigError, match="could not fill URL placeholder"):
+            _run_tool(TEMPLATED_CONFIG, {**TEMPLATED_STATE, "node_outputs": {"extract": {}}})
+    finally:
+        mock.stop()
+
+    assert mock_client.return_value.request.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "config, expected",
+    [
+        ({"url": "https://e/v/{vid}"}, "no entry in 'url_fields'"),
+        ({"url": "https://e/v", "url_fields": {"vid": "a.b"}}, "appear nowhere in the URL"),
+        ({"url": "https://e/v/{vendor-id}", "url_fields": {"vendor-id": "a.b"}}, "appear nowhere in the URL"),
+        ({"url": "https://e", "idempotency": "yes"}, "malformed 'idempotency'"),
+        ({"url": "https://e", "params": [1, 2]}, "malformed 'params'"),
+    ],
+)
+def test_url_and_param_config_is_rejected_at_validation_time(config, expected):
+    """These are 422s on the tool form, not 3am pages — the whole point of validating at write time."""
+    with pytest.raises(ToolNodeConfigError, match=expected):
+        _tool_config({"tool_type": "http_request", **config}, "n1")
+
+
+# -- retry safety on mutating writes ----------------------------------------
+
+MUTATING_CONFIG: dict[str, Any] = {
+    "tool_type": "http_request",
+    "method": "POST",
+    "url": "https://erp.example.com/api/journal-entries",
+    "body": {"amount": 4200},
+    "is_mutating": True,
+}
+
+
+def test_a_mutating_call_is_not_retried_after_a_read_timeout():
+    """
+    THE regression this whole change exists for.
+
+    A `POST /journal-entries` that the ERP commits and then fails to acknowledge
+    inside the timeout used to be replayed twice more — three journal entries for
+    one invoice, with nothing anywhere reporting a duplicate. A ReadTimeout is
+    precisely the case where the request DID arrive and the outcome is unknown.
+    """
+    mock, mock_client = _patched_httpx(*[httpx.ReadTimeout("no answer") for _ in range(3)])
+    try:
+        with pytest.raises(ToolExecutionError, match="deliberately NOT retried"):
+            _run_tool(MUTATING_CONFIG)
+    finally:
+        mock.stop()
+
+    assert mock_client.return_value.request.call_count == 1
+
+
+def test_a_mutating_call_is_not_retried_on_a_5xx():
+    """A 500 can be raised after the write committed — the server just failed to say so."""
+    mock, mock_client = _patched_httpx(*[httpx.Response(500) for _ in range(3)])
+    try:
+        with pytest.raises(ToolExecutionError, match="deliberately NOT retried"):
+            _run_tool(MUTATING_CONFIG)
+    finally:
+        mock.stop()
+
+    assert mock_client.return_value.request.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "results",
+    [
+        pytest.param([httpx.ConnectError("refused")] * 3, id="connect_error_never_reached_the_server"),
+        pytest.param([httpx.ConnectTimeout("no route")] * 3, id="connect_timeout_never_reached_the_server"),
+        pytest.param([httpx.Response(429)] * 3, id="429_is_an_explicit_did_not_process"),
+    ],
+)
+def test_a_mutating_call_IS_retried_when_the_request_provably_never_landed(results):
+    """The rule is 'unknown outcome', not 'never retry' — a refused connection wrote nothing."""
+    mock, mock_client = _patched_httpx(*results)
+    try:
+        with pytest.raises(ToolExecutionError):
+            _run_tool(MUTATING_CONFIG)
+    finally:
+        mock.stop()
+
+    assert mock_client.return_value.request.call_count == 3
+
+
+def test_declaring_idempotency_restores_the_full_retry_budget():
+    config = {**MUTATING_CONFIG, "idempotency": {"header": "Idempotency-Key"}}
+    mock, mock_client = _patched_httpx(httpx.ReadTimeout("no answer"), httpx.ReadTimeout("no answer"), httpx.Response(201, json={"id": "JE-1"}))
+    try:
+        output = _run_tool(config, {**STATE, "run_id": "r-1"})
+    finally:
+        mock.stop()
+
+    assert output == {"status_code": 201, "body": {"id": "JE-1"}}
+    assert mock_client.return_value.request.call_count == 3
+
+
+def test_the_idempotency_key_is_identical_across_every_attempt():
+    """A key that changed per attempt would be three distinct writes to the server."""
+    config = {**MUTATING_CONFIG, "idempotency": {"header": "X-Request-Id"}}
+    mock, mock_client = _patched_httpx(httpx.ReadTimeout("x"), httpx.ReadTimeout("x"), httpx.Response(201, json={}))
+    try:
+        _run_tool(config, {**STATE, "run_id": "r-1"})
+    finally:
+        mock.stop()
+
+    sent = [call.kwargs["headers"]["X-Request-Id"] for call in mock_client.return_value.request.call_args_list]
+    assert len(sent) == 3
+    assert len(set(sent)) == 1
+
+
+def test_the_idempotency_key_is_derived_from_run_and_node_not_random():
+    """
+    Stability across a Celery redelivery, not just across the retry loop.
+    `_stream_graph` runs once per LEG, so a uuid4 would change on resume.
+    """
+    from src.graphs.node_handlers import _idempotency_key
+
+    state = {"run_id": "r-1"}
+    assert _idempotency_key(state, "post_je") == _idempotency_key(state, "post_je")
+    assert _idempotency_key(state, "post_je") != _idempotency_key({"run_id": "r-2"}, "post_je")
+    assert _idempotency_key(state, "post_je") != _idempotency_key(state, "other_node")
+
+
+def test_a_read_only_tool_keeps_the_full_retry_budget():
+    """No behaviour change for the non-mutating majority — replaying a GET costs only time."""
+    mock, mock_client = _patched_httpx(*[httpx.ReadTimeout("slow") for _ in range(3)])
+    try:
+        with pytest.raises(ToolExecutionError, match="after 3 attempts"):
+            _run_tool(HTTP_CONFIG)
+    finally:
+        mock.stop()
+
+    assert mock_client.return_value.request.call_count == 3

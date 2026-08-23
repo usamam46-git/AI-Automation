@@ -428,7 +428,7 @@ export const analyticsApi = {
  * backend rejects `python_function`/`mcp` by name at **create**, not at run
  * time. Same list as the builder's inline form — keep the two in sync.
  */
-export type ToolType = "http_request" | "erp_connector" | "knowledge_search";
+export type ToolType = "http_request" | "erp_connector" | "knowledge_search" | "notify";
 
 /** OpenAI's function-name grammar, mirrored from `TOOL_NAME_PATTERN` in the API's schemas.py. */
 export const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -447,8 +447,19 @@ export type Tool = {
    * untouched on PATCH rather than being cleared.
    */
   input_schema: Record<string, unknown> | null;
-  /** Type-specific settings: url/method/headers for http_request, action for erp_connector. */
+  /**
+   * Type-specific settings: url/method/headers for http_request, action for
+   * erp_connector. Plaintext and returned verbatim, so a credential must NOT
+   * live here — it goes in `secrets` and is referenced from config as
+   * `{{secrets.<name>}}`.
+   */
   config: Record<string, unknown> | null;
+  /**
+   * Names of the tool's stored credentials — never their values. There is no
+   * endpoint that returns a secret back, the same rule `last_four` follows for
+   * the BYOK OpenAI key.
+   */
+  secret_keys: string[];
   is_mutating: boolean;
   /** Soft-delete flag. The list endpoint already excludes inactive rows. */
   is_active: boolean;
@@ -462,6 +473,12 @@ export type ToolPayload = {
   tool_type: ToolType;
   description?: string | null;
   config?: Record<string, unknown> | null;
+  /**
+   * Write-only. Encrypted at rest (AES-256-GCM) and echoed back only as
+   * `secret_keys`. On PATCH, sending it REPLACES the whole stored map — omit to
+   * leave it untouched, send `{}` to clear it.
+   */
+  secrets?: Record<string, string> | null;
   is_mutating?: boolean;
 };
 
@@ -471,7 +488,7 @@ export type ToolPayload = {
  * Changing the type would orphan the type-specific config; changing the
  * workspace would move the row's tenancy anchor.
  */
-export type ToolUpdatePayload = Partial<Pick<ToolPayload, "name" | "description" | "config" | "is_mutating">>;
+export type ToolUpdatePayload = Partial<Pick<ToolPayload, "name" | "description" | "config" | "secrets" | "is_mutating">>;
 
 export const toolsApi = {
   // Bare array, cursor-paginated on `created_at` — the same convention as the

@@ -4,12 +4,15 @@ workers/celery_app.py — Celery application configuration.
 Queue topology (Vol. 2 §5.1):
   workflow_execution  — LLM-latency-bound graph runs (concurrency=4, prefetch=1)
   document_processing — knowledge-base ingestion (concurrency=8, prefetch=2)
+  notifications       — outbound notification delivery (concurrency=4)
   dead_letter         — tasks that exhausted all retries
 
-document_processing went live 2026-08-15 with knowledge-base ingestion. The
-notifications queue is still deferred until that module exists — its container
-boots with an empty task registry, which (along with the same having been true
-of worker_documents) is why the beat tick is routed to workflow_execution.
+document_processing went live 2026-08-15 with knowledge-base ingestion, and
+notifications on 2026-08-23 with the `notify` tool type. **All three worker
+containers now have a non-empty task registry**; the beat tick stays routed to
+workflow_execution, which is now a choice (a short DB query does not warrant its
+own container) rather than the necessity it was when the other two queues had no
+consumers.
 
 Beat: one periodic entry, `dispatch-due-schedules` (added 2026-08-09), which
 drives cron-triggered workflows. See workers/trigger_tasks.py.
@@ -39,6 +42,11 @@ celery_app = Celery(
         # consumed `-Q document_processing` since the initial commit with an
         # empty registry; this is the first task routed there.
         "src.workers.document_tasks",
+        # Added 2026-08-23 with the `notify` tool type. Same milestone for
+        # worker_notifications, which had likewise booted with nothing
+        # registered since the initial commit — which is why every Vol. 5 HR
+        # workflow's terminal Notify step had nothing to compile to.
+        "src.workers.notification_tasks",
     ],
 )
 
@@ -69,6 +77,12 @@ celery_app.conf.update(
             "exchange": "document_processing",
             "routing_key": "document_processing",
         },
+        # Live as of 2026-08-23 (the `notify` tool type). The queue name must
+        # match worker_notifications' `-Q notifications` in docker-compose.
+        "notifications": {
+            "exchange": "notifications",
+            "routing_key": "notifications",
+        },
         "dead_letter": {
             "exchange": "dead_letter",
             "routing_key": "dead_letter",
@@ -90,6 +104,11 @@ celery_app.conf.update(
         # LLM-latency-bound like a graph run, which is why it gets its own
         # container at concurrency 8 rather than sharing workflow_execution.
         "src.workers.document_tasks.ingest_document": {"queue": "document_processing"},
+        # Its own container because delivery blocks on a third party for up to
+        # 10s per attempt, and a Slack outage must not occupy a slot that graph
+        # runs need. This is also why delivery is off the run's critical path at
+        # all — see modules/notifications/service.py.
+        "src.workers.notification_tasks.deliver_notification": {"queue": "notifications"},
     },
     # ---------------------------------------------------------------------
     # Beat schedule (Vol. 2 §5 — "Celery Beat / scheduled triggers")

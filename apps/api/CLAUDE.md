@@ -370,6 +370,133 @@ not an implementation detail** — tool calls emitted by an agent have no node i
 the graph, so `validate_mutating_approval` structurally cannot see them, and
 that needs a *runtime* refusal rather than an extension of the publish-time walk.
 
+## External systems: what is REAL vs MOCK (read before promising an integration)
+
+Added 2026-08-23, after a review found that "ERP" appears throughout this
+repo's docs while **no real external system had ever been called by this
+platform**. Every phase to date was proven against systems we control — a mock
+ERP returning `MOCK-<uuid>`, our own signed webhook, our own MinIO, our own
+corpus — all of which can pass end to end, repeatedly, in a browser, through
+real Celery workers, without exercising one third-party API. Keep this table
+honest; it is the fastest way for a reader to avoid the same wrong conclusion.
+
+| Capability | State |
+|---|---|
+| `http_request` tool | **Real.** Outbound httpx, retries, redirects, URL templating, query params, encrypted credentials. |
+| `erp_connector` tool | **MOCK.** No network call, ever. Returns `MOCK-<uuid>`. It exists to prove the mutating-approval mechanism, not to talk to an ERP. |
+| `knowledge_search` tool | Real (internal — pgvector). |
+| `python_function` / `mcp` | Rejected by name at create. |
+| Inbound webhook trigger | Real, HMAC-verified. |
+| Outbound webhooks (`webhooks` module) | Stub. Nothing delivers. |
+| Notifications | Stub. `worker_notifications` boots with an empty task registry, so **every Vol. 5 HR workflow's terminal `Notify` step has no implementation**, and there is no `notify` NodeType. |
+| Purpose-built ERP/HR adapters | Do not exist. An integration today IS an `http_request` registry tool. |
+
+**Connecting to a real ERP means registering an `http_request` tool**, marking
+it `is_mutating`, and putting a `human_approval` node upstream. That path works
+and is proven live. `erp_connector` is not that path and never will be.
+
+## `http_request` — templating, query params and retry safety (2026-08-23)
+
+Four gaps closed together. All four were invisible against the mock connector
+and surfaced the moment someone asked what pointing at a real ERP would take.
+
+- **The URL is a TEMPLATE.** `{placeholder}` segments filled from
+  `url_fields: {name: "dotted.state.path"}`, validated **in both directions** at
+  write time (`_url_template`) — an unfilled placeholder and a mapping with no
+  placeholder are both 422s naming the offender. Before this the URL was
+  entirely static, which made `GET /invoices/{id}` — the ordinary shape of a
+  REST endpoint — unbuildable, and Vol. 5 §1's `erp.get_vendor` step
+  unreachable against a real system.
+  **Every substituted value is `quote(..., safe="")`.** That is a security
+  property, not tidiness: state is model output and webhook payload, so a value
+  of `../../admin?x=1` must become one inert path segment rather than an SSRF
+  primitive handed to whoever can influence a trigger. A placeholder resolving
+  to `None` **raises** — a URL with a hole in it addresses the wrong resource,
+  and on a mutating tool that means writing to the wrong record.
+- **Query parameters exist** (`params` static + `params_fields` state-resolved),
+  passed to httpx as `params=` so encoding is the transport's job and
+  `_safe_url` keeps working. **A value resolving to `None` is DROPPED**, unlike
+  a URL placeholder: an unset filter means "don't filter", while a missing path
+  segment changes which resource is addressed.
+- **A mutating call with no idempotency guarantee is NOT retried when the
+  outcome is unknown.** `_may_retry` is the whole rule. Before this, every
+  `http_request` node retried 3× on any timeout or 5xx — so a
+  `POST /journal-entries` the ERP committed and then failed to acknowledge
+  inside the timeout was posted **three times**, with nothing reporting a
+  duplicate. Replays now happen only when the request provably never landed:
+  `httpx.ConnectError` / `ConnectTimeout` (note `ConnectTimeout` is under
+  `TimeoutException`, **not** under `ConnectError`, so it must be listed
+  explicitly — its sibling `ReadTimeout` is the dangerous one) and HTTP 429,
+  where the server explicitly reports it did not process. **5xx is deliberately
+  absent**: a 500 can be raised after a commit.
+  This hazard was already understood **one layer up** — `graph_tasks._NON_RETRYABLE`
+  carries `ToolExecutionError` precisely so a Celery retry cannot "post the same
+  journal entry four times" — and its justification reads *"`tool_handler`
+  already retried the call 3x"*, treating that 3× as the safe baseline it was
+  not. The reasoning simply had not been applied to the adjacent loop.
+  Read-only tools keep the full retry budget; replaying a GET costs only time.
+- **`idempotency: {"header": ...}` is an ASSERTION BY THE AUTHOR** that the
+  target endpoint dedupes replays, and it is what re-enables retries on a
+  mutating write. The key is `uuid5(namespace, "{run_id}:{node_key}")` —
+  deterministic, so it is stable across the retry loop **and** across a Celery
+  redelivery of the same leg (remember `_stream_graph` runs once per LEG). The
+  header name is configurable because there is no standard one, and a key sent
+  under a header the server ignores is worse than no key: it looks like a
+  guarantee and is not one. `_IDEMPOTENCY_NAMESPACE` is fixed forever — changing
+  it changes every key ever sent, the one thing an idempotency key must not do.
+  **It is NOT in `NODE_OVERRIDABLE_KEYS`**: it is a claim about a server the node
+  does not own.
+- `url_fields`, `params` and `params_fields` **are** node-overridable — per-usage
+  wiring, in the same sense as `body_fields`. A node can only fill placeholders
+  the registry's template already declares, so it cannot re-point the host.
+
+### Encrypted tool credentials — `tools.secrets_encrypted`
+
+Migration `20260823_tool_secrets`. Until this, a registry tool's API key lived in
+`tools.config` as **plaintext JSONB** and was returned verbatim by every read
+endpoint. It never leaked in transit (`_audit_input` drops headers, node output
+carries `status_code`/`body` only) — the exposure was at rest and over the API:
+`pg_dump`, replicas, backups, and anyone holding `tool:read`. `models.py` made it
+worse by describing the column as holding an *"auth reference"*, which is what the
+design should have been and was not.
+
+- Same scheme as the BYOK OpenAI key (`core/encryption.py`, AES-256-GCM), not a
+  second one. **The same rotation consequence applies**: rotating
+  `INTEGRATION_ENCRYPTION_KEY` destroys these values rather than degrading them.
+- **`secrets` is write-only; `secret_keys` is the only echo.** There is no code
+  path that decrypts and returns a value over HTTP, even to the owning org —
+  exactly the rule `IntegrationStatusResponse.last_four` follows.
+- **Referenced from config as `{{secrets.<name>}}`** and substituted in
+  `resolve_node_configs`, i.e. at run start in the worker. The decrypted value
+  exists in that process's memory for the run and nowhere else.
+- **A reference to a secret that does not exist is a 422 at WRITE time**, and so
+  is removing a secret a config still references. Catching it later would surface
+  as a 401 from the vendor, indistinguishable from a revoked key.
+- **An unknown name at run time is left as the literal placeholder**, never
+  blanked. `Authorization: Bearer ` earns a 401 that reads as a revoked
+  credential; the literal makes the cause obvious in the error the server returns.
+- **`decode_secrets` returns `{}` on a decrypt failure rather than raising**, and
+  logs it. A rotated key breaks every tool in the org at once, and raising would
+  take down the tools LIST endpoint — the one screen an author needs in order to
+  re-enter the credentials. It fails at run time instead, which is both louder and
+  better placed.
+- **PATCH replaces the whole map.** Omit `secrets` to leave it untouched; send
+  `{}` to clear it. The dialog therefore only sends the field when the author
+  actually edited it, or an unrelated rename would wipe every credential.
+- `Tool.secret_keys` is a **model `@property`** (the `Workflow.current_version_number`
+  precedent) with a deferred import, because `service.py` imports `models.py`.
+
+### `resolve_field_path` indexes into lists (2026-08-23)
+
+`condition_eval.py`. Sequences are traversed by integer index, negatives counting
+from the end, so `node_outputs.get_vendor.body.data.0.id` reaches into a
+list-shaped response. Before this the path stopped dead at the list and returned
+`None` — and `{"data": [...]}` is the single most common shape a REST API
+returns, so a real endpoint's payload was unreachable from the condition DSL, an
+agent's `input_fields` and a tool's `body_fields` **all at once**, since all three
+resolve through this one function. A dict is always traversed as a dict even when
+the key looks numeric; strings are not indexable.
+
 ## Workflow triggers (landed 2026-08-09)
 
 `trigger_type` was decorative until this release — the column shipped in the
@@ -895,6 +1022,114 @@ merely validates a config.
 as a signature default binds the function object once at import, which defeats
 monkeypatching and any later re-binding — it cost five failing tests during the
 build. Both search paths take `None` and resolve inside the body instead.
+
+## Notifications + the `notify` tool type (landed 2026-08-23)
+
+`notifications` shipped in the initial schema and **nothing had ever written a
+row**. `worker_notifications` consumed `-Q notifications` with an **empty task
+registry** since the same commit. Vol. 5's three HR workflows (§14 Leave
+Approval, §15 Payroll Validation, §16 Attendance) all terminate in a `Notify`
+step, so a leave approval that approves and tells nobody was the whole HR story.
+
+`modules/notifications/` went models-only → real (`schemas`, `repository`,
+`service`, `router`), plus `src/workers/notification_tasks.py` and migration
+`20260823_notify`. **All three worker containers now have a non-empty task
+registry.**
+
+- **`notify` is a TOOL TYPE, not a NodeType**, following the reasoning recorded
+  for `knowledge_search`: a NodeType touches the backend enum, the dispatcher,
+  the frontend node catalog, a config form AND `lib/graph-validation.ts`, which
+  reimplements the backend rules in a second language. A tool type touches one
+  dispatcher and inherits the registry picker and `tool_executions` auditing. A
+  notification is also literally what a tool is — a side-effecting call to
+  something outside the graph.
+- **Delivery is ASYNCHRONOUS, and that is the design.** Vol. 5 puts Notify at the
+  END of every HR workflow — after the leave is approved, after the payroll run
+  is released. Delivering inline would let a Slack outage fail a run whose real
+  work already succeeded and was already signed off by a human, which is the
+  single worst place to put a third party. The node commits the row (the record
+  of intent, same reasoning as `tool_executions`) and returns **`queued`, never
+  `delivered`** — at that instant nothing has been sent. `notifications.status`
+  is where the outcome lands.
+- **The enqueue happens AFTER the commit.** The reverse races:
+  `worker_notifications` is a separate process and can pick the task up before
+  the transaction commits, then fail to find the row it was told to deliver.
+- **`in_app` enqueues nothing** and is marked delivered on the spot: the row IS
+  the delivery for that channel, and queueing a task whose only job is to set a
+  column is a Redis round-trip to accomplish an UPDATE.
+- **Only `in_app` and `webhook` have a transport.** `notifications.channel`
+  documents a wider vocabulary (`email | whatsapp | slack`) that nothing
+  delivers; those are rejected by name, the same rule `python_function`/`mcp`
+  follow. `webhook` covers Slack, Teams and Zapier — all a POST with a JSON body
+  — so a channel per vendor would be four spellings of one transport. Slack's
+  `text` key is added alongside the structured payload; that is the one
+  vendor accommodation and it is additive, not a code path.
+- **`notify` rejects `is_mutating: true`.** A notification changes no external
+  record, and Vol. 5 puts Notify *after* the gate — accepting the flag would
+  demand a second approval to tell someone the first one happened. Same rule and
+  same reasoning as `knowledge_search`.
+- **A node cannot override `channel` or `url`.** Those are the transport, the
+  direct analogue of `http_request`'s `url`; a node that could re-point a
+  reviewed notify tool at its own webhook would exfiltrate whatever the workflow
+  put in the payload. `title`, `user_id` and `body_fields` ARE overridable — the
+  message and its recipient are per-usage.
+- **Resolved values ride ALONGSIDE the body, never interpolated into it.** There
+  is no template syntax anywhere in this codebase and this was not the place to
+  invent one: `{}`-formatting author-supplied text against graph state is a
+  format-string injection surface, and the condition DSL's whole design note is
+  that state is *addressed*, never evaluated.
+- **Webhook delivery retries a 5xx freely** — the reverse of the `http_request`
+  idempotency rule, and for the same underlying reason: what matters is the cost
+  of a replay. Re-POSTing a notification is at worst a duplicate message, never
+  a duplicate journal entry. It IS idempotent on an already-`delivered` row,
+  because `task_acks_late` means a crash after delivery causes a redelivery.
+- **`status`/`error` exist so a failed delivery is queryable**, not just logged.
+  `error` is query-stripped: an incoming-webhook URL carries its token there.
+- **The read API is gated on AUTHENTICATION, not on a permission** — the one
+  deliberate departure from `require_permission`. The endpoint is self-scoped by
+  construction (`organization_id AND (user_id = me OR user_id IS NULL)`), so
+  there is no privilege to check: a Viewer must see an alert addressed to them,
+  and no role should see a colleague's. A `notification:read` would mean seeding
+  it onto all five roles to grant what the query already limits.
+- **There is no POST route.** A client-writable notification endpoint is a spam
+  surface with no workflow behind it and nothing in the audit trail saying where
+  the message came from. A test asserts 405.
+
+## HR: Leave approval demo workflow (Vol. 5 §14, landed 2026-08-23)
+
+`_leave_workflow` in `src/db/demo/graphs.py`, plus the `hr_notify_employee`
+registry tool and `SAMPLE_LEAVE_REQUEST_PAYLOAD`.
+
+- **§14's three HR tools are deliberately NOT invented.** `hr.get_leave_balance`,
+  `hr.check_team_coverage` and `hr.approve_leave` have no endpoint behind them —
+  there is no HR system wired to this platform — and three `http_request` rows
+  pointed at a URL nobody has would publish and then fail on the first run. What
+  is kept is §14's actual subject: **two independent exception paths converging
+  on one outcome**, with the decision grounded in the company's own published
+  handbook rather than the model's employment-law priors.
+- **It decides and notifies; it does not write back to an HR system.** That is
+  the honest state, pinned by a test so it cannot drift silently. Adding
+  `hr.approve_leave` is one `http_request` registry tool marked `is_mutating`,
+  slotted in front of `notify_employee` — at which point
+  `validate_mutating_approval` starts *requiring* the two gates this graph
+  already has. Nothing else about the shape changes.
+- **No node is mutating, so the guardrail does not fire.** The two
+  `human_approval` nodes are there because the POLICY asks for a manager, not
+  because the validator forced them. Worth knowing before someone "simplifies"
+  them away: load-bearing for §14, invisible to the validator.
+- **The two conditions are separated by two non-condition nodes, and that is
+  required.** Condition nodes cannot chain — the router attaches to the
+  condition's PREDECESSOR — so two in sequence mis-route silently. Nothing
+  validates this at publish (`Docs/shakedown-fixes.md` §K), so
+  `test_no_two_condition_nodes_are_adjacent_in_any_demo_graph` asserts it across
+  every demo graph.
+- **Balance routes deterministically, coverage routes on a grounded agent.** The
+  same asymmetry the invoice workflow draws: `balance_after < 0` is arithmetic
+  and cannot misfire, while the notice/coverage decision is the handbook's §4.1
+  doing real work.
+- The sample payload is tuned to fire **both** gates in one run (8 days against a
+  6-day balance, 9 days' notice against the handbook's 28). Raise the balance and
+  push the dates out for the clean path.
 
 ## Demo seed — `src/db/demo/` (landed 2026-08-17)
 

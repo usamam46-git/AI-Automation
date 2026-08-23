@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from langgraph.types import interrupt
@@ -215,7 +217,15 @@ _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 # form AND `lib/graph-validation.ts`, which reimplements the backend rules in a
 # second language. A tool type touches this function, and inherits the registry
 # picker and `tool_executions` auditing already built.
-_TOOL_TYPES = frozenset({"http_request", "erp_connector", "knowledge_search"})
+_TOOL_TYPES = frozenset({"http_request", "erp_connector", "knowledge_search", "notify"})
+
+# Channels with a transport behind them. `notifications.channel` documents a
+# wider vocabulary (email | whatsapp | slack) that nothing delivers; those are
+# rejected by name here rather than accepted and silently dropped, the same rule
+# `python_function`/`mcp` follow. `webhook` covers Slack, Teams and Zapier
+# incoming webhooks — they are all a POST with a JSON body — so naming a channel
+# per vendor would be four spellings of one transport.
+_NOTIFY_CHANNELS = frozenset({"in_app", "webhook"})
 
 # Mock ERP actions and the payload fields each one requires. `erp_connector` makes
 # no network call — it exists so the mutating-tool mechanism (and Vol. 5's ERP
@@ -244,6 +254,33 @@ _RETRYABLE_HTTP_ERRORS: tuple[type[Exception], ...] = (
 )
 
 _RETRYABLE_STATUS = frozenset({429})
+
+# Placeholder grammar for URL templating: `{vendor_id}` in a tool's `url`, filled
+# from graph state via `url_fields`. Restricted to identifier characters so a
+# malformed placeholder fails the config check instead of being left in the URL
+# and silently requesting a literal `{vendor-id}` path segment.
+_URL_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+# Failures that PROVE the request never reached the server, so replaying it cannot
+# duplicate a write. `ConnectTimeout` is listed explicitly because httpx puts it
+# under TimeoutException, not under ConnectError — its sibling `ReadTimeout` is
+# the dangerous one (the server may have committed and simply not answered in
+# time) and must never appear here.
+_UNDELIVERED_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+)
+
+# Statuses where the server explicitly reports it did NOT process the request.
+# 5xx is deliberately absent: a 500 can be raised after a commit.
+_UNPROCESSED_STATUS = frozenset({429})
+
+# Stable namespace for deterministic idempotency keys. Fixed forever — changing it
+# changes every key this platform has ever sent, which is the one thing an
+# idempotency key must not do.
+_IDEMPOTENCY_NAMESPACE = uuid.UUID("6f6e1f9c-2c3a-5c7e-9f4b-9a7d1e2b3c4d")
+
+DEFAULT_IDEMPOTENCY_HEADER = "Idempotency-Key"
 
 # Credential rejections. Split out of the "4xx is data" bucket deliberately: a bad
 # API key returned as node output is indistinguishable from a legitimate business
@@ -309,13 +346,83 @@ def _field_map(config: dict[str, Any], key: str, node_key: str) -> dict[str, str
     return mapping
 
 
-def _http_request_config(config: dict[str, Any], node_key: str) -> dict[str, Any]:
+def _idempotency_config(config: dict[str, Any], node_key: str) -> dict[str, str] | None:
+    """
+    Validate the optional `idempotency` block.
+
+    Its presence is an ASSERTION BY THE AUTHOR that the target endpoint dedupes
+    replays carrying the same key. That assertion is what unlocks retrying a
+    mutating call — see `_may_retry`. Absent (the default) is the safe state, so
+    nothing existing changes behaviour by upgrading.
+
+    Shape: `{"header": "Idempotency-Key"}`. The header name is configurable
+    because there is no standard one — Stripe and the IETF draft say
+    `Idempotency-Key`, but ERPs commonly use `X-Request-Id` or a vendor-specific
+    name, and a key sent under a header the server ignores is worse than no key
+    at all: it looks like a guarantee and is not one.
+    """
+    raw = config.get("idempotency")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (http_request) has a malformed 'idempotency' — expected an object "
+            f'like {{"header": "{DEFAULT_IDEMPOTENCY_HEADER}"}}, got {type(raw).__name__}.'
+        )
+    header = raw.get("header", DEFAULT_IDEMPOTENCY_HEADER)
+    if not isinstance(header, str) or not header.strip():
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (http_request) has a malformed 'idempotency.header' ({header!r}) — expected a non-empty string."
+        )
+    return {"header": header.strip()}
+
+
+def _url_template(config: dict[str, Any], node_key: str) -> tuple[str, dict[str, str]]:
+    """
+    Validate `url` against `url_fields` so a typo fails at publish, not at 3am.
+
+    The URL may carry `{placeholder}` segments filled from graph state, e.g.
+    `https://erp.internal/api/vendors/{vendor_id}` with
+    `url_fields: {"vendor_id": "node_outputs.extract.vendor_id"}`. Placeholders
+    and mappings must correspond EXACTLY in both directions: an unfilled
+    placeholder would be requested literally, and a mapping with no placeholder is
+    dead config that reads as if it were wiring something up.
+
+    Added 2026-08-23. The URL used to be entirely static, which made every
+    path-parameterised REST endpoint — the ordinary shape of `GET /invoices/{id}`
+    — unreachable, and Vol. 5 §1's `erp.get_vendor` step unbuildable against a
+    real system.
+    """
     url = config.get("url")
     if not url or not isinstance(url, str):
         raise ToolNodeConfigError(
             f"Tool node '{node_key}' (http_request) has no usable 'url' in its config. "
-            f"The URL is static — state values reach the request through 'body_fields', not through URL interpolation."
+            f"State values reach the URL through '{{placeholder}}' segments mapped by 'url_fields', "
+            f"the query string through 'params'/'params_fields', and the body through 'body'/'body_fields'."
         )
+
+    url_fields = _field_map(config, "url_fields", node_key)
+    placeholders = set(_URL_PLACEHOLDER_RE.findall(url))
+
+    unfilled = placeholders - url_fields.keys()
+    if unfilled:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (http_request) has URL placeholder(s) {sorted(unfilled)} with no entry in 'url_fields'. "
+            f'Each one needs a dotted state path, e.g. {{"{sorted(unfilled)[0]}": "node_outputs.extract.{sorted(unfilled)[0]}"}}.'
+        )
+
+    unused = url_fields.keys() - placeholders
+    if unused:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (http_request) maps 'url_fields' {sorted(unused)} that appear nowhere in the URL "
+            f"{_safe_url(url)!r}. Placeholders must match [a-zA-Z_][a-zA-Z0-9_]* exactly — check for a hyphen or a typo."
+        )
+
+    return url, url_fields
+
+
+def _http_request_config(config: dict[str, Any], node_key: str) -> dict[str, Any]:
+    url, url_fields = _url_template(config, node_key)
 
     method = str(config.get("method", "GET")).upper()
     if method not in _HTTP_METHODS:
@@ -331,12 +438,20 @@ def _http_request_config(config: dict[str, Any], node_key: str) -> dict[str, Any
     if not isinstance(body, dict):
         raise ToolNodeConfigError(f"Tool node '{node_key}' (http_request) has a malformed 'body' — expected an object.")
 
+    params = config.get("params") or {}
+    if not isinstance(params, dict):
+        raise ToolNodeConfigError(f"Tool node '{node_key}' (http_request) has a malformed 'params' — expected an object.")
+
     return {
         "url": url,
+        "url_fields": url_fields,
         "method": method,
         "headers": {str(k): str(v) for k, v in headers.items()},
         "body": body,
         "body_fields": _field_map(config, "body_fields", node_key),
+        "params": params,
+        "params_fields": _field_map(config, "params_fields", node_key),
+        "idempotency": _idempotency_config(config, node_key),
         "timeout_seconds": float(config.get("timeout_seconds", 30.0)),
     }
 
@@ -411,6 +526,82 @@ def _knowledge_search_config(config: dict[str, Any], node_key: str) -> dict[str,
     }
 
 
+def _notify_config(config: dict[str, Any] | None, node_key: str) -> dict[str, Any]:
+    """
+    Validate a `notify` node's config.
+
+    Vol. 5 §14/§15/§16 all terminate in a Notify step, and until 2026-08-23 there
+    was nothing to compile it to — no NodeType, no handler, and
+    `worker_notifications` booting with an empty registry.
+
+    Shipped as a TOOL TYPE rather than a NodeType, following the reasoning
+    recorded for `knowledge_search`: a NodeType touches the backend enum, this
+    dispatcher, the frontend node catalog, a config form AND
+    `lib/graph-validation.ts`, which reimplements the backend rules in a second
+    language. A tool type touches this function and inherits the registry picker
+    and `tool_executions` auditing already built. A notification is also
+    literally what a tool is — a side-effecting call to something outside the
+    graph.
+
+    `channel` and `url` are registry-owned (the transport, the direct analogue of
+    `http_request`'s `url`); `title`/`body`/`body_fields`/`user_id` are per-usage.
+    """
+    config = config or {}
+
+    channel = config.get("channel", "in_app")
+    if not isinstance(channel, str) or channel not in _NOTIFY_CHANNELS:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (notify) has an unsupported 'channel' {channel!r}. "
+            f"Supported: {sorted(_NOTIFY_CHANNELS)} — 'email', 'whatsapp' and 'slack' appear in the "
+            f"notifications table's vocabulary but have no transport behind them (use 'webhook' for Slack)."
+        )
+
+    url = config.get("url")
+    if channel == "webhook":
+        if not url or not isinstance(url, str):
+            raise ToolNodeConfigError(
+                f"Tool node '{node_key}' (notify) uses channel 'webhook' but has no 'url' to POST to. "
+                f"A Slack/Teams/Zapier incoming-webhook URL goes here — put its token in the tool's secrets."
+            )
+    elif url:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (notify) sets a 'url' on channel {channel!r}, which does not use one. " f"Did you mean channel 'webhook'?"
+        )
+
+    title = config.get("title", "")
+    body = config.get("body", "")
+    for label, value in (("title", title), ("body", body)):
+        if not isinstance(value, str):
+            raise ToolNodeConfigError(f"Tool node '{node_key}' (notify) has a malformed '{label}' — expected a string.")
+
+    body_fields = _field_map(config, "body_fields", node_key)
+    if not title.strip() and not body.strip() and not body_fields:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (notify) would send an empty notification — it has no 'title', no 'body' and no "
+            f"'body_fields'. A notification nobody can read is worse than no notification, because it looks delivered."
+        )
+
+    raw_user = config.get("user_id")
+    user_id: str | None = None
+    if raw_user:
+        try:
+            user_id = str(uuid.UUID(str(raw_user)))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ToolNodeConfigError(
+                f"Tool node '{node_key}' (notify) has a malformed 'user_id' {raw_user!r} — expected a UUID. "
+                f"Omit it entirely to notify the whole organization."
+            ) from exc
+
+    return {
+        "channel": channel,
+        "url": url or None,
+        "title": title,
+        "body": body,
+        "body_fields": body_fields,
+        "user_id": user_id,
+    }
+
+
 def _tool_config(config: dict[str, Any] | None, node_key: str) -> dict[str, Any]:
     """
     Validate a tool node's inline config.
@@ -462,11 +653,24 @@ def _tool_config(config: dict[str, Any] | None, node_key: str) -> dict[str, Any]
             f"Remove the flag — it would force an approval gate upstream of a read."
         )
 
+    # A notification writes nothing an approval could protect: it does not move
+    # money, post a journal entry or change a record. Vol. 5's HR workflows put
+    # Notify AFTER the gate, so accepting the flag here would demand a SECOND
+    # approval to tell someone the first one happened. The guardrail only means
+    # something while every node it fires on genuinely writes to a real system.
+    if tool_type == "notify" and is_mutating:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (notify) sets 'is_mutating': true, but sending a notification changes no "
+            f"external record. Remove the flag — it would demand an approval gate in front of telling someone."
+        )
+
     common = {"tool_type": tool_type, "is_mutating": is_mutating}
     if tool_type == "http_request":
         return {**common, **_http_request_config(config, node_key)}
     if tool_type == "knowledge_search":
         return {**common, **_knowledge_search_config(config, node_key)}
+    if tool_type == "notify":
+        return {**common, **_notify_config(config, node_key)}
     return {**common, **_erp_connector_config(config, node_key)}
 
 
@@ -508,6 +712,114 @@ def _safe_url(url: str) -> str:
     return f"{base}?<redacted>" if sep else base
 
 
+def _resolve_url(cfg: dict[str, Any], state: dict[str, Any], node_key: str) -> str:
+    """
+    Fill the URL template from graph state, percent-encoding every value.
+
+    `quote(..., safe="")` encodes `/`, `?`, `#` and `.` as well, so a state value
+    can only ever become ONE path segment. That is the security property here: a
+    resolved value of `../../admin/users` becomes `..%2F..%2Fadmin%2Fusers` and
+    addresses a (missing) resource rather than escaping the path, and a value
+    carrying `?` cannot append a query parameter the author never wrote. State is
+    model output and webhook payload — attacker-influenced by construction.
+
+    A placeholder resolving to None raises rather than substituting "None": a URL
+    with a hole in it addresses the WRONG resource, and for a mutating tool that
+    means writing to the wrong record. Same reasoning for structured values —
+    stringifying a dict into a path is never what the author meant. `bool` is
+    rejected for the same reason, and separately because `True`/`true`/`1` are
+    three different path segments with no obvious winner.
+    """
+    mapping: dict[str, str] = cfg["url_fields"]
+    if not mapping:
+        return cfg["url"]
+
+    encoded: dict[str, str] = {}
+    for name, path in mapping.items():
+        value = resolve_field_path(state, path)
+        if value is None:
+            raise ToolNodeConfigError(
+                f"Tool node '{node_key}' (http_request) could not fill URL placeholder '{{{name}}}': "
+                f"state path {path!r} resolved to nothing. The request was not sent — a URL with an "
+                f"unresolved segment addresses the wrong resource."
+            )
+        if isinstance(value, bool | dict | list | tuple):
+            raise ToolNodeConfigError(
+                f"Tool node '{node_key}' (http_request) resolved URL placeholder '{{{name}}}' from {path!r} to a "
+                f"{type(value).__name__}. A URL segment must be a string or a number."
+            )
+        encoded[name] = quote(str(value), safe="")
+
+    return _URL_PLACEHOLDER_RE.sub(lambda match: encoded[match.group(1)], cfg["url"])
+
+
+def _resolve_params(cfg: dict[str, Any], state: dict[str, Any], node_key: str) -> dict[str, str]:
+    """
+    Build the query string from static `params` plus state-resolved `params_fields`.
+
+    Passed to httpx as `params=` rather than concatenated onto the URL, so encoding
+    is the transport's job and `_safe_url` keeps working (it strips everything after
+    `?`, and the params never appear in `cfg["url"]` to begin with).
+
+    **A value resolving to None is DROPPED, not sent.** An unset optional filter
+    means "don't filter", and `?status=None` is a string literal that most APIs
+    either reject or, worse, match nothing against. This is the one place the
+    treatment differs from `url_fields`, which raises — a missing path segment
+    changes which resource is addressed, a missing filter only widens a search.
+    """
+    merged = {**cfg["params"], **_resolve_field_map(state, cfg["params_fields"])}
+    resolved: dict[str, str] = {}
+    for key, value in merged.items():
+        if value is None:
+            continue
+        if isinstance(value, dict | list | tuple):
+            raise ToolNodeConfigError(
+                f"Tool node '{node_key}' (http_request) resolved query parameter {key!r} to a {type(value).__name__}. "
+                f"Query values must be scalars."
+            )
+        resolved[str(key)] = "true" if value is True else "false" if value is False else str(value)
+    return resolved
+
+
+def _idempotency_key(state: dict[str, Any], node_key: str) -> str:
+    """
+    Deterministic per (run, node) — the same key for every attempt, forever.
+
+    A uuid4 per invocation would survive the retry loop but not a Celery
+    redelivery of the same leg, and `_stream_graph` runs once per LEG rather than
+    once per run. uuid5 over `run_id:node_key` is stable across both, so a
+    server that dedupes on the key sees one logical write no matter how many
+    times this code re-executes.
+    """
+    return str(uuid.uuid5(_IDEMPOTENCY_NAMESPACE, f"{state.get('run_id')}:{node_key}"))
+
+
+def _may_retry(*, mutating: bool, idempotent: bool, error: Exception | None, status: int | None) -> bool:
+    """
+    Whether replaying this exact request is safe.
+
+    The rule, added 2026-08-23 after the gap was found while scoping a real ERP
+    integration: **a mutating call with no idempotency guarantee is replayed only
+    when the request provably never arrived.** Before this, every `http_request`
+    node retried 3x on any timeout or 5xx — so a `POST /journal-entries` that the
+    ERP committed and then failed to acknowledge inside the timeout was posted
+    again, and again, with nothing anywhere reporting a duplicate.
+
+    That hazard was already understood one layer up: `graph_tasks._NON_RETRYABLE`
+    carries `ToolExecutionError` precisely so a Celery retry cannot "post the same
+    journal entry four times". The same reasoning simply had not been applied to
+    this loop, whose 3x was treated as the safe baseline it was not.
+
+    Read-only tools are unaffected — they keep the full retry budget, because
+    replaying a GET costs nothing but time.
+    """
+    if not mutating or idempotent:
+        return True
+    if status is not None:
+        return status in _UNPROCESSED_STATUS
+    return isinstance(error, _UNDELIVERED_ERRORS)
+
+
 def _run_http_request(
     cfg: dict[str, Any],
     state: dict[str, Any],
@@ -540,20 +852,43 @@ def _run_http_request(
       - 429 and 5xx — where the request never got a real answer — are retried and
         ultimately raised as `ToolExecutionError`.
 
+    **Retrying a mutating call is gated on `_may_retry`** (2026-08-23). The three
+    attempts above apply in full to read-only tools; a tool marked `is_mutating`
+    with no `idempotency` block is retried only when the request provably never
+    landed, and otherwise fails immediately with a message saying so. See
+    `_may_retry` for why, and `_idempotency_key` for what makes a replay safe.
+
+    The URL is a template filled by `_resolve_url`, the query string is built by
+    `_resolve_params`, and the body merges static `body` with state-resolved
+    `body_fields` — all three resolve through the same `resolve_field_path` as the
+    condition DSL, so no new templating (or code-execution) surface is introduced.
+
     The returned dict carries `status_code` and `body` only. Request and response
     headers are deliberately NOT echoed: this value lands in `node_executions.output`,
     which the Execution Viewer renders, and request headers routinely carry an
-    Authorization bearer token or API key.
+    Authorization bearer token or API key — now including the idempotency key,
+    which is a replay token for a write.
     """
     body = {**cfg["body"], **_resolve_field_map(state, cfg["body_fields"])}
-    client = client_factory(timeout=cfg["timeout_seconds"])
-    safe_url = _safe_url(cfg["url"])
+    params = _resolve_params(cfg, state, node_key)
+    url = _resolve_url(cfg, state, node_key)
+    safe_url = _safe_url(url)
 
+    mutating = bool(cfg.get("is_mutating"))
+    idempotency = cfg.get("idempotency")
+    headers = dict(cfg["headers"])
+    if idempotency is not None:
+        headers[idempotency["header"]] = _idempotency_key(state, node_key)
+
+    client = client_factory(timeout=cfg["timeout_seconds"])
     last_error: Exception | None = None
+    attempts_made = 0
     try:
         for attempt in range(max_attempts):
+            attempts_made = attempt + 1
+            last_status: int | None = None
             try:
-                response = client.request(cfg["method"], cfg["url"], headers=cfg["headers"], json=body or None)
+                response = client.request(cfg["method"], url, headers=headers, params=params or None, json=body or None)
             except _RETRYABLE_HTTP_ERRORS as exc:
                 last_error = exc
             else:
@@ -565,10 +900,20 @@ def _run_http_request(
                 if response.status_code < 500 and response.status_code not in _RETRYABLE_STATUS:
                     logger.info("Tool node '%s' called %s %s → %d", node_key, cfg["method"], safe_url, response.status_code)
                     return {"status_code": response.status_code, "body": _response_payload(response)}
+                last_status = response.status_code
                 last_error = ToolExecutionError(f"HTTP {response.status_code} from {cfg['method']} {safe_url}")
 
             if attempt == max_attempts - 1:
                 break
+            if not _may_retry(mutating=mutating, idempotent=idempotency is not None, error=last_error, status=last_status):
+                raise ToolExecutionError(
+                    f"Tool node '{node_key}' failed calling {cfg['method']} {safe_url} and was deliberately NOT retried: "
+                    f"the tool is marked 'is_mutating' and declares no 'idempotency', so the server may already have "
+                    f"committed this write and a replay would duplicate it. "
+                    f"Last error: {type(last_error).__name__}: {last_error}. "
+                    f'If the endpoint honours an idempotency key, set config.idempotency to {{"header": "{DEFAULT_IDEMPOTENCY_HEADER}"}} '
+                    f"(or whichever header it reads) and retries resume."
+                ) from last_error
             delay = retry_base_delay * (2**attempt)
             logger.warning(
                 "Transient tool error (%s) on node '%s' attempt %d/%d — retrying in %.1fs: %s",
@@ -584,8 +929,9 @@ def _run_http_request(
     finally:
         client.close()
 
+    plural = "attempt" if attempts_made == 1 else "attempts"
     raise ToolExecutionError(
-        f"Tool node '{node_key}' failed after {max_attempts} attempts calling {cfg['method']} {safe_url}. "
+        f"Tool node '{node_key}' failed after {attempts_made} {plural} calling {cfg['method']} {safe_url}. "
         f"Last error: {type(last_error).__name__}: {last_error}"
     ) from last_error
 
@@ -705,6 +1051,62 @@ def _run_knowledge_search(
     return output, usage
 
 
+def _run_notify(cfg: dict[str, Any], state: dict[str, Any], node_key: str) -> dict[str, Any]:
+    """
+    Queue one notification. Writes the `notifications` row, then enqueues delivery.
+
+    **Delivery is asynchronous and that is the whole design.** Vol. 5 puts Notify
+    at the END of every HR workflow — after the leave is approved, after the
+    payroll run is released. Delivering inline would mean a Slack outage fails a
+    run whose real work already succeeded and was already approved by a human.
+    So the row is committed here (the record that we intended to tell someone,
+    the same write-before-execute reasoning as `tool_executions`) and
+    `worker_notifications` owns the transport and its retries.
+
+    The node therefore reports `queued`, not `delivered`, and that is honest:
+    at this instant nothing has been sent. `notifications.status` is where the
+    outcome lands.
+
+    `organization_id` comes from graph state, never from node config — same rule
+    and same reason as `knowledge_search`: state is seeded by
+    `initial_state_from_trigger` off the run row, so it carries the same
+    provenance as a router's `get_current_org`, while node config is author-typed
+    text on a canvas.
+    """
+    organization_id = state.get("organization_id")
+    if not organization_id:
+        raise ToolNodeConfigError(
+            f"Tool node '{node_key}' (notify) ran with no organization_id in graph state. " f"A notification cannot be written without a tenant."
+        )
+
+    resolved = _resolve_field_map(state, cfg["body_fields"])
+    payload = {
+        "title": cfg["title"],
+        "body": cfg["body"],
+        # Resolved values ride alongside the body rather than being interpolated
+        # into it. There is no template syntax anywhere in this codebase and this
+        # is not the place to invent one — `{}`-formatting author-supplied text
+        # against graph state is a formatting-string injection surface, and the
+        # condition DSL's whole design note is that state is ADDRESSED, never
+        # evaluated.
+        "fields": {k: v for k, v in resolved.items() if v is not None},
+        "source": {"node_key": node_key, "run_id": state.get("run_id")},
+    }
+
+    from src.modules.notifications.service import queue_notification_sync
+
+    notification_id = queue_notification_sync(
+        organization_id=str(organization_id),
+        user_id=cfg["user_id"],
+        channel=cfg["channel"],
+        url=cfg["url"],
+        payload=payload,
+    )
+
+    logger.info("Tool node '%s' queued %s notification %s", node_key, cfg["channel"], notification_id)
+    return {"queued": True, "notification_id": str(notification_id), "channel": cfg["channel"]}
+
+
 def _audit_input(cfg: dict[str, Any]) -> dict[str, Any]:
     """
     The intent snapshot written to `tool_executions.input`.
@@ -719,11 +1121,32 @@ def _audit_input(cfg: dict[str, Any]) -> dict[str, Any]:
     else can fail. The resolved values land in `output` on the way back.
     """
     if cfg["tool_type"] == "http_request":
+        # `url` is the TEMPLATE, not the resolved target: this row is written before
+        # state is read, which is exactly the property Vol. 4 §4.3 asks for. The
+        # `*_fields` maps are recorded because they are author config (dotted paths,
+        # not values); static `params` is NOT, for the same reason `headers` is
+        # dropped — `?api_key=...` is a common auth pattern and this row is read back
+        # by an operator.
         return {
             "tool_type": "http_request",
             "method": cfg["method"],
             "url": _safe_url(cfg["url"]),
+            "url_fields": cfg["url_fields"],
+            "params_fields": cfg["params_fields"],
             "body_fields": cfg["body_fields"],
+            "idempotent": cfg.get("idempotency") is not None,
+            "is_mutating": cfg["is_mutating"],
+        }
+    if cfg["tool_type"] == "notify":
+        # `url` is query-stripped for the same reason it is everywhere else: an
+        # incoming-webhook URL carries its token in the path or query, and this
+        # row is read back by an operator.
+        return {
+            "tool_type": "notify",
+            "channel": cfg["channel"],
+            "url": _safe_url(cfg["url"]) if cfg["url"] else None,
+            "body_fields": cfg["body_fields"],
+            "targeted": cfg["user_id"] is not None,
             "is_mutating": cfg["is_mutating"],
         }
     if cfg["tool_type"] == "knowledge_search":
@@ -818,6 +1241,8 @@ def tool_handler(
                 llm_client_factory=llm_client_factory,
                 search=search or _default_search,
             )
+        elif cfg["tool_type"] == "notify":
+            result = _run_notify(cfg, state, node_key)
         else:
             result = _run_erp_connector(cfg, state, node_key)
     except Exception:

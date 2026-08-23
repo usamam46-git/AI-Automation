@@ -449,3 +449,86 @@ async def test_function_specs_defaults_an_absent_input_schema(client: AsyncClien
 
     assert specs[0]["function"]["parameters"] == {"type": "object", "properties": {}}
     assert specs[0]["function"]["description"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Encrypted tool credentials (2026-08-23)
+#
+# Before this, a tool's API key lived in `config.headers` as plaintext JSONB and
+# was returned verbatim by every read endpoint. `models.py` described the column
+# as holding an "auth reference", which is what the design should have been and
+# was not. These tests pin the three properties that matter: the value never
+# comes back over HTTP, it is not readable in the row, and a reference to a
+# secret that does not exist fails at write time rather than as a 401 later.
+# ---------------------------------------------------------------------------
+
+
+SECRET_TOOL = {
+    "name": "post_je_secure",
+    "tool_type": "http_request",
+    "description": "Post a journal entry to the real ledger.",
+    "config": {
+        "url": "https://erp.example.com/api/journal-entries",
+        "method": "POST",
+        "headers": {"Authorization": "Bearer {{secrets.erp_token}}"},
+        "idempotency": {"header": "Idempotency-Key"},
+    },
+    "secrets": {"erp_token": "sk-live-DO-NOT-LEAK-0001"},
+    "is_mutating": True,
+}
+
+
+@pytest.mark.asyncio
+async def test_a_tool_secret_is_never_returned_by_any_endpoint(client: AsyncClient):
+    ctx = await _bootstrap(client, "T-sec1")
+    created = await _create_tool(client, ctx, **SECRET_TOOL)
+
+    assert created["secret_keys"] == ["erp_token"]
+    assert "secrets" not in created
+
+    detail = await client.get(f"/api/v1/tools/{created['id']}", headers=ctx["headers"])
+    listing = await client.get("/api/v1/tools", headers=ctx["headers"])
+
+    for resp in (detail, listing):
+        assert "sk-live-DO-NOT-LEAK-0001" not in resp.text
+    assert detail.json()["secret_keys"] == ["erp_token"]
+    # The placeholder itself is fine to expose — it names a credential, it is not one.
+    assert detail.json()["config"]["headers"]["Authorization"] == "Bearer {{secrets.erp_token}}"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_secret_is_not_readable_in_the_row(client: AsyncClient, session):
+    """The gap this closed was at rest, not in transit — pg_dump, replicas, backups."""
+    from sqlalchemy import select
+
+    from src.modules.tools.models import Tool
+
+    ctx = await _bootstrap(client, "T-sec2")
+    created = await _create_tool(client, ctx, **SECRET_TOOL)
+
+    row = (await session.execute(select(Tool).where(Tool.id == uuid.UUID(created["id"])))).scalar_one()
+    assert b"sk-live-DO-NOT-LEAK-0001" not in bytes(row.secrets_encrypted)
+    assert "sk-live-DO-NOT-LEAK-0001" not in str(row.config)
+
+
+@pytest.mark.asyncio
+async def test_referencing_an_unknown_secret_is_rejected_at_write_time(client: AsyncClient):
+    ctx = await _bootstrap(client, "T-sec3")
+    resp = await client.post(
+        "/api/v1/tools",
+        json={**SECRET_TOOL, "workspace_id": ctx["workspace_id"], "secrets": {"other_name": "x"}},
+        headers=ctx["headers"],
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert "erp_token" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_removing_a_secret_a_config_still_references_is_rejected(client: AsyncClient):
+    """Otherwise the tool silently starts sending `Bearer {{secrets.erp_token}}` as a literal."""
+    ctx = await _bootstrap(client, "T-sec4")
+    created = await _create_tool(client, ctx, **SECRET_TOOL)
+
+    resp = await client.patch(f"/api/v1/tools/{created['id']}", json={"secrets": {}}, headers=ctx["headers"])
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert "erp_token" in resp.json()["detail"]

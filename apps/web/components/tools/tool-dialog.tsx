@@ -45,9 +45,24 @@ const TOOL_TYPES: Array<{ value: ToolType; label: string; help: string }> = [
     label: "Knowledge search",
     help: "Embeds a question and returns the closest passages from one knowledge base. Read-only, and billed per query.",
   },
+  {
+    value: "notify",
+    label: "Notification",
+    help: "Tells someone the outcome. Queued, not sent inline — a channel outage cannot fail a run whose work is already done.",
+  },
+];
+
+const NOTIFY_CHANNELS: Array<{ value: string; label: string; help: string }> = [
+  { value: "in_app", label: "In-app", help: "Writes a notification row. No external transport, so it always works." },
+  { value: "webhook", label: "Webhook", help: "POSTs to a Slack, Teams or Zapier incoming webhook. Put the URL's token in Secrets." },
 ];
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
+
+// Mirrors `DEFAULT_IDEMPOTENCY_HEADER` in apps/api/src/graphs/node_handlers.py.
+// The name is configurable because there is no standard one — Stripe and the
+// IETF draft say Idempotency-Key, ERPs commonly use X-Request-Id.
+const DEFAULT_IDEMPOTENCY_HEADER = "Idempotency-Key";
 
 // Both spellings are accepted by the backend — the blueprint uses one in Vol. 2
 // §7.2 and the other in Vol. 5 §5, and both reference workflows must be
@@ -73,6 +88,24 @@ function ToolDialogForm({ tool, onOpenChange }: { tool: Tool | null; onOpenChang
   const [method, setMethod] = React.useState(typeof existingConfig.method === "string" ? existingConfig.method : "GET");
   const [headers, setHeaders] = React.useState<Record<string, string>>((existingConfig.headers ?? {}) as Record<string, string>);
   const [timeoutSeconds, setTimeoutSeconds] = React.useState(typeof existingConfig.timeout_seconds === "number" ? existingConfig.timeout_seconds : 30);
+  const [urlFields, setUrlFields] = React.useState<Record<string, string>>((existingConfig.url_fields ?? {}) as Record<string, string>);
+  const [params, setParams] = React.useState<Record<string, string>>(
+    Object.fromEntries(Object.entries((existingConfig.params ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)])),
+  );
+  const [paramsFields, setParamsFields] = React.useState<Record<string, string>>((existingConfig.params_fields ?? {}) as Record<string, string>);
+  const [idempotencyHeader, setIdempotencyHeader] = React.useState(
+    typeof asRecord(existingConfig.idempotency).header === "string" ? (asRecord(existingConfig.idempotency).header as string) : "",
+  );
+  const [dedupes, setDedupes] = React.useState(existingConfig.idempotency != null);
+  // Write-only: the API returns `secret_keys` and never a value, so an existing
+  // tool's secrets cannot be pre-filled. An empty map therefore means "leave the
+  // stored ones alone", which is why `secrets` is omitted from the PATCH unless
+  // the author actually touched it — see the mutation below.
+  const [secrets, setSecrets] = React.useState<Record<string, string>>({});
+  const [secretsTouched, setSecretsTouched] = React.useState(false);
+  const [notifyChannel, setNotifyChannel] = React.useState(typeof existingConfig.channel === "string" ? existingConfig.channel : "in_app");
+  const [notifyTitle, setNotifyTitle] = React.useState(typeof existingConfig.title === "string" ? existingConfig.title : "");
+  const [notifyBody, setNotifyBody] = React.useState(typeof existingConfig.body === "string" ? existingConfig.body : "");
   const [action, setAction] = React.useState(typeof existingConfig.action === "string" ? existingConfig.action : "");
   const [knowledgeBaseId, setKnowledgeBaseId] = React.useState(
     typeof existingConfig.knowledge_base_id === "string" ? existingConfig.knowledge_base_id : "",
@@ -97,23 +130,62 @@ function ToolDialogForm({ tool, onOpenChange }: { tool: Tool | null; onOpenChang
       ? url.trim().length > 0
       : toolType === "erp_connector"
         ? action.length > 0
-        : knowledgeBaseId.length > 0 && trimmedQuery.length > 0;
+        : toolType === "notify"
+          ? // `_notify_config` refuses a config with no title, no body and no
+            // body_fields — a notification nobody can read looks delivered. The
+            // registry row owns a default; a node may override the title.
+            (notifyTitle.trim().length > 0 || notifyBody.trim().length > 0) && (notifyChannel !== "webhook" || url.trim().length > 0)
+          : knowledgeBaseId.length > 0 && trimmedQuery.length > 0;
   // Retrieval reads; `_knowledge_search_config` rejects `is_mutating: true` on
   // it outright, because a read that forces an approval gate upstream devalues
   // the gate. The switch is hidden rather than disabled — there is no decision.
-  const canMutate = toolType !== "knowledge_search";
+  // Both retrieval and notification reject `is_mutating` outright at the
+  // backend: one only reads, and the other changes no external record. Vol. 5
+  // puts Notify AFTER the gate, so allowing the flag would demand a second
+  // approval to tell someone the first one happened.
+  const canMutate = toolType !== "knowledge_search" && toolType !== "notify";
 
   function buildConfig(): Record<string, unknown> {
     // Preserve any keys the API knows about that this dialog doesn't edit (a
     // body default set through another path, say) rather than dropping them on
     // an unrelated rename.
     const preserved = { ...existingConfig };
-    for (const key of ["url", "method", "headers", "timeout_seconds", "action", "knowledge_base_id", "query", "top_k", "score_floor"]) {
+    for (const key of [
+      "url", "method", "headers", "timeout_seconds", "url_fields", "params", "params_fields", "idempotency",
+      "action", "knowledge_base_id", "query", "top_k", "score_floor", "channel", "title", "body",
+    ]) {
       delete preserved[key];
     }
 
-    if (toolType === "http_request") return { ...preserved, url: url.trim(), method, headers, timeout_seconds: timeoutSeconds };
+    if (toolType === "http_request") {
+      return {
+        ...preserved,
+        url: url.trim(),
+        method,
+        headers,
+        url_fields: urlFields,
+        params,
+        params_fields: paramsFields,
+        // Null, not omitted: `preserved` has already dropped the old key, and an
+        // explicit null is what the backend reads as "this endpoint makes no
+        // dedupe promise" — which is what keeps a mutating call from being
+        // retried after an unknown outcome.
+        idempotency: dedupes ? { header: idempotencyHeader.trim() || DEFAULT_IDEMPOTENCY_HEADER } : null,
+        timeout_seconds: timeoutSeconds,
+      };
+    }
     if (toolType === "erp_connector") return { ...preserved, action };
+    if (toolType === "notify") {
+      return {
+        ...preserved,
+        channel: notifyChannel,
+        title: notifyTitle.trim(),
+        body: notifyBody.trim(),
+        // `_notify_config` rejects a `url` on a channel that does not use one,
+        // so it must be absent rather than an empty string.
+        ...(notifyChannel === "webhook" ? { url: url.trim() } : {}),
+      };
+    }
     return { ...preserved, knowledge_base_id: knowledgeBaseId, query: trimmedQuery, top_k: topK, score_floor: scoreFloor };
   }
 
@@ -125,7 +197,17 @@ function ToolDialogForm({ tool, onOpenChange }: { tool: Tool | null; onOpenChang
       // and then switching to retrieval would send a flag the backend 422s.
       const mutating = canMutate && isMutating;
       if (editing) {
-        return toolsApi.update(tool.id, { name: trimmedName, description: description.trim() || null, config, is_mutating: mutating });
+        return toolsApi.update(tool.id, {
+          name: trimmedName,
+          description: description.trim() || null,
+          config,
+          is_mutating: mutating,
+          // Omitted unless edited. `secrets` REPLACES the stored map, so sending
+          // the dialog's empty state on an unrelated rename would wipe every
+          // credential the tool has — and the config still referencing them
+          // would then 422, which is the good outcome of a bad idea.
+          ...(secretsTouched ? { secrets } : {}),
+        });
       }
       return toolsApi.create({
         workspace_id: workspaceId!,
@@ -133,6 +215,7 @@ function ToolDialogForm({ tool, onOpenChange }: { tool: Tool | null; onOpenChang
         tool_type: toolType,
         description: description.trim() || null,
         config,
+        secrets,
         is_mutating: mutating,
       });
     },
@@ -210,12 +293,70 @@ function ToolDialogForm({ tool, onOpenChange }: { tool: Tool | null; onOpenChang
             </div>
 
             <div className="grid gap-1.5">
-              <Label>Headers</Label>
-              <KeyValueEditor value={headers} onChange={setHeaders} keyPlaceholder="Authorization" valuePlaceholder="Bearer …" addLabel="Add header" />
+              <Label>URL placeholders</Label>
+              <KeyValueEditor
+                value={urlFields}
+                onChange={setUrlFields}
+                keyPlaceholder="vendor_id"
+                valuePlaceholder="node_outputs.extract.vendor_id"
+                addLabel="Add placeholder"
+              />
               <p className="text-xs text-muted-foreground">
-                Sent as strings and never echoed back — headers are stripped from node output and from the tool audit trail.
+                Fills <code className="font-mono">{"{vendor_id}"}</code> in the URL from graph state. Every placeholder needs an entry and
+                every entry needs a placeholder — publishing fails naming the mismatch. Values are percent-encoded, so one can only ever
+                become a single path segment.
               </p>
             </div>
+
+            <div className="grid gap-1.5">
+              <Label>Query parameters</Label>
+              <KeyValueEditor value={params} onChange={setParams} keyPlaceholder="include" valuePlaceholder="lines" addLabel="Add parameter" />
+              <KeyValueEditor
+                value={paramsFields}
+                onChange={setParamsFields}
+                keyPlaceholder="period"
+                valuePlaceholder="trigger_payload.period"
+                addLabel="Add parameter from state"
+              />
+              <p className="text-xs text-muted-foreground">
+                Static values above, state-resolved below. A state path that resolves to nothing is dropped rather than sent as
+                <code className="font-mono"> None</code> — an unset filter means &ldquo;don&rsquo;t filter&rdquo;.
+              </p>
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>Headers</Label>
+              <KeyValueEditor value={headers} onChange={setHeaders} keyPlaceholder="Authorization" valuePlaceholder="Bearer {{secrets.erp_token}}" addLabel="Add header" />
+              <p className="text-xs text-muted-foreground">
+                Stripped from node output and from the tool audit trail — but stored in plaintext and returned by the API, so put the
+                credential itself in Secrets below and reference it here as <code className="font-mono">{"{{secrets.name}}"}</code>.
+              </p>
+            </div>
+
+            {canMutate && isMutating ? (
+              <div className="grid gap-1.5 rounded-xl bg-surface-2 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="tool-dedupes" className="leading-snug">
+                    This endpoint de-duplicates replays
+                  </Label>
+                  <Switch id="tool-dedupes" checked={dedupes} onCheckedChange={setDedupes} />
+                </div>
+                {dedupes ? (
+                  <Input
+                    value={idempotencyHeader}
+                    onChange={(event) => setIdempotencyHeader(event.target.value)}
+                    placeholder={DEFAULT_IDEMPOTENCY_HEADER}
+                    className="mt-1 font-mono"
+                    aria-label="Idempotency header name"
+                  />
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  {dedupes
+                    ? "A key derived from the run and the node is sent under this header, identical on every attempt, so a retried write lands once. Only turn this on if the endpoint really honours it — a key it ignores looks like a guarantee and is not one."
+                    : "Off means a failed write is NOT retried when the outcome is unknown (a read timeout, a 5xx): the server may already have committed it. Retries still happen when the request provably never arrived."}
+                </p>
+              </div>
+            ) : null}
 
             <div className="grid gap-1.5">
               <Label htmlFor="tool-timeout">Timeout (seconds)</Label>
@@ -228,6 +369,54 @@ function ToolDialogForm({ tool, onOpenChange }: { tool: Tool | null; onOpenChang
                 onChange={(event) => setTimeoutSeconds(Number(event.target.value) || 30)}
                 className="w-28"
               />
+            </div>
+          </>
+        ) : toolType === "notify" ? (
+          <>
+            <div className="grid gap-1.5">
+              <Label>Channel</Label>
+              <Select value={notifyChannel} onValueChange={setNotifyChannel}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{NOTIFY_CHANNELS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{NOTIFY_CHANNELS.find((c) => c.value === notifyChannel)?.help}</p>
+            </div>
+
+            {notifyChannel === "webhook" ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="notify-url">Webhook URL</Label>
+                <Input
+                  id="notify-url"
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="https://hooks.slack.com/services/…/{{secrets.slack_token}}"
+                  className="font-mono"
+                />
+                <p className="text-xs text-muted-foreground">
+                  An incoming-webhook URL is a bearer credential — put its token in Secrets below and reference it here, or it sits
+                  in plaintext and is returned by the API.
+                </p>
+              </div>
+            ) : null}
+
+            <div className="grid gap-1.5">
+              <Label htmlFor="notify-title">Default title</Label>
+              <Input id="notify-title" value={notifyTitle} onChange={(event) => setNotifyTitle(event.target.value)} placeholder="Request processed" />
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label htmlFor="notify-body">Default body</Label>
+              <Textarea
+                id="notify-body"
+                rows={2}
+                value={notifyBody}
+                onChange={(event) => setNotifyBody(event.target.value)}
+                placeholder="A workflow completed and this is its outcome."
+              />
+              <p className="text-xs text-muted-foreground">
+                Defaults a node may override. The values a node wires up with <code className="font-mono">body_fields</code> ride
+                alongside the body rather than being interpolated into it — there is no template syntax, deliberately.
+              </p>
             </div>
           </>
         ) : toolType === "erp_connector" ? (
@@ -304,6 +493,37 @@ function ToolDialogForm({ tool, onOpenChange }: { tool: Tool | null; onOpenChang
             </p>
           </>
         )}
+
+        {toolType !== "knowledge_search" ? (
+          <div className="grid gap-1.5">
+            <Label>Secrets</Label>
+            {tool && tool.secret_keys.length > 0 && !secretsTouched ? (
+              <p className="text-xs text-muted-foreground">
+                Stored:{" "}
+                {tool.secret_keys.map((key) => (
+                  <code key={key} className="mr-1.5 font-mono">{`{{secrets.${key}}}`}</code>
+                ))}
+                <br />
+                Values cannot be read back. Adding a row below replaces the whole set, so re-enter every secret you still need.
+              </p>
+            ) : null}
+            <KeyValueEditor
+              value={secrets}
+              onChange={(next) => {
+                setSecrets(next);
+                setSecretsTouched(true);
+              }}
+              keyPlaceholder="erp_token"
+              valuePlaceholder="the credential itself"
+              addLabel="Add secret"
+            />
+            <p className="text-xs text-muted-foreground">
+              Encrypted at rest with AES-256-GCM and never returned by any endpoint — only the names come back. Reference one from the
+              config above as <code className="font-mono">{"{{secrets.name}}"}</code>; it is substituted in the worker at run start and
+              reaches neither the node, nor a response, nor the audit trail.
+            </p>
+          </div>
+        ) : null}
 
         {canMutate ? (
           <div className="flex items-start justify-between gap-3 rounded-xl border border-border p-3">

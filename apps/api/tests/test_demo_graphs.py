@@ -46,6 +46,7 @@ from src.modules.workflows.service import validate_graph_structure, validate_mut
 POLICY_TOOL_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 HANDBOOK_TOOL_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 ERP_TOOL_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
+NOTIFY_TOOL_ID = uuid.UUID("66666666-6666-4666-8666-666666666666")
 FINANCE_KB_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
 HANDBOOK_KB_ID = uuid.UUID("55555555-5555-4555-8555-555555555555")
 
@@ -53,17 +54,23 @@ TOOL_IDS_BY_NAME = {
     "finance_policy_search": POLICY_TOOL_ID,
     "handbook_search": HANDBOOK_TOOL_ID,
     "erp_create_journal_entry": ERP_TOOL_ID,
+    "hr_notify_employee": NOTIFY_TOOL_ID,
 }
 
 
 @pytest.fixture(scope="module")
 def workflows() -> list[DemoWorkflow]:
-    return build_workflows(policy_tool_id=POLICY_TOOL_ID, handbook_tool_id=HANDBOOK_TOOL_ID, erp_tool_id=ERP_TOOL_ID)
+    return build_workflows(
+        policy_tool_id=POLICY_TOOL_ID,
+        handbook_tool_id=HANDBOOK_TOOL_ID,
+        erp_tool_id=ERP_TOOL_ID,
+        notify_tool_id=NOTIFY_TOOL_ID,
+    )
 
 
 @pytest.fixture(scope="module")
 def registry() -> dict[uuid.UUID, dict[str, Any]]:
-    """The three tool rows the seed registers, keyed by id."""
+    """The tool rows the seed registers, keyed by id."""
     rows: dict[uuid.UUID, dict[str, Any]] = {}
     for spec in _tool_specs(FINANCE_KB_ID, HANDBOOK_KB_ID):
         rows[TOOL_IDS_BY_NAME[spec.name]] = {
@@ -342,3 +349,89 @@ def test_workflow_names_are_unique(workflows):
     sharing one would make each run overwrite the other's graph."""
     names = [w.name for w in workflows]
     assert len(names) == len(set(names))
+
+
+# ---------------------------------------------------------------------------
+# Leave approval — Vol. 5 §14 (2026-08-23)
+# ---------------------------------------------------------------------------
+
+
+def _leave(workflows: list[DemoWorkflow]) -> DemoWorkflow:
+    return next(w for w in workflows if w.name == "Leave approval")
+
+
+def test_leave_approval_has_two_independent_gates_converging_on_one_outcome(workflows):
+    """
+    §14's actual subject: a negative balance and a coverage/notice exception are
+    separate reasons to involve a manager, and both land on the same outcome.
+    Collapsing them into one gate would delete the shape the workflow exists to
+    demonstrate.
+    """
+    spec = _leave(workflows)
+    approvals = [n.node_key for n in spec.nodes if n.node_type == "human_approval"]
+    assert sorted(approvals) == ["approval_balance", "approval_coverage"]
+
+    targets = {(e.source_node_key, e.target_node_key) for e in spec.edges}
+    assert ("approval_balance", "handbook_lookup") in targets
+    assert ("approval_coverage", "notify_employee") in targets
+    # Each gate is reachable AND bypassable — the ∃-semantics shape.
+    assert ("check_balance", "handbook_lookup") in targets
+    assert ("check_coverage", "notify_employee") in targets
+
+
+def test_no_two_condition_nodes_are_adjacent_in_any_demo_graph(workflows):
+    """
+    Condition nodes cannot chain — `_build_condition_router` attaches to the
+    condition's PREDECESSOR, so a condition feeding a condition mis-routes
+    silently. Nothing validates this at publish (Docs/shakedown-fixes.md §K), so
+    it is asserted here for every demo graph rather than only for the new one.
+    """
+    for spec in workflows:
+        conditions = {n.node_key for n in spec.nodes if n.node_type == "condition"}
+        for edge in spec.edges:
+            assert not (
+                edge.source_node_key in conditions and edge.target_node_key in conditions
+            ), f"{spec.name}: {edge.source_node_key} -> {edge.target_node_key} chains two conditions"
+
+
+def test_the_balance_gate_routes_deterministically_not_on_a_model_boolean(workflows):
+    """
+    Whether leave takes someone past their entitlement is arithmetic, and the
+    same asymmetry the invoice workflow draws: numbers route on the DSL, policy
+    judgement routes on a grounded agent.
+    """
+    spec = _leave(workflows)
+    edge = next(e for e in spec.edges if e.target_node_key == "approval_balance")
+    assert edge.condition == {
+        "field": "node_outputs.read_request.balance_after",
+        "operator": "lt",
+        "value": 0,
+        "branch": "negative_balance",
+    }
+
+
+def test_the_leave_workflow_writes_to_no_external_system(workflows):
+    """
+    The honest state, pinned so it cannot drift silently: §14's `hr.approve_leave`
+    has no endpoint behind it here, so the graph decides and notifies. If a
+    mutating HR write is ever added, this test fails — and at that point
+    `validate_mutating_approval` starts requiring the gates this graph already
+    has, which is the moment to update it deliberately.
+    """
+    spec = _leave(workflows)
+    assert not any((n.config or {}).get("tool_id") == str(ERP_TOOL_ID) for n in spec.nodes)
+    assert all(not (n.config or {}).get("is_mutating") for n in spec.nodes)
+
+
+def test_the_notify_node_carries_a_title_and_real_state_paths(workflows):
+    """
+    `notify` refuses a config with no title, no body and no body_fields — a
+    notification nobody can read is worse than none, because it looks delivered.
+    """
+    spec = _leave(workflows)
+    node = next(n for n in spec.nodes if n.node_key == "notify_employee")
+    assert node.config["title"]
+    assert node.config["body_fields"]
+    for path in node.config["body_fields"].values():
+        root = path.split(".")[1]
+        assert root in {n.node_key for n in spec.nodes}, f"{path} points at no node in the graph"

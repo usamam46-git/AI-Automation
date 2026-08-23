@@ -76,6 +76,7 @@ from src.db.demo.graphs import (
     SAMPLE_EXPENSE_PAYLOAD,
     SAMPLE_HR_PAYLOAD,
     SAMPLE_INVOICE_PAYLOAD,
+    SAMPLE_LEAVE_REQUEST_PAYLOAD,
     DemoWorkflow,
     build_workflows,
 )
@@ -377,6 +378,28 @@ def _tool_specs(finance_kb_id: uuid.UUID, handbook_kb_id: uuid.UUID) -> list[Too
         ),
         ToolCreate(
             workspace_id=uuid.uuid4(),
+            name="hr_notify_employee",
+            tool_type="notify",
+            description="Tell an employee and their team the outcome of a request. In-app; no external transport.",
+            # `notify` rejects is_mutating outright: a notification changes no
+            # external record, and Vol. 5 puts Notify AFTER the gate — accepting
+            # the flag would demand a second approval to tell someone the first
+            # one happened.
+            is_mutating=False,
+            config={
+                # `in_app`, not `webhook`, because the seed must run end to end
+                # on a laptop with no Slack workspace behind it. Point this at an
+                # incoming-webhook URL (channel `webhook`, `url` on the registry
+                # row, its token in the tool's `secrets`) and every graph using
+                # it starts posting to Slack with no node edited — which is the
+                # registry-owns-the-transport rule paying off.
+                "channel": "in_app",
+                "title": "Request processed",
+                "body": "A workflow completed and this is its outcome.",
+            },
+        ),
+        ToolCreate(
+            workspace_id=uuid.uuid4(),
             name="erp_create_journal_entry",
             tool_type="erp_connector",
             description="Create a journal entry in the general ledger. Writes to the finance system.",
@@ -615,6 +638,7 @@ async def _seed(email: str, state_file: Path, rotate_secret: bool) -> None:
             policy_tool_id=tools["finance_policy_search"],
             handbook_tool_id=tools["handbook_search"],
             erp_tool_id=tools["erp_create_journal_entry"],
+            notify_tool_id=tools["hr_notify_employee"],
         )
         workflow_ids: dict[str, uuid.UUID] = {}
         for spec in specs:
@@ -651,6 +675,7 @@ async def _seed(email: str, state_file: Path, rotate_secret: bool) -> None:
     print("\n  Sample payloads for the trigger-payload box:", flush=True)
     print(f"    Expense claim review → {json.dumps(SAMPLE_EXPENSE_PAYLOAD)}", flush=True)
     print(f"    HR policy assistant  → {json.dumps(SAMPLE_HR_PAYLOAD)}", flush=True)
+    print(f"    Leave approval       → {json.dumps(SAMPLE_LEAVE_REQUEST_PAYLOAD)}", flush=True)
     print(f"    Invoice (webhook)    → {json.dumps(SAMPLE_INVOICE_PAYLOAD)}", flush=True)
     print("", flush=True)
 
