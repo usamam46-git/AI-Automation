@@ -43,6 +43,20 @@ describe("formatDuration", () => {
     expect(formatDuration(124_000)).toBe("2m 4s");
   });
 
+  it("carries the seconds remainder instead of rendering `1m 60s`", () => {
+    // Rounding the remainder rather than the total produced "1m 60s" here.
+    expect(formatDuration(119_600)).toBe("2m 0s");
+    expect(formatDuration(59_960)).toBe("1m 0s");
+    expect(formatDuration(119_400)).toBe("1m 59s");
+  });
+
+  it("goes up to hours and days, because a run waits on a human", () => {
+    // A claim approved five days after it was raised rendered "7080m 38s".
+    expect(formatDuration(11_520_000)).toBe("3h 12m");
+    expect(formatDuration(424_838_000)).toBe("4d 22h");
+    expect(formatDuration(3_600_000)).toBe("1h 0m");
+  });
+
   it("renders an em dash for null/invalid rather than NaN", () => {
     expect(formatDuration(null)).toBe("—");
     expect(formatDuration(-1)).toBe("—");

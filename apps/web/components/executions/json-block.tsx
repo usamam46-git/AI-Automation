@@ -12,7 +12,7 @@ export function JsonBlock({ value, emptyLabel = "None", className }: { value: un
     return <p className={cn("text-sm text-muted-foreground", className)}>{emptyLabel}</p>;
   }
   return (
-    <pre className={cn("max-h-80 overflow-auto rounded-lg border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed", className)}>
+    <pre className={cn("max-h-80 min-w-0 overflow-auto rounded-lg border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed", className)}>
       {JSON.stringify(value, null, 2)}
     </pre>
   );

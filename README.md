@@ -12,6 +12,23 @@ and every cent they spent.
 
 ---
 
+## See it run
+
+An expense claim that breaches the policy three ways, triggered from the UI. The
+agent reads it, retrieves the company's own expense policy, and the run **stops
+at the approval gate** — quoting the clause it stopped on. A human approves, and
+only then does the ERP write happen.
+
+<p align="center">
+  <img src="Docs/media/approval-gate.gif" alt="A workflow run pausing at a human approval gate, then completing after approval" width="100%">
+</p>
+
+Nothing above is staged: it is one real run against the local stack, and the
+figures on screen — `$0.0011`, `4179 in / 320 out`, `1m 10s` — are what it
+actually cost and took.
+
+---
+
 ## The one idea worth reading about
 
 **A node that writes to a real system cannot be published unless a human
@@ -151,7 +168,27 @@ anything in it.
 | Cost governance | Per-run cost, per-org daily cap enforced before enqueue, BYOK keys encrypted with AES-256-GCM |
 | Audit trail | Append-only, enforced by a Postgres trigger rather than by application code |
 
+### The canvas
+
+Workflows are built as a graph and stored as one. Each node type gets its own
+config form — an agent node carries its system prompt, its input field paths and
+a typed output schema; a `human_approval` node has nothing to configure, which
+is the point.
+
+<p align="center">
+  <img src="Docs/media/builder-canvas.gif" alt="The workflow builder canvas, showing node configuration for an agent and a human approval node" width="100%">
+</p>
+
 ### Retrieval, concretely
+
+The retrieval playground exists to calibrate the score floor, so it deliberately
+searches with no cutoff and draws the boundary visually instead of hiding what
+would have been discarded. The query below returns the same clause the approval
+gate quoted above.
+
+<p align="center">
+  <img src="Docs/media/knowledge-retrieval.gif" alt="Searching a knowledge base and reading the ranked passages returned" width="100%">
+</p>
 
 Ingestion is `pypdf`/`python-docx` extraction → paragraph-packed chunking →
 `text-embedding-3-large` requested at **1536 dimensions** (Matryoshka

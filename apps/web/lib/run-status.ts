@@ -41,14 +41,37 @@ export function runStatusMeta(status: WorkflowRunStatus | string): RunStatusMeta
   return RUN_STATUS_META[status as WorkflowRunStatus] ?? { label: status, variant: "pending", icon: CircleDashed, terminal: false };
 }
 
-/** `1.2s` / `840ms` / `2m 4s`. Matches the §6.1 wireframe's `1.2s` form. */
+/**
+ * `840ms` / `1.2s` / `2m 4s` / `3h 12m` / `4d 22h`. Matches the §6.1
+ * wireframe's `1.2s` form.
+ *
+ * Two rules here are load-bearing, and both shipped wrong until 2026-08-24.
+ *
+ * **Round to whole seconds BEFORE decomposing.** Rounding the remainder
+ * instead — `Math.round(seconds % 60)` — carries after the split rather than
+ * before it, so 119.6s rendered as `1m 60s`. Any remainder at or above 59.5
+ * produced that, which is roughly one run in a hundred.
+ *
+ * **A run that waits on a human is measured in hours, not minutes.** Minutes
+ * used to be the largest unit, so a claim approved five days after it was
+ * raised read `7080m 38s`. That is the normal case for this product, not an
+ * edge case — `elapsedMs` spans the whole approval hold — so the tiers go up
+ * to days.
+ */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
   if (ms < 1000) return `${Math.round(ms)}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.round(seconds % 60)}s`;
+
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${(ms / 1000).toFixed(1)}s`;
+
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  if (hours === 0) return `${minutes}m ${seconds}s`;
+
+  const days = Math.floor(hours / 24);
+  return days === 0 ? `${hours}h ${minutes}m` : `${days}d ${hours % 24}h`;
 }
 
 /** Elapsed ms between two ISO timestamps. `end` null means "still going" and

@@ -22,7 +22,7 @@ function DetailSkeleton() {
   return (
     <div className="flex flex-col gap-4">
       <Skeleton className="h-8 w-72" />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,20rem)_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
         <Card className="p-3"><div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div></Card>
         <Card className="p-4"><div className="space-y-3"><Skeleton className="h-6 w-40" /><Skeleton className="h-20 w-full" /><Skeleton className="h-32 w-full" /></div></Card>
       </div>
@@ -111,7 +111,7 @@ export default function ExecutionDetailPage() {
         </Card>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,20rem)_1fr] lg:items-start">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:items-start">
         <Card className="p-2">
           <h3 className="app-eyebrow px-2.5 py-2">Timeline</h3>
           {versionQuery.isLoading && rows.length === 0 ? (
