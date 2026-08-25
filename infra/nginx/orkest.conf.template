@@ -1,0 +1,178 @@
+# infra/nginx/orkest.conf.template — the single public entry point.
+#
+# THIS FILE IS A TEMPLATE. nginx does not read it directly. Generate the real
+# config on the server, once, substituting your hostname (DEPLOY.md step 3):
+#
+#   DOMAIN=your.domain envsubst '$DOMAIN' \
+#     < infra/nginx/orkest.conf.template > infra/nginx/conf.d/orkest.conf
+#
+# envsubst is given an explicit '$DOMAIN' allow-list on purpose: without it,
+# every nginx runtime variable below ($host, $remote_addr, $request_uri …) is
+# substituted with the empty string and the config becomes silently
+# meaningless. conf.d/*.conf is gitignored — it is per-host, not shared.
+#
+# ─── Routing, and the one thing that is easy to get wrong ────────────────────
+#
+# The API prefix is /api/v1/ — NOT /api/. apps/web/app/api/contact/route.ts is
+# a Next.js route handler, so /api/contact belongs to the FRONTEND. Proxying
+# all of /api/ to FastAPI breaks the marketing contact form with a 404 that
+# reads like a backend fault.
+#
+#   /api/v1/*    → api  (FastAPI)
+#   /health      → api  (uptime checks)
+#   everything   → web  (Next.js, including /api/contact and /_next/*)
+
+# ─── Upstream resolution ─────────────────────────────────────────────────────
+# Deliberately NOT `upstream {}` blocks. nginx resolves a static upstream name
+# once at config load and caches the address forever. Every deploy recreates
+# the api/web containers with new IPs, so nginx would answer 502 until it was
+# reloaded — up to six hours, given the reload loop in docker-compose.prod.yml.
+#
+# Naming the target in a VARIABLE forces re-resolution through Docker's
+# embedded DNS at 127.0.0.11, honouring the 10s cache below.
+#
+# The cost: with a variable, proxy_pass no longer appends the request URI
+# automatically, so $request_uri is explicit at each call site. Leaving it off
+# proxies every request to "/" — the whole app answers with the home page.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+# ─── Compression ─────────────────────────────────────────────────────────────
+gzip              on;
+gzip_vary         on;
+gzip_proxied      any;
+gzip_min_length   1024;
+gzip_comp_level   5;
+gzip_types        text/plain text/css application/json application/javascript
+                  application/x-javascript text/xml application/xml
+                  application/xml+rss text/javascript image/svg+xml;
+
+# ─── Port 80: ACME challenge + redirect ──────────────────────────────────────
+server {
+    listen      80;
+    listen      [::]:80;
+    server_name ${DOMAIN};
+
+    # Must stay reachable over plain HTTP forever: Let's Encrypt validates
+    # renewals here every ~60 days and follows no redirect to :443 for this
+    # path. Redirecting it is the classic way renewals start failing silently
+    # two months after a deploy that looked fine.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ─── Port 443: the application ───────────────────────────────────────────────
+server {
+    listen      443 ssl;
+    listen      [::]:443 ssl;
+    http2       on;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # ── Upload ceiling ──────────────────────────────────────────────────────
+    # nginx's default is 1m. MAX_UPLOAD_BYTES in
+    # apps/api/src/modules/knowledge_base/service.py is 20 MB, so at the
+    # default every knowledge-base PDF over 1 MB dies here with an nginx HTML
+    # 413 and the application's own limit is unreachable.
+    #
+    # 24m, not 20m: multipart boundaries and field headers add to the wire size,
+    # and the point of the headroom is that a genuinely oversized file is
+    # refused by the API with its own JSON error rather than by the proxy.
+    client_max_body_size 24m;
+    client_body_timeout  120s;
+
+    # ── Security headers ────────────────────────────────────────────────────
+    # `always` so they are emitted on error responses too, which is where a
+    # missing X-Content-Type-Options actually matters.
+    #
+    # HSTS carries no `preload`, deliberately: preload submission is effectively
+    # irreversible and browser-cached for months. includeSubDomains is safe here
+    # only because this deployment is single-domain — if anything is ever served
+    # over plain HTTP on a subdomain, drop it first.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header X-Frame-Options           "SAMEORIGIN" always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+
+    # ── CSP: REPORT-ONLY, on purpose ────────────────────────────────────────
+    # Vol. 6 §2 asks for an enforced CSP. Writing one blind would break this
+    # particular app: the landing page runs WebGL, GSAP writes inline styles
+    # continuously, and Next.js App Router injects inline hydration scripts.
+    # 'unsafe-inline' below is what those need today; removing it requires
+    # nonce plumbing through next.config.ts, which is a separate piece of work.
+    #
+    # images.unsplash.com is listed although the auth panel is served through
+    # Next's optimizer at /_next/image (same-origin) — costless, and correct if
+    # any image is ever marked unoptimized.
+    #
+    # Read the violation reports before promoting this to
+    # `Content-Security-Policy`. Do not promote it untested.
+    add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://images.unsplash.com; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'" always;
+
+    # ── Proxy defaults ──────────────────────────────────────────────────────
+    proxy_http_version 1.1;
+    proxy_set_header   Connection "";
+    proxy_set_header   Host              $host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+    proxy_set_header   X-Forwarded-Host  $host;
+
+    # $remote_addr, NOT $proxy_add_x_forwarded_for.
+    #
+    # core/audit's client_ip() reads the LEFTMOST X-Forwarded-For hop, which
+    # apps/api/CLAUDE.md correctly documents as client-forgeable. It is
+    # forgeable because the usual $proxy_add_x_forwarded_for APPENDS to whatever
+    # header the client sent, so an attacker controls the leftmost entry.
+    # nginx is the edge here with nothing in front of it, so overwriting the
+    # header discards the client's claim and leaves the address nginx actually
+    # observed — the audit trail's IP becomes trustworthy.
+    #
+    # Keep the rule that it must never GATE anything. Putting a CDN or load
+    # balancer in front of this later reintroduces forgeability, and a
+    # permission check resting on it would silently become bypassable.
+    proxy_set_header   X-Forwarded-For   $remote_addr;
+
+    proxy_connect_timeout 10s;
+    proxy_send_timeout    120s;
+    # Generous because retrieval embeds a query against OpenAI inside the
+    # request. Workflow EXECUTION is not on this path — it is dispatched to
+    # Celery and polled — so this does not need to cover a whole run.
+    proxy_read_timeout    120s;
+
+    # ── FastAPI ─────────────────────────────────────────────────────────────
+    location /api/v1/ {
+        set $api_upstream http://api:8000;
+        proxy_pass $api_upstream$request_uri;
+    }
+
+    location = /health {
+        set $api_health http://api:8000;
+        proxy_pass $api_health$request_uri;
+        access_log off;
+    }
+
+    # ── Next.js — everything else, including /api/contact ───────────────────
+    location / {
+        set $web_upstream http://web:3000;
+        proxy_pass $web_upstream$request_uri;
+    }
+
+    # ── ACME on 443 as well ─────────────────────────────────────────────────
+    # Harmless, and it keeps working if a future renewal follows the redirect.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+}

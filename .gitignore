@@ -3,6 +3,20 @@
 .env.*
 !.env.example
 !.env.template
+# The production template MUST travel with the clone. `.env.*` above would
+# otherwise swallow it, and a deployment warning that lives only in a
+# gitignored file is a warning that never reaches the next machine — which is
+# exactly how the INTEGRATION_ENCRYPTION_KEY trap fired twice already.
+!.env.prod.example
+
+# --- Deployment runtime state (infra/docker-compose.prod.yml) ---------------
+# Let's Encrypt account keys and certificate PRIVATE KEYS live here. Never
+# commit this directory.
+infra/certbot/conf/
+infra/certbot/www/
+# Generated on the server from infra/nginx/orkest.conf.template by DEPLOY.md
+# step 3; carries the deployment's own hostname, so it is per-host, not shared.
+infra/nginx/conf.d/*.conf
 
 # MCP server config — holds a live 21st.dev API_KEY inline.
 # To share this with the team instead, replace the literal key with "${MAGIC_API_KEY}"

@@ -1,0 +1,337 @@
+# infra/docker-compose.prod.yml — production stack, single VPS (Vol. 6 §1, §4).
+#
+#   cp infra/.env.prod.example infra/.env.prod   # then fill it in
+#   docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.prod up -d --build
+#
+# See infra/DEPLOY.md for the first-boot order — nginx and certbot are a
+# chicken-and-egg on the very first run and there is a two-phase bootstrap.
+#
+# THIS IS NOT AN OVERRIDE OF docker-compose.yml. It is a standalone stack, and
+# it differs from the development one in five ways that all matter:
+#
+#   1. No published ports on anything but nginx. Postgres, Redis and MinIO are
+#      unreachable from the internet; in dev they bind straight to the host.
+#   2. No ${VAR:-default} anywhere. Secrets use ${VAR:?...} and the stack
+#      refuses to boot until they are set. The dev defaults are committed to
+#      this repository, which makes "encrypted at rest" decorative.
+#   3. Migrations run in a one-shot `migrate` service, not in api's command.
+#   4. No bind mounts and no --reload. The image is the artifact.
+#   5. A `web` service, which the dev compose does not have at all.
+#
+# ─── A NOTE ON THE NETWORKS, WHICH DIVERGES FROM VOL. 6 §1 ────────────────────
+#
+# Vol. 6 §1's snippet puts `api` on the `internal` network only. Taken
+# literally that stack cannot work: Docker's `internal: true` disables outbound
+# routing, so the API would have no route to api.openai.com, no route to any
+# `http_request` registry tool's endpoint, and no route to a notify webhook —
+# i.e. every external call this platform makes. The blueprint's INTENT is that
+# the datastores are not internet-reachable, and that is what is implemented.
+#
+# What actually keeps Postgres off the internet is not publishing its port.
+# `internal: true` is a second, stronger property, and it is applied to exactly
+# the three services that need no egress: a compromised datastore cannot phone
+# home. Everything that legitimately makes outbound calls is also on `public`.
+#
+#   internal (internal: true) — postgres, redis, minio: no ingress, NO EGRESS.
+#   public   (ordinary bridge) — egress for the app tier; ingress only where a
+#                                service publishes a port, which is nginx alone.
+
+# ─── Reusable blocks ─────────────────────────────────────────────────────────
+
+x-logging: &default-logging
+  # A VPS with no log rotation fills its disk and takes the database with it.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-api-image: &api-image
+  build:
+    context: ../apps/api
+    dockerfile: Dockerfile
+
+x-api-env: &api-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER in .env.prod}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env.prod}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env.prod}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env.prod}
+  # Plain HTTP to MinIO is correct here: the hop never leaves the `internal`
+  # network, which has no route off this host. TLS would be terminating a
+  # connection that cannot be observed.
+  MINIO_SECURE: "false"
+  SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env.prod}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env.prod}
+  INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:?set INTEGRATION_ENCRYPTION_KEY in .env.prod — rotating it later destroys every stored credential}
+  DAILY_RUN_QUOTA_PER_ORG: ${DAILY_RUN_QUOTA_PER_ORG:-1000}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  # settings.FRONTEND_URL. Builds member invitation links; its code default is
+  # http://localhost:3000, so an unset value here does not fail — it silently
+  # mints links nobody can open. See modules/organizations/router.py.
+  FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL in .env.prod (https://your.domain)}
+  APP_ENV: production
+  # Load-bearing beyond verbosity. DEBUG=false is what closes /api/docs,
+  # /api/redoc and /api/openapi.json (src/main.py), and what empties the CORS
+  # allow-list — correct under single-origin routing, where no request is
+  # cross-origin in the first place.
+  DEBUG: "false"
+  DB_ECHO: "false"
+
+x-app-depends: &app-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
+services:
+
+  # ─── PostgreSQL with pgvector ─────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env.prod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env.prod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  # ─── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  # ─── MinIO (S3-compatible object storage) ─────────────────────────────────
+  # No console port is published. Reach it with `docker compose exec` or an SSH
+  # tunnel; a publicly exposed object-store console is not worth the convenience.
+  # The bucket is created on demand by core/storage.py — no bootstrap job.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    logging: *default-logging
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env.prod}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env.prod}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks: [internal]
+
+  # ─── Schema migration (one-shot, runs to completion then exits) ───────────
+  # In the dev compose this is the first half of api's `command:`, which forces
+  # the "only the api migrates" rule — api/worker_*/beat share one image, and
+  # four containers racing `alembic upgrade head` against an empty database
+  # collide on CREATE. Hoisting it here removes the race by construction, and
+  # is the precondition for running api at 2+ replicas (Vol. 6 §4) later.
+  #
+  # `python -m alembic`, never bare `alembic`: alembic/env.py does
+  # `from src.db.base import Base`, and the console-script entry point puts
+  # /usr/local/bin on sys.path rather than the working directory. `-m` prepends
+  # cwd, which is the whole fix.
+  migrate:
+    <<: *api-image
+    restart: "no"
+    logging: *default-logging
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *api-env
+    networks: [internal]
+
+  # ─── FastAPI backend ───────────────────────────────────────────────────────
+  api:
+    <<: *api-image
+    restart: unless-stopped
+    logging: *default-logging
+    # --proxy-headers + --forwarded-allow-ips: uvicorn otherwise reports every
+    # request as http:// from the nginx container's address. Trusting all
+    # forwarders is safe here precisely because this service publishes no port
+    # and nginx is the only thing that can route to it.
+    #
+    # No --reload and no bind mounts: the image contains src/ (see Dockerfile).
+    command:
+      - uvicorn
+      - src.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    depends_on: *app-depends
+    environment: *api-env
+    healthcheck:
+      # python, not curl — the base image is python:3.12-slim and has no curl.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [internal, public]
+
+  # ─── Next.js frontend ──────────────────────────────────────────────────────
+  # Absent from the dev compose entirely (there, `npm run dev` runs on the host).
+  #
+  # NEXT_PUBLIC_API_URL is a BUILD ARG, not a runtime variable — Next.js inlines
+  # NEXT_PUBLIC_* into the client bundle at build time. The relative "/api/v1" is
+  # what makes single-origin path routing work: the browser calls the same host
+  # it loaded the page from, so no request is cross-origin, the empty production
+  # CORS allow-list is never consulted, and the SameSite=Strict refresh cookie is
+  # sent normally. Changing it means rebuilding the image, not restarting it.
+  web:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: /api/v1
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      NODE_ENV: production
+      # Server-side only. Without it app/api/contact/route.ts returns 503 by
+      # design, rather than silently dropping submissions.
+      CONTACT_WEBHOOK_URL: ${CONTACT_WEBHOOK_URL:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    # `public` because the Next server fetches images.unsplash.com through the
+    # image optimizer (next.config.ts remotePatterns) and POSTs the contact form
+    # to CONTACT_WEBHOOK_URL. It publishes no port; nginx reaches it on internal.
+    networks: [internal, public]
+
+  # ─── Celery worker — workflow execution queue ─────────────────────────────
+  worker_workflow:
+    <<: *api-image
+    restart: unless-stopped
+    logging: *default-logging
+    command: celery -A src.workers.celery_app worker -Q workflow_execution -c 4 --prefetch-multiplier 1 -l info
+    depends_on: *app-depends
+    environment: *api-env
+    networks: [internal, public]
+
+  # ─── Celery worker — document processing queue ────────────────────────────
+  worker_documents:
+    <<: *api-image
+    restart: unless-stopped
+    logging: *default-logging
+    command: celery -A src.workers.celery_app worker -Q document_processing -c 8 --prefetch-multiplier 2 -l info
+    depends_on: *app-depends
+    environment: *api-env
+    networks: [internal, public]
+
+  # ─── Celery worker — notifications queue ─────────────────────────────────
+  worker_notifications:
+    <<: *api-image
+    restart: unless-stopped
+    logging: *default-logging
+    command: celery -A src.workers.celery_app worker -Q notifications -c 4 -l info
+    depends_on: *app-depends
+    environment: *api-env
+    networks: [internal, public]
+
+  # ─── Celery Beat scheduler ─────────────────────────────────────────────────
+  # Publishes the 60s dispatch-due-schedules tick and nothing else; the tick
+  # itself runs on worker_workflow.
+  #
+  # It deliberately does NOT get *api-env. `beat` has no DATABASE_URL and must
+  # not need one (apps/api/CLAUDE.md, triggers section) — DATABASE_URL carries a
+  # default in core/config.py, so handing beat the real one would not break
+  # anything today, it would just quietly erase the evidence that beat never
+  # touches the database. The six variables below are what the dev compose gives
+  # it, and the settings that are required fields with no default.
+  beat:
+    <<: *api-image
+    restart: unless-stopped
+    logging: *default-logging
+    command: celery -A src.workers.celery_app beat -l info
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env.prod}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env.prod}
+      INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:?set INTEGRATION_ENCRYPTION_KEY in .env.prod}
+      DAILY_RUN_QUOTA_PER_ORG: ${DAILY_RUN_QUOTA_PER_ORG:-1000}
+      APP_ENV: production
+      DEBUG: "false"
+    networks: [internal]
+
+  # ─── nginx — TLS termination and the only public surface ──────────────────
+  # The reload loop exists because certbot renews certificates in a sibling
+  # container; nginx does not notice a file changing under it and would serve
+  # the expired chain until something restarted it.
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    command: /bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'
+    depends_on:
+      - api
+      - web
+    networks: [internal, public]
+
+  # ─── certbot — ACME issuance and renewal ──────────────────────────────────
+  # Renewal is a no-op until a certificate is within 30 days of expiry, so the
+  # twice-daily loop is cheap and is the interval Let's Encrypt recommends.
+  # Issuance for the FIRST certificate is a manual step — see infra/DEPLOY.md.
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+    networks: [public]
+
+networks:
+  # internal: true disables outbound routing for containers attached ONLY to
+  # this network. That is the point — see the header note.
+  internal:
+    internal: true
+  public: {}
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

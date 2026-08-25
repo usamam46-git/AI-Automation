@@ -1032,7 +1032,90 @@ verified via a full read-only orientation pass — see note below.)
   in advance", 9 days given), approved → notification row written and delivered →
   `completed`, $0.001833. The clean variant ran start → notify with no gate at
   all, $0.001873.
-- Next: **look at the 3D scene on a real phone** (layout is now verified; the
+- **Production deployment stack landed 2026-08-26** (Vol. 6 §1, §2, §4) — infra
+  only, **no application code changed**. `infra/docker-compose.prod.yml` was
+  **0 bytes** and `infra/nginx/` held a lone `.gitkeep`; the same shape as the
+  0-byte `apps/api/Dockerfile` that shipped in the initial commit. New:
+  `infra/docker-compose.prod.yml`, `infra/nginx/orkest.conf.template`,
+  `infra/.env.prod.example`, `infra/DEPLOY.md`.
+  **nginx, not Caddy** — Vol. 6 §1–2 already names `nginx:alpine`, the
+  network split and certbot. The latency/process argument for nginx over Caddy
+  is real only at loads this product will not see; the deciding factors were the
+  blueprint and operator familiarity, and the one thing it costs is automatic
+  HTTPS, paid once with certbot.
+  **Single domain, path-based routing.** Not merely simpler — the only topology
+  that needs no backend change: `src/main.py` sets `allow_origins=[]` whenever
+  `DEBUG` is false, and the refresh cookie is `SameSite=Strict`. Same-origin
+  requests never consult either. A subdomain split would require rewriting both.
+  Five gaps found scoping it, each invisible until deployed, all closed:
+  - **`/api/` is the WRONG proxy prefix.** `apps/web/app/api/contact/route.ts`
+    is a Next.js route handler, so `/api/contact` belongs to `web` and only
+    `/api/v1/*` to FastAPI. Proxying all of `/api/` breaks the marketing contact
+    form with a 404 that reads as a backend fault. Proven with stub upstreams.
+  - **nginx's `client_max_body_size` defaults to 1 MB**, against
+    `MAX_UPLOAD_BYTES = 20 MB` in `knowledge_base/service.py`. Every KB PDF over
+    1 MB would 413 at the proxy with nginx HTML, and the app's own limit was
+    unreachable. Set to 24m so an oversized file is refused by the API's JSON
+    error instead. Verified: 5 MB passes, 30 MB is refused.
+  - **`FRONTEND_URL` is set by no compose service** and defaults to
+    `http://localhost:3000` (`core/config.py`). It is what
+    `_frontend_base_url` builds member invitation links from, so in production
+    every invite link would have pointed at localhost. It is the ONE variable
+    whose omission fails silently, which is why the prod compose marks it
+    required rather than defaulted.
+  - **`NEXT_PUBLIC_API_URL` is baked at image BUILD time** (`apps/web/Dockerfile`),
+    not read at runtime. Built as the relative `/api/v1`. Verified safe:
+    `lib/api-client.ts` is its only consumer and is browser-only — no server
+    component fetches through it. Changing it needs a rebuild, not a restart.
+  - **`.env.prod.example` was silently gitignored** by `.gitignore`'s `.env.*`
+    (only `!.env.example` was excepted), so the production template would never
+    have travelled with the clone — the exact failure mode the root
+    "first run on a new machine" section describes. `.gitignore` now excepts it
+    and ignores `infra/certbot/conf|www` (certificate PRIVATE KEYS) and the
+    generated `infra/nginx/conf.d/*.conf`.
+  Four contracts worth not rediscovering, all documented at their site:
+  - **Vol. 6 §1's network snippet cannot work as written.** It puts `api` on an
+    `internal: true` network, which disables OUTBOUND routing in Docker — no
+    route to OpenAI, to any `http_request` tool endpoint, or to a notify
+    webhook. The blueprint's intent (datastores not internet-reachable) is
+    implemented instead: `internal: true` carries exactly `postgres`/`redis`/
+    `minio`, which need no egress; everything that makes outbound calls is also
+    on `public`. What keeps Postgres off the internet is not publishing a port.
+  - **Upstreams are resolved through a VARIABLE, not an `upstream {}` block.**
+    nginx resolves a static upstream name once at config load and caches it
+    forever, so every deploy — which recreates containers with new IPs — would
+    serve 502 until reload, up to six hours given the reload loop. The cost is
+    that `proxy_pass` no longer appends the URI, so `$request_uri` is explicit
+    at each call site; omitting it proxies everything to `/`.
+  - **`X-Forwarded-For` is set to `$remote_addr`, not
+    `$proxy_add_x_forwarded_for`.** The latter APPENDS to the client's own
+    header, which is precisely why `client_ip()` is documented as forgeable.
+    nginx is the edge with nothing in front, so overwriting makes the audit
+    trail's IP trustworthy. **The rule that it must never GATE anything still
+    stands** — putting a CDN in front later silently reintroduces forgeability.
+  - **Migrations moved to a one-shot `migrate` service** with
+    `service_completed_successfully`, out of `api`'s `command:`. That removes by
+    construction the four-containers-racing-`upgrade head` hazard the dev
+    compose comment describes, and is the precondition for Vol. 6 §4's replicas.
+  Secrets use `${VAR:?message}` with **no defaults anywhere** — the stack
+  refuses to boot and names the variable, rather than encrypting BYOK
+  credentials under a key committed to this repo. CSP ships
+  **report-only** deliberately (the landing page runs WebGL and GSAP inline
+  styles; an enforced policy written blind breaks it).
+  Verified locally: compose renders with every service but nginx publishing no
+  port; the required-secret guards fire with actionable messages; `nginx -t`
+  passes on the rendered template; and full routing was proven against stub
+  upstreams — `/api/v1/*` and `/health` to the API with paths preserved,
+  `/api/contact` and `/_next/*` to web, a forged `X-Forwarded-For` discarded,
+  the 5 MB/30 MB body band, port 80 redirecting while `/.well-known/
+  acme-challenge/` stays served, and all five security headers present.
+  **Not verified: anything on a real VPS.** Nothing has been deployed — no
+  certificate has been issued, no real domain resolved, and the demo loop has
+  not been run through a public origin. `DEPLOY.md` §6 is the checklist.
+- Next: **actually deploy** (the stack is written and locally verified but has
+  never run on a VPS — see `infra/DEPLOY.md`), then **scheduled off-host
+  database backups**, which is the largest gap the moment real data exists.
+  Then **look at the 3D scene on a real phone** (layout is now verified; the
   scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
   and a phone crops it hard — see apps/web/CLAUDE.md), **record the walkthrough**,
