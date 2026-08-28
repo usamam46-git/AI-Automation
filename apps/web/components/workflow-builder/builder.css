@@ -61,12 +61,28 @@
   border-color: var(--lime-deep);
 }
 
-.builder-canvas .react-flow__handle-top {
-  top: -5px;
+/* Flow is left to right, so the handles live on the side edges. These offsets
+   pull them clear of the card's rounded border and MUST track
+   `nodes/builder-node.tsx`'s Position.Left / Position.Right — changing one side
+   alone leaves the dot sitting on top of the card. */
+.builder-canvas .react-flow__handle-left {
+  left: -5px;
 }
 
-.builder-canvas .react-flow__handle-bottom {
-  bottom: -5px;
+.builder-canvas .react-flow__handle-right {
+  right: -5px;
+}
+
+/* The ⊕ on a node's output handle sits just OUTSIDE the card, in the lane the
+   connector runs through. React Flow gives every node wrapper an inline
+   `z-index: 0`, so a later sibling always paints on top — and the seeded demo
+   graphs space nodes 220px apart with a 210px card, leaving a 10px gap. The
+   result was that the ⊕ rendered underneath the following node and could not be
+   seen or clicked. Raising the hovered node fixes it for any spacing.
+
+   `!important` is required: it is beating an INLINE style, not a class. */
+.builder-canvas .react-flow__node:hover {
+  z-index: 20 !important;
 }
 
 .builder-canvas .react-flow__controls,

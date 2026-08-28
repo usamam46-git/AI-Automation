@@ -294,11 +294,147 @@ Built as of 2026-08-06 (canvas, config panel, validation, autosave/publish).
   variable onto our tokens under a `.builder-canvas` scope. Verify both
   themes after touching it.
 - Node metadata (label, icon, tint, key prefix, which handles exist, blank
-  config) is data in `lib/node-catalog.ts`, and one card component is
-  registered for all seven types. Don't fork per-type components.
+  config, **category and search keywords**) is data in `lib/node-catalog.ts`,
+  and one card component is registered for all seven types. Don't fork per-type
+  components.
 - There is no `trigger` node type. `NodeType` is
   `agent | tool | condition | human_approval | subgraph | start | end`;
   `trigger_type` is a field on the workflow shell.
+
+### Left to right, the node picker and Tidy up (2026-08-28)
+
+Phase 1 of the n8n-style builder work. The canvas now reads **left to right**,
+there is no palette column, and nodes are added through a searchable picker.
+
+- **Handles are `Position.Left` (target) / `Position.Right` (source).**
+  `builder.css` carries the matching `.react-flow__handle-left/-right` offsets
+  and they MUST track the component — changing one side alone leaves the dot
+  sitting on the card's rounded border. The old `-top`/`-bottom` rules are gone.
+- **`components/workflow-builder/node-palette.tsx` was deleted.** Adding a node
+  is now: the ⊕ on an unconnected output handle, the ⊕ on an edge, dragging a
+  connection onto empty canvas, or the toolbar's "Add node". All four open
+  `components/workflow-builder/node-picker.tsx`.
+- **The picker is positioned at a screen POINT, not anchored to a trigger.**
+  Three of the four gestures have no element to anchor to (a drop point, a
+  handle that unmounts, an edge midpoint under a transformed SVG), so it is a
+  fixed-position panel with its own click-away backdrop rather than a Radix
+  Popover with four virtual anchors.
+- **`searchNodeCatalog` (pure, vitest) owns filtering AND ranking.** The
+  ranking is not decoration: plain substring matching put Agent above Condition
+  for the query "if", because "classify" contains it. An exact keyword hit now
+  beats an accidental substring, and groups are ordered by their best match. A
+  blank query scores everything equally and the stable sort preserves the
+  documented category order.
+- **The handle filters decide what a gesture may offer.** Adding off an output
+  excludes `start` (no input handle — the promised edge could not exist);
+  inserting into an edge additionally excludes `end`. Offering a type the
+  gesture cannot connect would leave a fresh orphan and a validation error the
+  user did not ask for.
+
+**The ⊕ shows only on an output with NO outgoing edge.** This is n8n's rule and
+it is also the only placement that works here. The button sits ~30px outside the
+card, in the connector's lane; the seeded demo graphs space nodes 220px apart
+with a 210px card, so on a connected node that lane is *inside the next card*.
+React Flow gives every node wrapper an inline `z-index: 0`, so the later sibling
+paints over the button and takes the hover — it could be neither seen nor
+clicked. Observed in a browser, not theorised. `useHasOutgoing`
+(`builder-actions-context.tsx`) supplies the flag.
+
+Three more things that bit during that pass and are cheap to reintroduce:
+
+- **The issue tooltip is `side="top"`, not `side="right"`.** The right edge is
+  the ⊕'s lane, and a node with issues is exactly the node someone is about to
+  extend — a right-side tooltip covered the button beside it.
+- **A custom edge MUST forward `style` to `BaseEdge`.** The dashed stroke comes
+  from `defaultEdgeOptions`; dropping `style` renders every connection solid and
+  nothing errors.
+- **`bg-surface-2` is invisible on a popover in dark.** `--surface-2`,
+  `--popover` and `--accent` all resolve to `#1E1E1E`, so the picker's active
+  row had no highlight. It uses `bg-foreground/8` instead — the same overlay
+  technique `builder.css` already uses for the selection rectangle. Note this
+  affects `components/ui/dropdown-menu.tsx` too (`focus:bg-surface-2`), which is
+  a pre-existing app-wide issue and deliberately NOT changed here.
+
+**Tidy up (`lib/graph-layout.ts`) is explicit and never automatic.** Auto-layout
+on open would move every node, which autosave reads as an edit — on a published
+version that silently creates a byte-identical version N+1, the exact bug the
+autosave section already documents. `looksVertical()` exists to *suggest* a
+tidy, never to perform one.
+
+The layout is Sugiyama's three phases (layer / order / position) by hand rather
+than dagre: these graphs are 5–15 nodes and already validated acyclic, so the
+dependency is not warranted — the same call as WebGL-not-three.js. Two
+properties the canvas depends on: it **terminates on a cyclic graph** (the
+canvas holds invalid drafts constantly, and `cycle` is a publish-time rule), and
+it is **deterministic**, or every Tidy up would be a fresh autosave. Long edges
+get invisible dummy nodes so a skip edge routes AROUND the cards it passes; on
+the invoice graph that is the difference between the approval gate sitting off
+the spine and the bypass being drawn straight through the approval card.
+
+**It frames the bounds it just computed, via `fitBounds` — not `fitView`.**
+React Flow measures from its internal store, which still holds the pre-layout
+positions on the next frame, so `fitView` (even inside a `requestAnimationFrame`)
+framed where the graph used to be and left the tidied row jammed under the
+toolbar. The positions are already known at that point; there is nothing to wait
+for.
+
+### Node detail view — groundwork only so far (2026-08-28)
+
+Phase 2 of the n8n-style work was **started and stopped partway**. Two pure
+modules landed, both fully tested; **no component consumes them yet**, and the
+config panel is still the 320px right-hand column described below. Treat this
+the same way `LLMClient.embed()` was treated when it shipped ahead of its
+caller: the code is real and covered, but nothing has exercised it in a browser.
+
+- **`lib/data-preview.ts`** — one JSON value into the three views the panels will
+  offer (Table / JSON / Schema). Every node carries the **dotted state path** that
+  addresses it, because that path is the builder's actual product: it is what
+  goes into `input_fields`, `body_fields`/`payload_fields`/`query_fields` and
+  `condition.field`.
+
+  Path construction mirrors `resolve_field_path` in
+  `apps/api/src/graphs/condition_eval.py`, and two rules there are load-bearing:
+  **arrays are addressed by integer index** (`hits.0.content`), not brackets; and
+  **a key containing a dot is permanently unreachable**, because the resolver
+  splits the whole path on ".". Such nodes are marked `addressable: false` so the
+  UI can refuse to offer a path that would silently resolve to null at run time —
+  and unaddressability is **inherited**, since a good key under a dotted key is
+  still unreachable.
+
+  `toTable` takes the **union** of keys across rows, not the first row's keys, or
+  a field only some items carry would vanish. It returns `null` for a bare
+  scalar rather than inventing a `value` column.
+
+- **`lib/node-output-shape.ts`** — what a node is EXPECTED to produce, with no run.
+  This is what will make the panels useful on a workflow that has never executed.
+
+  **It MIRRORS `apps/api/src/graphs/node_handlers.py` and must change with it.**
+  Each shape is a handler's literal return value; the table in the file header is
+  the full list. The ones easiest to get wrong: `http_request` is
+  `{status_code, body}` and **never echoes headers**; `notify` is always
+  `queued`, **never `delivered`**; `human_approval` yields the resume payload;
+  and an agent's shape is derived from its own `output_schema.properties`, with
+  optionality read as a nullable type because strict mode makes every declared
+  property required.
+
+  Two behaviours worth not re-deriving:
+
+  - **`start` is not rooted at `node_outputs`.** A start node writes nothing;
+    what downstream nodes read from it is `trigger_payload`. Its shape comes
+    from `config.sample_payload` — a key the **backend ignores** (node `config`
+    is free-form JSONB with no `extra="forbid"`, and `start_handler` returns
+    `{}` without reading it), added purely so the builder can show and drag the
+    shape a run will deliver. If that key ever needs to mean something to the
+    server, this is the note to find first.
+  - **`inputSourcesFor` walks THROUGH condition nodes.** A condition never
+    executes and writes nothing, so a node sitting behind one would otherwise get
+    a permanently empty input panel while the data it actually reads sits one
+    step further back. It also excludes forward references, since a path to a
+    node that has not run resolves to null and nothing reports it.
+
+  `writesNothing` distinguishes "this node structurally never writes state"
+  (end, condition, subgraph) from "it will, once you configure it" (an agent with
+  no schema). Conflating them would tell someone to go and fix an end node.
 
 ### Node config panel — the config shapes are a contract
 
@@ -423,9 +559,11 @@ harness, only node-environment tests over pure `lib/` modules.
 ### Tests
 
 `npm test` (vitest) covers the pure `lib/` modules only —
-`graph-validation`, `graph-mapping`, `output-schema`. Canvas drag/drop, panel
-rendering and React Flow theming are deliberately uncovered; they are verified
-manually in the browser.
+`graph-validation`, `graph-mapping`, `output-schema`, and as of 2026-08-28
+`graph-layout` (23), `node-catalog` (24, over `searchNodeCatalog`'s filtering and
+ranking), `data-preview` (25) and `node-output-shape` (30). Canvas drag/drop,
+panel rendering and React Flow theming are deliberately uncovered; they are
+verified manually in the browser.
 
 ## Scope discipline
 

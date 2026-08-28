@@ -1112,6 +1112,46 @@ verified via a full read-only orientation pass — see note below.)
   **Not verified: anything on a real VPS.** Nothing has been deployed — no
   certificate has been issued, no real domain resolved, and the demo loop has
   not been run through a public origin. `DEPLOY.md` §6 is the checklist.
+- **n8n-style builder, phase 1 of 4 landed 2026-08-28** (frontend only, no
+  backend change). The builder worked but did not *teach*: nodes ran top to
+  bottom as unlabelled boxes, there was no way to add a step without the palette,
+  and nothing anywhere showed what data a node receives or produces.
+  Phase 1 rebuilt the canvas: **left-to-right flow** (handles moved to
+  `Position.Left`/`Right`), the 7-item palette column **deleted** in favour of a
+  searchable, categorised, keyboard-driven node picker, a ⊕ on unconnected
+  outputs and on every connection, drag-a-connection-to-empty-canvas, and a
+  **Tidy up** auto-layout. New `lib/graph-layout.ts` (hand-written Sugiyama, no
+  dagre — the graphs are 5–15 nodes and already validated acyclic),
+  `node-picker.tsx`, `edges/builder-edge.tsx`, `builder-actions-context.tsx`.
+  Verified in a browser in **both themes** against the live stack: build → autosave
+  → publish → edit → new draft, all through the new gestures.
+  Six things the browser caught that tests could not, all documented in
+  apps/web/CLAUDE.md; the two that would cost the most to rediscover are that
+  **the ⊕ can only live on an UNCONNECTED output** (nodes are 220px apart with a
+  210px card, so on a connected node the button lands inside the next card, which
+  paints over it and steals the hover) and that **Tidy up must frame the bounds it
+  computed, not call `fitView`** (React Flow measures from its internal store,
+  which still holds pre-layout positions on the next frame).
+  Also worth knowing: **`bg-surface-2` is invisible on a popover in dark** —
+  `--surface-2`, `--popover` and `--accent` all resolve to `#1E1E1E`. That is a
+  pre-existing app-wide issue affecting `components/ui/dropdown-menu.tsx`
+  (`focus:bg-surface-2`) and was deliberately NOT changed as part of this work.
+  **Phase 2 (the node detail view) is groundwork only.** Two pure modules landed
+  and are fully tested — `lib/data-preview.ts` and `lib/node-output-shape.ts` —
+  but **nothing consumes them yet** and the config panel is still the old 320px
+  right-hand column. `node-output-shape.ts` MIRRORS `node_handlers.py`'s return
+  values and must change with it. Phases 3 (drag-and-drop field mapping) and 4
+  (test-step endpoint + live run overlay, the only phase with backend work) are
+  not started; the full plan is in the session that produced this.
+  **503 frontend tests** (401 + 102); `tsc`, `eslint` and `npm run build` clean.
+  Both CI legs were verified green on this tree before hand-off: `ruff check`,
+  `ruff format --check` and **535 backend tests** pass in 123s against `aap_test`
+  (no backend file was touched — 535 is simply the real current figure; the
+  511 recorded on 2026-08-23 predates the notifications and HR-leave suites).
+  Note the container trap while checking that: `/app/tests` is a COPY, not a bind
+  mount, so a stale copy reported five `ruff` E702 errors that no longer exist in
+  the repo. `docker cp` the current `tests/` in before believing a backend
+  result.
 - Next: **actually deploy** (the stack is written and locally verified but has
   never run on a VPS — see `infra/DEPLOY.md`), then **scheduled off-host
   database backups**, which is the largest gap the moment real data exists.
@@ -1131,7 +1171,7 @@ verified via a full read-only orientation pass — see note below.)
   the members/invitations surface, the Agents preview page and the marketing landing page (see above). `app/(marketing)/` now exists and
   owns `/`; `app/page.tsx` is gone.
   `apps/web` DOES have test infrastructure — `vitest.config.mts`,
-  `npm test`, **399 tests** over the pure `lib/` modules only (no React harness;
+  `npm test`, **503 tests** over the pure `lib/` modules only (no React harness;
   canvas and page rendering are manual-verification by design).
 
 Verification note: confirm `apps/api/CLAUDE.md` is actually named with

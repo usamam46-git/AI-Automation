@@ -48,20 +48,17 @@ const EMPTY_BUILDER: BuilderData = {
   savedSignature: graphSignature(flowToVersion(EMPTY_GRAPH)),
 };
 
+/** Mirrors the loaded canvas: a left-to-right chain, no palette column. */
 function BuilderSkeleton() {
   return (
-    <div className="flex h-full min-h-0">
-      <div className="hidden w-52 shrink-0 flex-col gap-1 border-r border-border bg-sidebar p-2 md:flex">
-        {Array.from({ length: 7 }).map((_, index) => (
-          <Skeleton key={index} className="h-8 w-full rounded-lg" />
+    <div className="flex h-full min-h-0 items-center justify-center bg-muted/20">
+      <div className="flex items-center gap-4">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <React.Fragment key={index}>
+            {index > 0 ? <Skeleton className="h-px w-10" /> : null}
+            <Skeleton className="h-14 w-52 rounded-xl" />
+          </React.Fragment>
         ))}
-      </div>
-      <div className="flex flex-1 items-center justify-center bg-muted/20">
-        <div className="flex flex-col items-center gap-3">
-          <Skeleton className="h-14 w-48 rounded-xl" />
-          <Skeleton className="h-6 w-px" />
-          <Skeleton className="h-14 w-48 rounded-xl" />
-        </div>
       </div>
     </div>
   );
