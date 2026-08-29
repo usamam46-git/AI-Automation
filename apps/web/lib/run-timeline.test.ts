@@ -18,6 +18,8 @@ function execution(node_key: string, overrides: Partial<NodeExecution> = {}): No
     cost_usd: null,
     latency_ms: 10,
     attempt: 1,
+    started_at: null,
+    completed_at: null,
     created_at: "2026-08-07T09:00:00.000Z",
     ...overrides,
   };

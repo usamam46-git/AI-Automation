@@ -21,7 +21,7 @@ Design notes:
 
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, Numeric, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -88,6 +88,21 @@ class WorkflowRun(UUIDMixin, TenantMixin, TimestampMixin, Base):
         JSONB,
         nullable=True,
         comment="Structured error detail if the run failed.",
+    )
+    is_test: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        comment=(
+            "A Test-step run started from the builder. It is a REAL run — same worker, same "
+            "quota, same cost — and is flagged only so the Executions list is not filled with "
+            "them. It may be pinned to a DRAFT version, which an ordinary run never is."
+        ),
+    )
+    test_until_node_key: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Test runs stop once this node has produced its output. NULL runs to the end.",
     )
 
     # Relationships
@@ -156,7 +171,10 @@ class NodeExecution(UUIDMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        comment="succeeded | failed | skipped",
+        comment=(
+            "succeeded | failed | skipped. `failed` rows exist as of 2026-08-30: a raising node "
+            "is tagged with its node_key by the compiler's wrapper so the engine can attribute it."
+        ),
     )
     input: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="Input state snapshot passed to this node.")
     output: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="Output state snapshot produced by this node.")
@@ -168,6 +186,16 @@ class NodeExecution(UUIDMixin, TimestampMixin, Base):
         comment="Computed cost for this node execution (LLM nodes only).",
     )
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, comment="Wall-clock execution time in milliseconds.")
+    started_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment=(
+            "Measured by the compiler's instrumentation wrapper around the handler, not by the "
+            "stream loop — the loop can only time a whole superstep, so two nodes running in one "
+            "step used to be reported with an identical duration."
+        ),
+    )
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     attempt: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

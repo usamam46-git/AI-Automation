@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import operator
+import time
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from src.core.llm_client import LLMClient, get_llm_client
 from src.graphs import cache as graph_cache
 from src.graphs.condition_eval import evaluate_condition, has_predicate
 from src.graphs.node_handlers import (
+    NODE_KEY_ATTR,
     agent_handler,
     end_handler,
     human_approval_handler,
@@ -69,6 +71,19 @@ def _workflow_state_schema() -> type:
         # condition-DSL-addressable surface. _stream_graph reads it to back-fill
         # node_execution_id once the node_executions row exists.
         node_tool_calls: dict[str, Any]
+        # What each node actually READ out of state, keyed by node_key — an
+        # agent's resolved `input_fields`, a tool's resolved `*_fields` maps.
+        # A sibling of node_usage for the same three reasons, and the reason
+        # node_executions.input is no longer permanently NULL: `stream_mode
+        # ="updates"` yields only what a handler RETURNS, so a node's input can
+        # reach the engine only by riding back on a channel like this one.
+        node_inputs: dict[str, Any]
+        # Real per-node wall clock, stamped by the compiler's instrumentation
+        # wrapper around each handler. Measured at the handler rather than in the
+        # stream loop because the loop can only time a whole SUPERSTEP — two
+        # nodes running in one step were previously reported with the same
+        # duration, both counted from the end of the previous step.
+        node_timings: dict[str, Any]
         messages: Annotated[list[Any], operator.add]
         errors: Annotated[list[dict[str, Any]], operator.add]
         current_cost_usd: float
@@ -89,6 +104,63 @@ def _branch_key(edge: WorkflowEdge, index: int) -> str:
     if edge.condition and edge.condition.get("branch"):
         return str(edge.condition["branch"])
     return edge.target_node_key
+
+
+def _instrument(
+    handler: Callable[..., dict[str, Any]],
+    node_key: str,
+) -> Callable[..., dict[str, Any]]:
+    """
+    Wrap a bound handler so the engine learns two things it otherwise cannot.
+
+    **Which node failed.** `stream_mode="updates"` yields a chunk only when a node
+    succeeds, so a raising node just stops the stream. Tagging the exception with
+    its node_key is what lets `_stream_graph` write a `failed` row and colour the
+    right node.
+
+    **How long the node itself took.** The stream loop can only measure a whole
+    superstep, so two nodes in one step were reported with an identical duration
+    counted from the end of the previous step. This measures the handler.
+
+    The failure is TAGGED, never wrapped — see `NODE_KEY_ATTR`. `graph_tasks`
+    classifies retryability by exception type, so a wrapper would make a config
+    error look retryable and re-drive a mutating tool three more times.
+
+    LangGraph's own control-flow exceptions are left completely alone, and that is
+    load-bearing rather than tidy: `human_approval_handler` suspends the graph by
+    raising through `interrupt()`, so tagging it would have the engine write a
+    `failed` row for every approval gate. The check is on the exception's package
+    rather than on a specific class, so a LangGraph upgrade that renames or
+    re-parents it cannot quietly break approvals.
+    """
+
+    def _run(state: dict[str, Any]) -> dict[str, Any]:
+        started_at = datetime.now(UTC)
+        started = time.monotonic()
+        try:
+            result = handler(state)
+        except Exception as exc:
+            if type(exc).__module__.split(".")[0] != "langgraph":
+                setattr(exc, NODE_KEY_ATTR, node_key)
+            raise
+
+        if not isinstance(result, dict):
+            return result
+
+        completed_at = datetime.now(UTC)
+        return {
+            **result,
+            "node_timings": {
+                **state.get("node_timings", {}),
+                node_key: {
+                    "started_at": started_at.isoformat(),
+                    "completed_at": completed_at.isoformat(),
+                    "duration_ms": max(1, int((time.monotonic() - started) * 1000)),
+                },
+            },
+        }
+
+    return _run
 
 
 def _bind_node_handler(
@@ -248,8 +320,15 @@ def _compile_state_graph(
     client_factory: Callable[..., LLMClient] = get_llm_client,
     tool_configs: dict[str, dict[str, Any]] | None = None,
     tool_log: Any | None = None,
+    allow_draft: bool = False,
 ) -> tuple[CompiledStateGraph, CompileStats]:
-    if workflow_version.published_at is None:
+    # The draft guard stays the default and is the reason production runs cannot
+    # execute an unpublished graph. `allow_draft` is the builder's Test step
+    # opting in explicitly — testing the graph on screen is the entire point of
+    # that endpoint, and without this the engine refused every one of them.
+    # It is threaded from `workflow_runs.is_test`, so nothing but a run already
+    # flagged as a test can reach it.
+    if workflow_version.published_at is None and not allow_draft:
         raise DraftVersionCompileError(f"Workflow version {workflow_version.id} is a draft; only published versions can be compiled.")
 
     nodes: list[WorkflowNode] = list(workflow_version.nodes)
@@ -265,7 +344,10 @@ def _compile_state_graph(
             continue
         builder.add_node(
             node.node_key,
-            _bind_node_handler(node, client_factory=client_factory, tool_configs=tool_configs, tool_log=tool_log),
+            _instrument(
+                _bind_node_handler(node, client_factory=client_factory, tool_configs=tool_configs, tool_log=tool_log),
+                node.node_key,
+            ),
         )
         langgraph_nodes += 1
 

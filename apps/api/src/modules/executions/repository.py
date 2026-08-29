@@ -37,12 +37,16 @@ class ExecutionRepository:
         organization_id: uuid.UUID,
         workflow_version_id: uuid.UUID,
         trigger_payload: dict[str, Any] | None,
+        is_test: bool = False,
+        test_until_node_key: str | None = None,
     ) -> WorkflowRun:
         run = WorkflowRun(
             organization_id=organization_id,
             workflow_version_id=workflow_version_id,
             status="pending",
             trigger_payload=trigger_payload,
+            is_test=is_test,
+            test_until_node_key=test_until_node_key,
         )
         self.db.add(run)
         await self.db.flush()
@@ -79,6 +83,7 @@ class ExecutionRepository:
         status: str | None = None,
         cursor: str | None = None,
         limit: int = 50,
+        include_test: bool = False,
     ) -> Sequence[Row[tuple[WorkflowRun, uuid.UUID, str, int]]]:
         """
         List runs for an org, newest first, with the owning workflow's id/name and
@@ -94,6 +99,11 @@ class ExecutionRepository:
         Unlike the workflows list, this applies no default filter on the *workflow's*
         status: a run's history must not disappear because its workflow was archived
         later. The `status` argument here filters run status, not workflow status.
+
+        Test-step runs ARE hidden by default. They are real runs and are kept in
+        full, but someone opening the Executions page is looking for what the
+        product did, not for the twenty probes an author fired while wiring a node
+        up. `include_test` brings them back.
         """
         stmt = (
             select(WorkflowRun, Workflow.id, Workflow.name, WorkflowVersion.version_number)
@@ -112,6 +122,9 @@ class ExecutionRepository:
 
         if status is not None:
             stmt = stmt.where(WorkflowRun.status == status)
+
+        if not include_test:
+            stmt = stmt.where(WorkflowRun.is_test.is_(False))
 
         if cursor:
             try:

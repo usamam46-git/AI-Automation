@@ -10,13 +10,24 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/shared/error-state";
 import { BuilderCanvas } from "@/components/workflow-builder/builder-canvas";
 import { BuilderToolbar } from "@/components/workflow-builder/builder-toolbar";
-import { ConfigPanel } from "@/components/workflow-builder/config-panel";
+import { NodeDetailView } from "@/components/workflow-builder/ndv/node-detail-view";
+import { RunDock } from "@/components/workflow-builder/run-dock";
+import { RunOverlayProvider } from "@/components/workflow-builder/run-overlay-context";
 import { groupIssuesByNode, IssueProvider } from "@/components/workflow-builder/issue-context";
 import { useWorkflowAutosave } from "@/hooks/use-workflow-autosave";
-import { executionsApi, knowledgeApi, toolsApi, workflowsApi, type WorkflowVersion } from "@/lib/api";
+import {
+  executionsApi,
+  knowledgeApi,
+  toolsApi,
+  workflowsApi,
+  type ResumeDecision,
+  type WorkflowVersion,
+} from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/api-client";
 import { EMPTY_GRAPH, flowToVersion, graphSignature, versionToFlow, type BuilderGraph } from "@/lib/graph-mapping";
 import { parseValidationDetail, validateGraph, type ToolRegistry } from "@/lib/graph-validation";
+import { SAMPLE_PAYLOAD_KEY } from "@/lib/node-output-shape";
+import { buildRunOverlay, isTerminal } from "@/lib/run-overlay";
 import { useAuthStore } from "@/stores/auth-store";
 import { useWorkflowBuilderStore } from "@/stores/workflow-builder-store";
 
@@ -47,6 +58,22 @@ const EMPTY_BUILDER: BuilderData = {
   graph: EMPTY_GRAPH,
   savedSignature: graphSignature(flowToVersion(EMPTY_GRAPH)),
 };
+
+/**
+ * The sample payload an author described on the Start node.
+ *
+ * It is the only description of the trigger that exists anywhere — the backend
+ * ignores the key — so it is what a Test step sends. A graph with no sample
+ * sends `{}`, exactly as every pre-dialog Run-now did.
+ */
+function sampleTriggerPayload(graph: BuilderGraph): Record<string, unknown> {
+  for (const node of graph.nodes) {
+    if (node.data.nodeType !== "start") continue;
+    const sample = (node.data.config ?? {})[SAMPLE_PAYLOAD_KEY];
+    if (sample && typeof sample === "object" && !Array.isArray(sample)) return sample as Record<string, unknown>;
+  }
+  return {};
+}
 
 /** Mirrors the loaded canvas: a left-to-right chain, no palette column. */
 function BuilderSkeleton() {
@@ -209,15 +236,62 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
     },
   });
 
+  /**
+   * The run the canvas is currently showing. Not in the query cache — it is the
+   * result of an action, and it must never touch the builder's own cache entry,
+   * which IS the canvas.
+   */
+  const [activeRunId, setActiveRunId] = React.useState<string | null>(null);
+
+  /**
+   * The Test step.
+   *
+   * Runs `data.versionId` — the version on screen, draft included. The old
+   * implementation called `triggerRun`, which is always pinned to the workflow's
+   * `current_version_id`, so pressing "Test run" on a draft silently ran the
+   * PUBLISHED graph instead and reported success.
+   *
+   * The sample payload comes from the Start node, which is the only description
+   * of the trigger that exists anywhere.
+   */
   const testRunMutation = useMutation({
-    mutationFn: () => executionsApi.triggerRun(workflowId, { trigger_payload: {} }),
-    onSuccess: (run) => {
-      toast.success("Run started", {
-        description: run.id,
-        action: { label: "Copy ID", onClick: () => navigator.clipboard.writeText(run.id) },
+    mutationFn: (options: { untilNodeKey?: string | null; allowMutating?: boolean } = {}) => {
+      if (!data.versionId) throw new Error("Add a step before running.");
+      return executionsApi.testRun(workflowId, data.versionId, {
+        trigger_payload: sampleTriggerPayload(graph),
+        until_node_key: options.untilNodeKey ?? null,
+        allow_mutating: options.allowMutating ?? false,
       });
     },
-    onError: (error) => toast.error(getApiErrorMessage(error, "Could not start a run")),
+    onSuccess: (run) => {
+      setActiveRunId(run.id);
+      queryClient.invalidateQueries({ queryKey: ["executions"] });
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, "Could not start a test run")),
+  });
+
+  // Poll while the run is live, then stop. Its own cache key — writing run state
+  // into the builder key would corrupt the open canvas.
+  const runQuery = useQuery({
+    queryKey: ["builder-run", activeRunId],
+    queryFn: () => executionsApi.status(activeRunId as string),
+    enabled: activeRunId !== null,
+    refetchInterval: (query) => (query.state.data && isTerminal(query.state.data.status) ? false : 1500),
+  });
+
+  const overlay = React.useMemo(
+    () =>
+      runQuery.data
+        ? buildRunOverlay(runQuery.data, { nodes: graph.nodes, edges: graph.edges })
+        : null,
+    [graph.edges, graph.nodes, runQuery.data],
+  );
+
+  const resumeMutation = useMutation({
+    mutationFn: (decision: ResumeDecision) =>
+      executionsApi.resume(activeRunId as string, { decision }),
+    onSuccess: () => runQuery.refetch(),
+    onError: (error) => toast.error(getApiErrorMessage(error, "Could not resolve the approval")),
   });
 
   // Client-side mirror of the backend rules — instant, precise, and the primary
@@ -264,8 +338,9 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
           publishBlockingCount={autosave.blockingIssues.length}
           onPublish={() => publishMutation.mutate()}
           publishPending={publishMutation.isPending}
-          onTestRun={() => testRunMutation.mutate()}
+          onTestRun={() => testRunMutation.mutate({})}
           testRunPending={testRunMutation.isPending}
+          canTestRun={data.versionId !== null}
         />
       ) : null}
 
@@ -279,10 +354,35 @@ export default function WorkflowBuilderPage({ params }: { params: Promise<{ work
         ) : (
           <IssueProvider issues={issuesByNode}>
             <ReactFlowProvider>
-              <div className="flex h-full min-h-0">
+              <RunOverlayProvider overlay={overlay}>
+              <div className="relative flex h-full min-h-0">
                 <BuilderCanvas graph={graph} setGraph={setGraph} />
-                <ConfigPanel graph={graph} setGraph={setGraph} issuesByNode={issuesByNode} tools={toolsQuery.data} knowledgeBases={knowledgeQuery.data} />
+                {/* The detail view is an overlay, not a column — it renders
+                    nothing until a node is opened, so the canvas keeps the full
+                    width while you are building rather than while you are not. */}
+                <NodeDetailView
+                  graph={graph}
+                  setGraph={setGraph}
+                  issuesByNode={issuesByNode}
+                  tools={toolsQuery.data}
+                  knowledgeBases={knowledgeQuery.data}
+                  onTestStep={(untilNodeKey) => testRunMutation.mutate({ untilNodeKey })}
+                  testStepPending={testRunMutation.isPending}
+                />
+
+                {overlay ? (
+                  <RunDock
+                    overlay={overlay}
+                    graph={graph}
+                    startedAt={runQuery.data?.started_at ?? null}
+                    approvePending={resumeMutation.isPending}
+                    onApprove={() => resumeMutation.mutate("approved")}
+                    onReject={() => resumeMutation.mutate("rejected")}
+                    onClose={() => setActiveRunId(null)}
+                  />
+                ) : null}
               </div>
+              </RunOverlayProvider>
             </ReactFlowProvider>
           </IssueProvider>
         )}

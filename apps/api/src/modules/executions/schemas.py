@@ -48,6 +48,73 @@ class RunTriggerRequest(BaseModel):
     )
 
 
+class NodeExecutionSummary(BaseModel):
+    """
+    A node execution WITHOUT its input/output blobs.
+
+    The polling shape. `WorkflowRunResponse` carries every node's full snapshot,
+    so following a ten-node run meant re-downloading ten accumulated-state blobs
+    on every tick — and the builder polls faster than the Execution Viewer does.
+    The detail view fetches the full row for the one node it has open.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    node_key: str
+    status: NodeExecutionStatus
+    tokens_prompt: int | None
+    tokens_completion: int | None
+    cost_usd: float | None
+    latency_ms: int
+    attempt: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+
+
+class RunStatusResponse(BaseModel):
+    """Everything a live overlay needs, and nothing it does not."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    status: WorkflowRunStatus
+    current_node_key: str | None
+    interrupt_payload: dict[str, Any] | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    total_cost_usd: float | None
+    error: dict[str, Any] | None
+    is_test: bool
+    test_until_node_key: str | None
+    node_executions: list[NodeExecutionSummary]
+
+
+class TestRunRequest(BaseModel):
+    """
+    A Test-step run of one version — including an unpublished draft, which is the
+    whole point: the builder's old "Test run" triggered `current_version_id` and
+    therefore never tested the graph on screen.
+    """
+
+    trigger_payload: dict[str, Any] | None = Field(
+        default=None,
+        description="Sample input for this run. Defaults to {}.",
+    )
+    until_node_key: str | None = Field(
+        default=None,
+        description="Stop once this node has produced its output. Runs to the end when omitted.",
+    )
+    allow_mutating: bool = Field(
+        default=False,
+        description=(
+            "Required to test a prefix containing a node that WRITES to an external system. "
+            "Refused by default: a test that posts a real journal entry is not a test."
+        ),
+    )
+
+
 class ResumeRequest(BaseModel):
     """Body for POST /executions/{run_id}/resume."""
 
@@ -79,6 +146,8 @@ class NodeExecutionResponse(BaseModel):
     cost_usd: float | None
     latency_ms: int
     attempt: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     created_at: datetime
 
 
@@ -98,6 +167,8 @@ class WorkflowRunResponse(BaseModel):
     error: dict[str, Any] | None
     node_executions: list[NodeExecutionResponse]
     created_at: datetime
+    is_test: bool = False
+    test_until_node_key: str | None = None
 
     # Denormalized from workflow_version -> workflow. These are @property
     # attributes on the WorkflowRun model, not columns, and depend on that

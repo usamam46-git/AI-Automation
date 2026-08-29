@@ -39,13 +39,41 @@ from src.modules.audit_logs.service import AuditAction, AuditService
 from src.modules.executions.repository import ExecutionRepository
 from src.modules.executions.schemas import (
     ResumeRequest,
+    RunStatusResponse,
     RunTriggerRequest,
+    TestRunRequest,
     WorkflowRunResponse,
     WorkflowRunSummary,
 )
 from src.modules.workflows.repository import WorkflowRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _strictly_downstream(node_key: str, edges: list[Any]) -> set[str]:
+    """
+    Every node reachable FROM `node_key`, excluding `node_key` itself.
+
+    Used by the Test-step mutating guard to work out what a stop point excludes.
+    Bounded by the visited set, so a draft with a cycle terminates — the guard has
+    to work on graphs that would fail `validate_graph_structure`, because a test
+    run is exactly what someone reaches for before a graph is publishable.
+    """
+    downstream: set[str] = set()
+    queue = [node_key]
+    head = 0
+    while head < len(queue):
+        current = queue[head]
+        head += 1
+        for edge in edges:
+            if edge.source_node_key != current or edge.target_node_key in downstream:
+                continue
+            if edge.target_node_key == node_key:
+                continue
+            downstream.add(edge.target_node_key)
+            queue.append(edge.target_node_key)
+    return downstream
+
 
 #: How far a signed request's timestamp may be from server time before it is
 #: rejected as a replay. Five minutes is the Stripe/GitHub convention — wide
@@ -204,6 +232,144 @@ class ExecutionService:
         run = await self._repo.get_run(organization_id, run.id)
         return WorkflowRunResponse.model_validate(run)
 
+    async def trigger_test_run(
+        self,
+        organization_id: uuid.UUID,
+        workflow_id: uuid.UUID,
+        version_id: uuid.UUID,
+        body: TestRunRequest,
+        context: AuditContext | None = None,
+    ) -> WorkflowRunResponse:
+        """
+        Run ONE named version — draft included — optionally stopping after a node.
+
+        This is the builder's Test step. Everything about it is a real run: the
+        same Celery task, the same engine, the same quota, the same audit row and
+        the same money. The only differences are that it may be pinned to an
+        unpublished version and that it is flagged `is_test` so it does not fill
+        the Executions list. Building a parallel dry-run engine was the
+        alternative and would have meant a second implementation of the thing most
+        worth trusting.
+
+        **A mutating node in the executed prefix is refused.** Not a warning: a
+        test that posts a real journal entry is not a test. `allow_mutating` is
+        the deliberate override, and it is per-request rather than a setting so it
+        cannot be turned on once and forgotten.
+        """
+        workflow = await self._wf_repo.get_by_id(organization_id, workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+
+        version = await self._wf_repo.get_version_by_id_and_workflow(organization_id, workflow_id, version_id)
+        if version is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow version not found")
+
+        nodes = list(version.nodes)
+        node_keys = {node.node_key for node in nodes}
+        if body.until_node_key is not None and body.until_node_key not in node_keys:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"No node named '{body.until_node_key}' in this version.",
+            )
+
+        if not body.allow_mutating:
+            offenders = await self._mutating_nodes_in_prefix(organization_id, version, body.until_node_key)
+            if offenders:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "This test would run a step that writes to an external system: "
+                        f"{', '.join(sorted(offenders))}. Re-run with allow_mutating to proceed, "
+                        "or stop the test before it."
+                    ),
+                )
+
+        await self._claim_run_quota(organization_id)
+
+        run = await self._repo.create_run(
+            organization_id=organization_id,
+            workflow_version_id=version.id,
+            trigger_payload=body.trigger_payload,
+            is_test=True,
+            test_until_node_key=body.until_node_key,
+        )
+        await self._audit.record(
+            organization_id=organization_id,
+            context=context or AuditContext.system(),
+            action=AuditAction.WORKFLOW_RUN_STARTED,
+            resource_type="workflow_run",
+            resource_id=run.id,
+            metadata={
+                "workflow_id": str(workflow_id),
+                "trigger": "test",
+                "version_number": version.version_number,
+                "until_node_key": body.until_node_key,
+            },
+        )
+        await self.db.commit()
+        await self.db.refresh(run)
+
+        from src.workers.graph_tasks import execute_workflow
+
+        execute_workflow.delay(str(run.id))
+
+        run = await self._repo.get_run(organization_id, run.id)
+        return WorkflowRunResponse.model_validate(run)
+
+    async def _mutating_nodes_in_prefix(
+        self,
+        organization_id: uuid.UUID,
+        version: Any,
+        until_node_key: str | None,
+    ) -> set[str]:
+        """
+        Mutating nodes that this test would actually reach.
+
+        "Reach" is deliberately generous: every node EXCEPT those strictly
+        downstream of the stop node. Working out the true executed set would mean
+        evaluating the conditions, which needs the run that has not happened yet —
+        so the safe reading is that anything not provably skipped might run.
+
+        A node is mutating on the same terms `validate_mutating_approval` uses:
+        a literal `is_mutating: true` in its config, or a `tool_id` pointing at a
+        registry row that is mutating. Reading it any less strictly here would let
+        a registry-backed write through a guard whose entire job is to stop one.
+        """
+        from src.modules.tools.repository import ToolRepository
+
+        nodes = list(version.nodes)
+        reachable = {node.node_key for node in nodes}
+        if until_node_key is not None:
+            downstream = _strictly_downstream(until_node_key, list(version.edges))
+            reachable -= downstream
+
+        tool_ids = {str(node.config["tool_id"]) for node in nodes if isinstance(node.config, dict) and node.config.get("tool_id")}
+        mutating_tool_ids: set[str] = set()
+        if tool_ids:
+            # Malformed ids are dropped rather than raising: `_referenced_tool_ids`
+            # in the publish guard does the same, and a node whose tool_id is not a
+            # UUID is broken in a way this endpoint is not responsible for saying.
+            parsed: list[uuid.UUID] = []
+            for raw in tool_ids:
+                try:
+                    parsed.append(uuid.UUID(raw))
+                except ValueError:
+                    continue
+            if parsed:
+                tools = await ToolRepository(self.db).get_many_by_ids(organization_id, parsed)
+                mutating_tool_ids = {str(tool.id) for tool in tools if tool.is_mutating}
+
+        offenders: set[str] = set()
+        for node in nodes:
+            if node.node_key not in reachable:
+                continue
+            config = node.config if isinstance(node.config, dict) else {}
+            writes_inline = config.get("is_mutating") is True
+            writes_via_registry = bool(config.get("tool_id")) and str(config["tool_id"]) in mutating_tool_ids
+            if writes_inline or writes_via_registry:
+                offenders.add(node.node_key)
+        return offenders
+
     async def trigger_from_webhook(
         self,
         workflow_id: uuid.UUID,
@@ -307,6 +473,7 @@ class ExecutionService:
         status_filter: str | None = None,
         cursor: str | None = None,
         limit: int = 50,
+        include_test: bool = False,
     ) -> list[WorkflowRunSummary]:
         """
         List the org's runs, newest first. `status_filter` is named to avoid
@@ -318,6 +485,7 @@ class ExecutionService:
             status=status_filter,
             cursor=cursor,
             limit=limit,
+            include_test=include_test,
         )
         return [
             WorkflowRunSummary(
@@ -334,6 +502,24 @@ class ExecutionService:
             )
             for run, wf_id, wf_name, version_number in rows
         ]
+
+    async def get_run_status(
+        self,
+        organization_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> RunStatusResponse:
+        """
+        The polling shape — the run row plus node summaries, no input/output.
+
+        Reuses `get_run`'s query rather than adding a second one: the blobs are
+        already loaded, and stripping them in serialization costs a round trip
+        less than a parallel repository method would cost in drift. What the
+        endpoint saves is the RESPONSE size, which is where the cost was.
+        """
+        run = await self._repo.get_run(organization_id, run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        return RunStatusResponse.model_validate(run)
 
     async def get_run(
         self,

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ConfigNote, Field, FieldGroup } from "@/components/workflow-builder/config-field";
-import { STATE_ROOTS } from "@/components/workflow-builder/field-map-editor";
+import { PathInput } from "@/components/workflow-builder/ndv/path-input";
 import type { ConditionOperator } from "@/lib/api";
 
 /**
@@ -31,10 +31,15 @@ export function EdgeConditionForm({
   condition,
   onChange,
   sourceIsCondition,
+  idPrefix = "edge",
 }: {
   condition: Record<string, unknown> | null;
   onChange: (next: Record<string, unknown> | null) => void;
   sourceIsCondition: boolean;
+  /** Unique per instance. The condition node's rules table renders one of these
+   *  per outgoing branch, and duplicate DOM ids would point every label at the
+   *  first branch's inputs. */
+  idPrefix?: string;
 }) {
   const field = typeof condition?.field === "string" ? condition.field : "";
   const operator = (typeof condition?.operator === "string" ? condition.operator : "eq") as ConditionOperator;
@@ -53,22 +58,17 @@ export function EdgeConditionForm({
     );
   }
 
-  const unknownRoot = field && !STATE_ROOTS.includes(field.split(".")[0] as (typeof STATE_ROOTS)[number]);
-
   return (
     <FieldGroup title="Branch rule">
-      <Field
-        label="Field"
-        htmlFor="edge-field"
-        hint={`Dotted state path. Roots: ${STATE_ROOTS.join(", ")}.`}
-        error={unknownRoot ? `"${field.split(".")[0]}" is not a state root — this resolves to null at run time.` : null}
-      >
-        <Input
-          id="edge-field"
+      {/* Path checking, the picker and drop handling all live in PathInput —
+          including the two things the old first-segment check could not say:
+          whether the step exists, and whether it runs before this one. */}
+      <Field label="Field" htmlFor={`${idPrefix}-field`} hint="Drag a field from the Input panel, or pick one.">
+        <PathInput
+          id={`${idPrefix}-field`}
           value={field}
           placeholder="node_outputs.extract.confidence"
-          onChange={(event) => patch({ field: event.target.value })}
-          className="h-8 font-mono text-xs"
+          onChange={(next) => patch({ field: next })}
         />
       </Field>
 
@@ -87,11 +87,16 @@ export function EdgeConditionForm({
         </Select>
       </Field>
 
-      <ValueField value={condition?.value} operator={operator} onCommit={(next) => patch({ value: next })} />
+      <ValueField
+        idPrefix={idPrefix}
+        value={condition?.value}
+        operator={operator}
+        onCommit={(next) => patch({ value: next })}
+      />
 
-      <Field label="Branch label" htmlFor="edge-branch" hint="A routing label for readability. Not evaluated.">
+      <Field label="Branch label" htmlFor={`${idPrefix}-branch`} hint="A routing label for readability. Not evaluated.">
         <Input
-          id="edge-branch"
+          id={`${idPrefix}-branch`}
           value={branch}
           placeholder="high_confidence"
           onChange={(event) => patch({ branch: event.target.value || null })}
@@ -113,7 +118,17 @@ export function EdgeConditionForm({
  * Text that does not parse as JSON is stored as a plain string, which is what an
  * author typing `approved` means.
  */
-function ValueField({ value, operator, onCommit }: { value: unknown; operator: ConditionOperator; onCommit: (next: unknown) => void }) {
+function ValueField({
+  value,
+  operator,
+  onCommit,
+  idPrefix,
+}: {
+  value: unknown;
+  operator: ConditionOperator;
+  onCommit: (next: unknown) => void;
+  idPrefix: string;
+}) {
   const [text, setText] = React.useState(() => (value === undefined || value === null ? "" : JSON.stringify(value)));
 
   function handleChange(next: string) {
@@ -142,12 +157,12 @@ function ValueField({ value, operator, onCommit }: { value: unknown; operator: C
   return (
     <Field
       label="Value"
-      htmlFor="edge-value"
+      htmlFor={`${idPrefix}-value`}
       error={error}
       hint={`Typed as ${describe(parsed)}. Quote it to force a string — 0.8 is a number, "0.8" is text.`}
     >
       <Input
-        id="edge-value"
+        id={`${idPrefix}-value`}
         value={text}
         placeholder="0.8"
         onChange={(event) => handleChange(event.target.value)}

@@ -23,6 +23,7 @@ export function BuilderToolbar({
   publishPending,
   onTestRun,
   testRunPending,
+  canTestRun,
 }: {
   workflow: Workflow;
   versionNumber: number | null;
@@ -36,9 +37,10 @@ export function BuilderToolbar({
   publishPending: boolean;
   onTestRun: () => void;
   testRunPending: boolean;
+  /** A test run needs a saved version — a draft counts, a published one is not required. */
+  canTestRun: boolean;
 }) {
   const isPublished = Boolean(publishedAt);
-  const canTestRun = Boolean(workflow.current_version_id);
   // Publishing the stored draft while the canvas still holds unsaved edits would
   // publish the wrong graph, so wait for autosave to land first.
   const pendingSave = saveState === "saving" || saveState === "unsaved";
@@ -84,7 +86,7 @@ export function BuilderToolbar({
           Version {versionNumber} is published and immutable. Your next edit starts version {(versionNumber ?? 0) + 1} as a
           draft.
         </Banner>
-      ) : canTestRun ? (
+      ) : workflow.current_version_id ? (
         // A published version is live while this draft is not — without saying
         // so, the "draft" badge reads as though the workflow stopped working.
         <Banner tone="info">
@@ -169,7 +171,9 @@ function TestRunButton({ canTestRun, pending, onTestRun }: { canTestRun: boolean
       <TooltipTrigger asChild>
         <span tabIndex={0}>{button}</span>
       </TooltipTrigger>
-      <TooltipContent>Publish a version first — a run needs a published graph.</TooltipContent>
+      {/* No longer "publish first": a test run executes the version on screen,
+          draft included. That was the whole point of the Test-step endpoint. */}
+      <TooltipContent>Add a step first — there is nothing to run yet.</TooltipContent>
     </Tooltip>
   );
 }

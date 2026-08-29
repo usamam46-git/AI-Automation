@@ -50,6 +50,29 @@ class ToolAuthenticationError(Exception):
     """A tool's outbound call was rejected with 401/403 — a credential problem, never retried."""
 
 
+#: Attribute the compiler's instrumentation wrapper stamps onto an exception so
+#: the engine can tell which node raised it.
+#:
+#: **Tagging, not wrapping.** `stream_mode="updates"` yields a chunk only when a
+#: node SUCCEEDS, so a raising node simply stops the stream and the engine used
+#: to record the failure on the run row with no idea which node caused it — which
+#: is why `node_executions` never contained a single `failed` row.
+#:
+#: The obvious fix is a wrapper exception, and it is wrong here: `graph_tasks`
+#: classifies retryability by exception TYPE (`_NON_RETRYABLE` holds
+#: `ToolExecutionError`, `AgentNodeConfigError`, …), so wrapping would make every
+#: config error look retryable and re-drive a mutating tool three more times.
+#: Stamping an attribute keeps the type, the message and the traceback intact, so
+#: every existing `except` clause behaves exactly as before.
+NODE_KEY_ATTR = "aap_node_key"
+
+
+def node_key_of(exc: BaseException) -> str | None:
+    """The node an exception was raised from, if the wrapper tagged it."""
+    value = getattr(exc, NODE_KEY_ATTR, None)
+    return value if isinstance(value, str) else None
+
+
 def start_handler(_state: dict[str, Any]) -> dict[str, Any]:
     return {}
 
@@ -66,8 +89,13 @@ def human_approval_handler(state: dict[str, Any], *, node_key: str) -> dict[str,
     human_approval nodes key their decisions independently in node_outputs.
     Resume via Command(resume=...) is handled by the execution engine.
     """
+    # `node_key` rides along so the engine can record WHICH gate a run is held
+    # at. Before this, `_stream_graph` wrote the literal string "human_approval"
+    # into `current_node_key`, which no graph with two gates could disambiguate
+    # and which the frontend had to work around by guessing.
     payload = {
         "type": "approval_request",
+        "node_key": node_key,
         "node_outputs": state.get("node_outputs", {}),
     }
     decision = interrupt(payload)
@@ -160,9 +188,10 @@ def agent_handler(
     """
     cfg = _agent_config(config, node_key)
 
+    agent_input = _build_agent_input(state, cfg["input_fields"])
     messages = [
         {"role": "system", "content": cfg["system_prompt"]},
-        {"role": "user", "content": json.dumps(_build_agent_input(state, cfg["input_fields"]), default=str)},
+        {"role": "user", "content": json.dumps(agent_input, default=str)},
     ]
 
     client = client_factory()
@@ -188,6 +217,10 @@ def agent_handler(
     # replaces the whole dict on write (same pattern as human_approval_handler).
     return {
         "node_outputs": {**state.get("node_outputs", {}), node_key: result.parsed},
+        # What this node actually READ, keyed by the path it read it from. A null
+        # here is a mis-typed `input_fields` path made visible — the single
+        # failure mode nothing in the product used to report.
+        "node_inputs": {**state.get("node_inputs", {}), node_key: agent_input},
         "node_usage": {
             **state.get("node_usage", {}),
             node_key: {
@@ -1167,6 +1200,33 @@ def _audit_input(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: Config keys holding a `{destination: dotted.state.path}` map. Every tool type
+#: uses some subset; `_field_map` guarantees each is a dict of str to str.
+_FIELD_MAP_KEYS = ("url_fields", "params_fields", "body_fields", "payload_fields", "query_fields")
+
+
+def _resolved_inputs(cfg: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """
+    The VALUES a tool node read out of state, keyed by the map they came from.
+
+    Deliberately the resolved values, not the paths — the paths are already in
+    `tool_executions.input` (written before the call, so it cannot read state)
+    and knowing a node was configured to read `node_outputs.extract.total` is no
+    help at all when the question is why the request carried a null. This is the
+    other half of that pair, and it is what makes a wrong path visible.
+
+    Kept to the declared field maps rather than the whole state: a node's input
+    is what it asked for, and dumping the accumulated graph state onto every row
+    would grow quadratically with the number of nodes.
+    """
+    resolved: dict[str, Any] = {}
+    for key in _FIELD_MAP_KEYS:
+        mapping = cfg.get(key)
+        if isinstance(mapping, dict) and mapping:
+            resolved[key] = _resolve_field_map(state, mapping)
+    return resolved
+
+
 def tool_handler(
     state: dict[str, Any],
     *,
@@ -1254,6 +1314,12 @@ def tool_handler(
     # Copy-then-merge: node_outputs has no reducer, so LangGraph replaces the whole
     # dict on write (same pattern as agent_handler / human_approval_handler).
     update: dict[str, Any] = {"node_outputs": {**state.get("node_outputs", {}), node_key: result}}
+    # Only when the node actually reads something declaratively. A tool with no
+    # field maps consumed nothing from state, and writing an empty dict would put
+    # a row on screen that says "input: {}" as though that were a finding.
+    resolved_inputs = _resolved_inputs(cfg, state)
+    if resolved_inputs:
+        update["node_inputs"] = {**state.get("node_inputs", {}), node_key: resolved_inputs}
     if execution_id is not None:
         update["node_tool_calls"] = {**state.get("node_tool_calls", {}), node_key: [str(execution_id)]}
     if usage is not None:

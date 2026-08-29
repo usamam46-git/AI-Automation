@@ -1,12 +1,15 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { CircleAlert, Plus } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleX, LoaderCircle, Plus, TriangleAlert } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBuilderActions, useHasOutgoing } from "@/components/workflow-builder/builder-actions-context";
 import { useNodeIssues } from "@/components/workflow-builder/issue-context";
+import { useNodeRun } from "@/components/workflow-builder/run-overlay-context";
 import type { BuilderNode, BuilderNodeData } from "@/lib/graph-mapping";
 import { NODE_CATALOG } from "@/lib/node-catalog";
+import { nodeDurationMs, type NodeRun } from "@/lib/run-overlay";
+import { formatCost, formatDuration } from "@/lib/run-status";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,9 +21,9 @@ import { cn } from "@/lib/utils";
  * `builder.css` carries the matching `-left`/`-right` offsets; changing one
  * without the other leaves the handles overlapping the card's rounded border.
  *
- * `data-status` is an idle-only placeholder today; the live-run phase drives it
- * to running/succeeded/failed from `RunOverlayContext` — NOT from `data`, which
- * is the autosave payload.
+ * `data-status` is driven by `RunOverlayContext` — NOT by `data`, which is the
+ * autosave payload. A status pill written into `data` would be saved as part of
+ * the graph.
  */
 export function BuilderNodeCard({ data, selected }: NodeProps<BuilderNode>) {
   const entry = NODE_CATALOG[data.nodeType];
@@ -28,10 +31,11 @@ export function BuilderNodeCard({ data, selected }: NodeProps<BuilderNode>) {
   const issues = useNodeIssues(data.nodeKey);
   const { addAfter } = useBuilderActions();
   const hasOutgoing = useHasOutgoing(data.nodeKey);
+  const run = useNodeRun(data.nodeKey);
 
   const card = (
     <div
-      data-status="idle"
+      data-status={run?.state ?? "idle"}
       className={cn(
         // A node is a floating chip on the canvas, so unlike a page Card it DOES
         // take the popover fill and a shadow — it has to read as sitting above
@@ -40,8 +44,11 @@ export function BuilderNodeCard({ data, selected }: NodeProps<BuilderNode>) {
         // are drawn the same way.
         "group relative flex min-w-[210px] max-w-[260px] items-center gap-2.5 rounded-xl bg-popover px-3 py-2.5 shadow-soft transition-shadow",
         "ring-0 ring-offset-2 ring-offset-background",
-        issues.length > 0 ? "ring-status-bad" : "ring-ring",
-        issues.length > 0 && "ring-2",
+        // A run outranks a validation issue on the ring: while something is
+        // executing, what it is doing right now is the more urgent fact, and the
+        // issue is still on the card as its own icon.
+        runRingClass(run) ?? (issues.length > 0 ? "ring-status-bad" : "ring-ring"),
+        (issues.length > 0 || runRingClass(run)) && "ring-2",
         selected && "shadow-pop ring-2",
       )}
     >
@@ -53,9 +60,10 @@ export function BuilderNodeCard({ data, selected }: NodeProps<BuilderNode>) {
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium leading-tight">{data.nodeKey}</span>
         <span className="block truncate text-[11px] leading-tight text-muted-foreground">
-          {nodeSubtitle(data)}
+          {run ? runSubtitle(run) : nodeSubtitle(data)}
         </span>
       </span>
+      {run ? <RunGlyph run={run} /> : null}
       {issues.length > 0 ? <CircleAlert className="size-4 shrink-0 text-status-bad" /> : null}
 
       {entry.hasSource ? (
@@ -109,6 +117,54 @@ export function BuilderNodeCard({ data, selected }: NodeProps<BuilderNode>) {
       </TooltipContent>
     </Tooltip>
   );
+}
+
+/** Ring colour for a live run, or null to leave the ring to validation. */
+function runRingClass(run: NodeRun | null): string | null {
+  switch (run?.state) {
+    case "running":
+      return "ring-status-info";
+    case "succeeded":
+      return "ring-status-ok";
+    case "failed":
+      return "ring-status-bad";
+    case "waiting":
+      return "ring-status-warn";
+    default:
+      return null;
+  }
+}
+
+function RunGlyph({ run }: { run: NodeRun }) {
+  if (run.state === "running") {
+    return <LoaderCircle className="size-4 shrink-0 animate-spin text-status-info" />;
+  }
+  if (run.state === "succeeded") return <CircleCheck className="size-4 shrink-0 text-status-ok" />;
+  if (run.state === "failed") return <CircleX className="size-4 shrink-0 text-status-bad" />;
+  if (run.state === "waiting") return <TriangleAlert className="size-4 shrink-0 text-status-warn" />;
+  return null;
+}
+
+/**
+ * While a run is on screen the second line reports the run, not the config —
+ * duration and cost are what someone watching an execution is reading for.
+ * Cost shows only where it exists: `http_request`, `erp_connector` and `notify`
+ * spend no LLM money and leave it NULL, and rendering "$0.00" there would claim
+ * a measurement that was never taken.
+ */
+function runSubtitle(run: NodeRun): string {
+  if (run.state === "running") return "running…";
+  if (run.state === "waiting") return "waiting for approval";
+  if (run.state === "pending") return "not run yet";
+  if (run.state === "skipped") return "skipped";
+
+  const parts: string[] = [];
+  const duration = nodeDurationMs(run.execution);
+  if (duration !== null) parts.push(formatDuration(duration));
+  if (run.execution?.cost_usd) parts.push(formatCost(run.execution.cost_usd));
+  if (run.attempts > 1) parts.push(`attempt ${run.attempts}`);
+  if (run.state === "failed") parts.unshift("failed");
+  return parts.join(" · ") || (run.state === "failed" ? "failed" : "done");
 }
 
 /**

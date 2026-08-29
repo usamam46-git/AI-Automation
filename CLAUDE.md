@@ -1136,14 +1136,51 @@ verified via a full read-only orientation pass — see note below.)
   `--surface-2`, `--popover` and `--accent` all resolve to `#1E1E1E`. That is a
   pre-existing app-wide issue affecting `components/ui/dropdown-menu.tsx`
   (`focus:bg-surface-2`) and was deliberately NOT changed as part of this work.
-  **Phase 2 (the node detail view) is groundwork only.** Two pure modules landed
-  and are fully tested — `lib/data-preview.ts` and `lib/node-output-shape.ts` —
-  but **nothing consumes them yet** and the config panel is still the old 320px
-  right-hand column. `node-output-shape.ts` MIRRORS `node_handlers.py`'s return
-  values and must change with it. Phases 3 (drag-and-drop field mapping) and 4
-  (test-step endpoint + live run overlay, the only phase with backend work) are
-  not started; the full plan is in the session that produced this.
-  **503 frontend tests** (401 + 102); `tsc`, `eslint` and `npm run build` clean.
+- **n8n-style builder, phases 2–4 landed 2026-08-30** — the node detail view,
+  drag-and-drop field mapping, and the live run on the canvas. This is the first
+  phase with backend work.
+  **`config-panel.tsx` is deleted.** Node settings live in a full-screen
+  INPUT | PARAMETERS | OUTPUT overlay opened by double-clicking a node. The
+  parameter forms are the existing ones, re-hosted unchanged — they encode the
+  `_agent_config`/`_tool_config` contract and that is not worth re-deriving while
+  moving a panel. New pure modules: `lib/{data-preview,node-output-shape,
+  condition-rules,field-drag,state-path,run-overlay}.ts`, all vitest-covered.
+  **A condition node has real parameters for the first time** — a routing-rules
+  table in evaluation order, replacing "select each edge leaving it". It warns
+  when two branches both carry a rule, because the engine guarantees only that
+  the fallback runs last: `save_draft` re-inserts every edge in one transaction,
+  so `created_at` ties and the tiebreak is a random UUID. The classic
+  `> 1000` then `> 100` ladder is therefore unsafe, and nothing else says so.
+  **Drag-and-drop writes a dotted state PATH, never an expression** — there is no
+  template language here. The picker is the primary implementation and drag is a
+  shortcut onto it, because a builder whose central act is mouse-only is not
+  finished. Path checking finally knows whether the step named exists and
+  **whether it runs before this one**; a forward reference is syntactically
+  perfect, resolves to null every run and was reported by nothing.
+  Backend (migration `20260830_run_instrumentation`), six behaviours each
+  replacing something silently absent — full detail in apps/api/CLAUDE.md:
+  `node_executions.input` was an unconditional `None`; `status` was an
+  unconditional `"succeeded"` so **no `failed` row had ever been written and
+  nothing knew which node broke**; `current_node_key` was only set at an
+  interrupt and then as the literal string `"human_approval"`; `latency_ms` was a
+  whole-superstep delta shared by every node in the step. Plus
+  `POST /workflows/{id}/versions/{version_id}/test-run`, which runs **the version
+  on screen including a draft** — the old Test run was pinned to
+  `current_version_id`, so on a draft it ran the published graph and reported
+  success — and `GET /executions/{id}/status` as the cheap poll.
+  Two traps worth not repeating: the failure is **TAGGED, not wrapped**
+  (`_NON_RETRYABLE` classifies by exception type, so a wrapper would make every
+  config error retryable and re-drive a mutating tool three more times), and
+  LangGraph's own exceptions are left alone or every approval gate becomes a
+  failed run. `_compile_state_graph` needed `allow_draft` or every test run
+  raised `DraftVersionCompileError` — found only by running one.
+  Verified live end to end, in a browser: a Test step on the seeded
+  `Invoice approval` **draft** ran extract → retrieval → validate on the canvas
+  with per-node cost appearing as each finished, held at `approval_1`
+  ($0.0028, 38.4s), approved from the run dock, and completed — while
+  `post_to_erp` never ran, because the test was told to stop at the gate.
+  Asking it to run past the write is refused by name.
+  **581 frontend tests** (503 + 78) and **557 backend tests** (535 + 22).
   Both CI legs were verified green on this tree before hand-off: `ruff check`,
   `ruff format --check` and **535 backend tests** pass in 123s against `aap_test`
   (no backend file was touched — 535 is simply the real current figure; the

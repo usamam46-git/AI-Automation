@@ -53,6 +53,7 @@ from src.graphs.node_handlers import (
     ToolAuthenticationError,
     ToolExecutionError,
     ToolNodeConfigError,
+    node_key_of,
 )
 from src.modules.executions.models import NodeExecution, WorkflowRun
 from src.modules.integrations.service import IntegrationService
@@ -163,6 +164,8 @@ async def _insert_node_execution(
     tokens_prompt: int | None = None,
     tokens_completion: int | None = None,
     cost_usd: float | None = None,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
 ) -> uuid.UUID | None:
     """
     Insert a NodeExecution row after checking idempotency.
@@ -177,11 +180,14 @@ async def _insert_node_execution(
     human_approval gates) have no usage to report and leave those columns NULL.
     """
     async with async_session_maker() as session:
+        # Matched on `status` as well as the key, so a retry that SUCCEEDS after a
+        # failure still writes its row rather than being mistaken for a duplicate
+        # of the failure.
         existing_stmt = select(NodeExecution).where(
             NodeExecution.workflow_run_id == workflow_run_id,
             NodeExecution.node_key == node_key,
             NodeExecution.attempt == attempt,
-            NodeExecution.status == "succeeded",
+            NodeExecution.status == status,
         )
         existing = await session.execute(existing_stmt)
         if existing.scalar_one_or_none() is not None:
@@ -198,6 +204,8 @@ async def _insert_node_execution(
             cost_usd=cost_usd,
             latency_ms=latency_ms,
             attempt=attempt,
+            started_at=started_at,
+            completed_at=completed_at,
         )
         session.add(row)
         await session.commit()
@@ -220,7 +228,40 @@ def _usage_for_node(node_output: Any, node_key: str) -> dict[str, Any]:
 #: State channels that carry bookkeeping rather than node output. They have
 #: dedicated columns or dedicated tables, and must not be duplicated into the
 #: `node_executions.output` JSONB snapshot the Execution Viewer renders.
-_BOOKKEEPING_CHANNELS = frozenset({"node_usage", "node_tool_calls"})
+_BOOKKEEPING_CHANNELS = frozenset({"node_usage", "node_tool_calls", "node_inputs", "node_timings"})
+
+
+def _inputs_for_node(node_output: Any, node_key: str) -> dict[str, Any] | None:
+    """
+    Pull what this node actually READ off the `node_inputs` channel.
+
+    Until 2026-08-30 this column was written as an unconditional None, with the
+    honest comment that `stream_mode="updates"` cannot see prior state. It still
+    cannot — the fix was to have the handlers report their own resolved inputs on
+    a channel, exactly as they already report token usage. Nodes that read
+    nothing declarative (start, end, human_approval) still leave it NULL.
+    """
+    if not isinstance(node_output, dict):
+        return None
+    value = (node_output.get("node_inputs") or {}).get(node_key)
+    return value if isinstance(value, dict) else None
+
+
+def _timing_for_node(node_output: Any, node_key: str) -> dict[str, Any]:
+    """Per-node wall clock stamped by the compiler's instrumentation wrapper."""
+    if not isinstance(node_output, dict):
+        return {}
+    value = (node_output.get("node_timings") or {}).get(node_key)
+    return value if isinstance(value, dict) else {}
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _tool_call_ids(node_output: Any, node_key: str) -> list[uuid.UUID]:
@@ -338,10 +379,16 @@ async def _stream_graph(
     stream_input: dict[str, Any] | Command,
     attempt: int,
     organization_id: uuid.UUID,
+    stop_after_node_key: str | None = None,
+    allow_draft: bool = False,
 ) -> None:
     """
     Compile the graph (fresh, with PostgresSaver), stream it to completion or
     interrupt, write NodeExecution rows after each superstep.
+
+    `stop_after_node_key` is the Test-step stop: the run ends, completed, as soon
+    as that node has produced its row. It is checked AFTER the row is written, so
+    the node someone asked to test always has its output recorded.
     """
     saver = PostgresSaver(async_session_maker)
     client_factory = await _resolve_llm_client_factory(organization_id)
@@ -352,6 +399,7 @@ async def _stream_graph(
         client_factory=client_factory,
         tool_configs=tool_configs,
         tool_log=ToolExecutionLogger() if tool_configs else None,
+        allow_draft=allow_draft,
     )
 
     config = {"configurable": {"thread_id": str(run_id)}}
@@ -366,50 +414,92 @@ async def _stream_graph(
 
     node_start_time = time.monotonic()
     interrupted = False
+    stopped_early = False
     interrupt_payload: dict[str, Any] | None = None
 
-    async for chunk in compiled.astream(stream_input, config, stream_mode="updates"):
-        chunk_end_time = time.monotonic()
-        latency_ms = max(1, int((chunk_end_time - node_start_time) * 1000))
+    try:
+        stream = compiled.astream(stream_input, config, stream_mode="updates")
+        async for chunk in stream:
+            chunk_end_time = time.monotonic()
+            superstep_ms = max(1, int((chunk_end_time - node_start_time) * 1000))
 
-        if "__interrupt__" in chunk:
-            # Graph paused at a human_approval node — checkpoint already saved
-            # by the PostgresSaver before this chunk was yielded.
-            interrupts = chunk["__interrupt__"]
-            if interrupts:
-                interrupt_payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
-            interrupted = True
-            break
+            if "__interrupt__" in chunk:
+                # Graph paused at a human_approval node — checkpoint already saved
+                # by the PostgresSaver before this chunk was yielded.
+                interrupts = chunk["__interrupt__"]
+                if interrupts:
+                    interrupt_payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
+                interrupted = True
+                break
 
-        for node_key, node_output in chunk.items():
-            # node_output from "updates" mode is the dict the handler returned.
-            # The input snapshot is the full prior state; for audit purposes
-            # we record just the output here (full state is in the checkpoint).
-            usage = _usage_for_node(node_output, node_key)
-            node_execution_id = await _insert_node_execution(
+            for node_key, node_output in chunk.items():
+                # node_output from "updates" mode is the dict the handler returned.
+                # Its input rides back on the `node_inputs` channel and its real
+                # duration on `node_timings`; the full prior state stays in the
+                # checkpoint and is deliberately not duplicated here.
+                usage = _usage_for_node(node_output, node_key)
+                timing = _timing_for_node(node_output, node_key)
+                node_execution_id = await _insert_node_execution(
+                    workflow_run_id=run_id,
+                    node_key=node_key,
+                    status="succeeded",
+                    input_snapshot=_inputs_for_node(node_output, node_key),
+                    output_snapshot=_output_snapshot(node_output),
+                    # The handler's own measurement when it has one, falling back
+                    # to the superstep delta for a node that produced no timing.
+                    latency_ms=int(timing.get("duration_ms") or superstep_ms),
+                    attempt=attempt,
+                    tokens_prompt=usage.get("tokens_prompt"),
+                    tokens_completion=usage.get("tokens_completion"),
+                    cost_usd=usage.get("cost_usd"),
+                    started_at=_parse_timestamp(timing.get("started_at")),
+                    completed_at=_parse_timestamp(timing.get("completed_at")),
+                )
+                if node_execution_id is not None:
+                    await _link_tool_executions(_tool_call_ids(node_output, node_key), node_execution_id)
+                if usage.get("cost_usd"):
+                    await _add_run_cost(run_id, float(usage["cost_usd"]))
+
+                # Progress, so a running run can be followed. It names the node
+                # that just finished, which is what the column's own comment
+                # promises ("currently executing or last executed") — updates mode
+                # cannot announce a node before it produces output.
+                await _update_run(run_id, current_node_key=node_key)
+
+                if stop_after_node_key is not None and node_key == stop_after_node_key:
+                    stopped_early = True
+
+            if stopped_early:
+                break
+
+            node_start_time = time.monotonic()
+    except Exception as exc:
+        # The one place a node failure is attributable: the compiler's wrapper
+        # tagged the exception with the node that raised it. Re-raised UNCHANGED,
+        # so `_NON_RETRYABLE`'s type-based classification still works exactly as
+        # before — a config error must not become retryable, and a mutating tool
+        # must not be re-driven three more times.
+        failed_node_key = node_key_of(exc)
+        if failed_node_key is not None:
+            await _insert_node_execution(
                 workflow_run_id=run_id,
-                node_key=node_key,
-                status="succeeded",
-                input_snapshot=None,  # state snapshot not available in updates mode
-                output_snapshot=_output_snapshot(node_output),
-                latency_ms=latency_ms,
+                node_key=failed_node_key,
+                status="failed",
+                input_snapshot=None,
+                output_snapshot={"error": str(exc)},
+                latency_ms=max(1, int((time.monotonic() - node_start_time) * 1000)),
                 attempt=attempt,
-                tokens_prompt=usage.get("tokens_prompt"),
-                tokens_completion=usage.get("tokens_completion"),
-                cost_usd=usage.get("cost_usd"),
             )
-            if node_execution_id is not None:
-                await _link_tool_executions(_tool_call_ids(node_output, node_key), node_execution_id)
-            if usage.get("cost_usd"):
-                await _add_run_cost(run_id, float(usage["cost_usd"]))
-
-        node_start_time = time.monotonic()
+            await _update_run(run_id, current_node_key=failed_node_key)
+        raise
 
     if interrupted:
         await _update_run(
             run_id,
             status="waiting_approval",
-            current_node_key="human_approval",
+            # The real gate, not the literal string "human_approval" this used to
+            # write — a graph with two gates could never be told apart.
+            current_node_key=(interrupt_payload or {}).get("node_key") or "human_approval",
             interrupt_payload=interrupt_payload,
         )
     else:
@@ -483,7 +573,18 @@ async def _execute_workflow_async(run_id: uuid.UUID, attempt: int) -> None:
         run_id=str(run_id),
     )
 
-    await _stream_graph(run_id, version, initial_state, attempt, run.organization_id)
+    await _stream_graph(
+        run_id,
+        version,
+        initial_state,
+        attempt,
+        run.organization_id,
+        # Read off the run row rather than passed as a task argument: a Celery
+        # signature change would strand any job already queued under the old one.
+        stop_after_node_key=run.test_until_node_key,
+        # Only a run already flagged as a test may compile an unpublished graph.
+        allow_draft=run.is_test,
+    )
 
 
 @celery_app.task(
@@ -535,4 +636,14 @@ async def _resume_workflow_async(
         logger.info("Skipping resume_workflow for run=%s (status=%s)", run_id, run.status)
         return
 
-    await _stream_graph(run_id, version, Command(resume=resume_payload), attempt, run.organization_id)
+    await _stream_graph(
+        run_id,
+        version,
+        Command(resume=resume_payload),
+        attempt,
+        run.organization_id,
+        # A test run that stopped at a gate keeps its stop point when resumed —
+        # approving a test must not let it run past where it was asked to stop.
+        stop_after_node_key=run.test_until_node_key,
+        allow_draft=run.is_test,
+    )

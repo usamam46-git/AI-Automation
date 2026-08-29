@@ -52,6 +52,7 @@ export function AgentConfigForm({
           hint="Dotted state paths. Only these are passed to the model — smaller prompts, less distraction. Defaults to trigger_payload."
         >
           <StringListEditor
+          itemsArePaths
             value={inputFields}
             onChange={(next) => patch({ input_fields: next.length > 0 ? next : ["trigger_payload"] })}
             placeholder="node_outputs.extract.vendor"

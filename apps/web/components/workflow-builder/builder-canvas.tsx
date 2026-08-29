@@ -79,6 +79,7 @@ export function BuilderCanvas({
   const { screenToFlowPosition, fitBounds } = useReactFlow();
   const selectNode = useWorkflowBuilderStore((state) => state.selectNode);
   const selectEdge = useWorkflowBuilderStore((state) => state.selectEdge);
+  const openDetail = useWorkflowBuilderStore((state) => state.openDetail);
   const selectedEdgeId = useWorkflowBuilderStore((state) => state.selectedEdgeId);
   const [picker, setPicker] = React.useState<PickerRequest | null>(null);
 
@@ -223,10 +224,9 @@ export function BuilderCanvas({
       insertOnEdge: (id, at) => setPicker({ kind: "insert", at, edgeId: id }),
       deleteEdge: (id) =>
         setGraph((current) => ({ ...current, edges: current.edges.filter((edge) => edge.id !== id) })),
-      // Wired to the node detail view in phase 2.
-      openNode: (nodeKey) => selectNode(nodeKey),
+      openNode: (nodeKey) => openDetail(nodeKey),
     }),
-    [selectNode, setGraph],
+    [openDetail, setGraph],
   );
 
   /**
@@ -310,6 +310,10 @@ export function BuilderCanvas({
           deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
           fitView
           fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
+          // Double-click now means "open this step". React Flow's default
+          // double-click-to-zoom fires on the pane, so a mis-aimed open jumped
+          // the canvas to 2x instead — two different outcomes for one gesture.
+          zoomOnDoubleClick={false}
           minZoom={0.2}
           maxZoom={1.75}
           proOptions={{ hideAttribution: false }}

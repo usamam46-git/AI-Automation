@@ -378,63 +378,128 @@ framed where the graph used to be and left the tidied row jammed under the
 toolbar. The positions are already known at that point; there is nothing to wait
 for.
 
-### Node detail view — groundwork only so far (2026-08-28)
+### The node detail view (2026-08-30)
 
-Phase 2 of the n8n-style work was **started and stopped partway**. Two pure
-modules landed, both fully tested; **no component consumes them yet**, and the
-config panel is still the 320px right-hand column described below. Treat this
-the same way `LLMClient.embed()` was treated when it shipped ahead of its
-caller: the code is real and covered, but nothing has exercised it in a browser.
+Phases 2–4 of the n8n-style work. **`config-panel.tsx` is deleted.** Node
+settings now live in a full-screen INPUT | PARAMETERS | OUTPUT overlay opened by
+double-clicking a node. The 320px column could show what a node's settings were;
+it could not show what data arrives, what leaves, or where a `node_outputs.…`
+path comes from, and those are the three things a non-coder actually needs.
 
-- **`lib/data-preview.ts`** — one JSON value into the three views the panels will
-  offer (Table / JSON / Schema). Every node carries the **dotted state path** that
-  addresses it, because that path is the builder's actual product: it is what
-  goes into `input_fields`, `body_fields`/`payload_fields`/`query_fields` and
-  `condition.field`.
+- **The parameter forms are the EXISTING ones, re-hosted unchanged.** They
+  construct exactly the shapes `_agent_config` / `_tool_config` accept, and that
+  contract is not something to re-derive while moving a panel. The
+  `key={node.id}` remount is preserved: every row editor holds local draft state
+  that must not carry between nodes.
+- **`zoomOnDoubleClick` is off.** Double-click means "open this step"; React
+  Flow's default fired on the pane, so a mis-aimed open jumped the canvas to 2×.
+- **Escape inside the node-key field reverts the edit and does NOT close the
+  dialog** — it stops propagation. The first press should undo the rename, not
+  throw away the panel.
+- **A condition node has real parameters for the first time.** Its NDV lists the
+  outgoing edges as a routing-rules table — n8n's Switch node, mapped onto the
+  existing per-edge model with no schema change. Rules render in **evaluation
+  order** (`lib/condition-rules.ts` mirrors the backend's
+  `_ordered_condition_edges`); routing is first-match-wins, so any other order
+  would actively mislead.
+  **It warns when two branches both carry a rule**, and that warning is not
+  padding: the backend sorts by `(is_catch_all, created_at, id)`, and
+  `save_draft` re-inserts every edge in ONE transaction, so `created_at` ties
+  across the whole graph and the tiebreak falls through to a random UUID. Only
+  "the fallback runs last" is guaranteed. The classic ladder — `> 1000` then
+  `> 100` — is therefore unsafe here, and nothing else in the product says so.
+- **The Start node holds a sample trigger payload** under
+  `config.sample_payload`. The backend **ignores** the key (node `config` is
+  free-form JSONB with no `extra="forbid"`; `start_handler` returns `{}`), and it
+  exists so the builder can show and drag the fields every downstream node
+  addresses as `trigger_payload.*`. It is also what a Test step sends. If that
+  key ever has to mean something server-side, this is the note to find first.
 
-  Path construction mirrors `resolve_field_path` in
-  `apps/api/src/graphs/condition_eval.py`, and two rules there are load-bearing:
-  **arrays are addressed by integer index** (`hits.0.content`), not brackets; and
-  **a key containing a dot is permanently unreachable**, because the resolver
-  splits the whole path on ".". Such nodes are marked `addressable: false` so the
-  UI can refuse to offer a path that would silently resolve to null at run time —
-  and unaddressability is **inherited**, since a good key under a dotted key is
-  still unreachable.
+`lib/data-preview.ts` and `lib/node-output-shape.ts` are the pure modules under
+all of it.
 
-  `toTable` takes the **union** of keys across rows, not the first row's keys, or
-  a field only some items carry would vanish. It returns `null` for a bare
-  scalar rather than inventing a `value` column.
-
-- **`lib/node-output-shape.ts`** — what a node is EXPECTED to produce, with no run.
-  This is what will make the panels useful on a workflow that has never executed.
-
-  **It MIRRORS `apps/api/src/graphs/node_handlers.py` and must change with it.**
-  Each shape is a handler's literal return value; the table in the file header is
-  the full list. The ones easiest to get wrong: `http_request` is
-  `{status_code, body}` and **never echoes headers**; `notify` is always
-  `queued`, **never `delivered`**; `human_approval` yields the resume payload;
-  and an agent's shape is derived from its own `output_schema.properties`, with
+- **`node-output-shape.ts` MIRRORS `node_handlers.py`** and must change with it.
+  Each shape is a handler's literal return value; the header table is the full
+  list. Easiest to get wrong: `http_request` is `{status_code, body}` and
+  **never echoes headers**; `notify` is always `queued`, **never `delivered`**;
+  an agent's shape comes from its own `output_schema.properties`, with
   optionality read as a nullable type because strict mode makes every declared
   property required.
+  **`start` is not rooted at `node_outputs`** — a start node writes nothing, and
+  what downstream nodes read from it is `trigger_payload`.
+  **`inputSourcesFor` walks THROUGH condition nodes**, which execute never and
+  write nothing; otherwise a node behind one gets a permanently empty input panel
+  while the data it reads sits a step further back.
+- **`data-preview.ts` path construction mirrors `resolve_field_path`.** Arrays
+  are addressed by **integer index** (`hits.0.content`), and **a key containing a
+  dot is permanently unreachable** because the resolver splits the whole path on
+  "." — those nodes are marked `addressable: false` so the UI refuses to offer a
+  path that would silently resolve to null, and unaddressability is **inherited**.
+  `toTable` takes the **union** of keys across rows, or a field only some items
+  carry would vanish.
 
-  Two behaviours worth not re-deriving:
+### Drag-and-drop field mapping (2026-08-30)
 
-  - **`start` is not rooted at `node_outputs`.** A start node writes nothing;
-    what downstream nodes read from it is `trigger_payload`. Its shape comes
-    from `config.sample_payload` — a key the **backend ignores** (node `config`
-    is free-form JSONB with no `extra="forbid"`, and `start_handler` returns
-    `{}` without reading it), added purely so the builder can show and drag the
-    shape a run will deliver. If that key ever needs to mean something to the
-    server, this is the note to find first.
-  - **`inputSourcesFor` walks THROUGH condition nodes.** A condition never
-    executes and writes nothing, so a node sitting behind one would otherwise get
-    a permanently empty input panel while the data it actually reads sits one
-    step further back. It also excludes forward references, since a path to a
-    node that has not run resolves to null and nothing reports it.
+**What a drop writes is a dotted state PATH, never an expression.** n8n drops
+`{{ $json.foo }}` into a template string; this product has no template language
+and no `eval` anywhere, so the config the forms emit is byte-identical to what it
+was before anyone dragged anything.
 
-  `writesNothing` distinguishes "this node structurally never writes state"
-  (end, condition, subgraph) from "it will, once you configure it" (an agent with
-  no schema). Conflating them would tell someone to go and fix an end node.
+- `lib/field-drag.ts` owns the payload and the drop rules, so they are asserted
+  rather than click-tested. A dropped path never overwrites an existing mapping —
+  the suggested key is de-duplicated (`vendor`, `vendor_2`). An array index is
+  skipped when suggesting a key, because `0` is a useless field name.
+- **The picker is the primary implementation and drag is a shortcut onto it.**
+  Drag is mouse-only, and a builder whose central act is unreachable by keyboard
+  is not finished. Both routes call one `onChange`.
+- **Drop-to-append is handled inside `KeyValueEditor`/`StringListEditor`, not in
+  their wrappers.** Those editors read `value` only on mount (local draft rows —
+  a controlled map would drop a row the moment its key is blank), so appending
+  from outside would not appear until the editor remounted.
+- **`PathInput` is where path checking finally lives.** The old check looked at
+  the FIRST SEGMENT against a hardcoded list; `lib/state-path.ts` also knows
+  whether the step named exists and **whether it runs before this one**. A
+  forward reference is syntactically perfect, resolves to null every run, and is
+  reported by nothing else — it is the single most valuable check here. All of it
+  is **advisory**: the server stays the authority on what may publish.
+- `STATE_ROOTS` moved from `field-map-editor.tsx` to `lib/state-path.ts`, so the
+  pure check and the component rendering it do not each own a copy.
+
+### The live run on the canvas (2026-08-30)
+
+Running a workflow used to navigate to `/executions/{id}` — the right page for
+auditing a past run, the wrong one for authoring, since you lose the graph at
+exactly the moment its behaviour becomes observable. It now stays put.
+
+- **Run state reaches node cards through `RunOverlayContext`, never through
+  `node.data`.** `data` is the autosave payload; a status pill written there
+  would be saved as part of the graph. Same rule as `IssueContext`.
+- **"running" is INFERRED and says so.** The engine streams with
+  `stream_mode="updates"`, which yields a chunk only once a node has finished, so
+  no node can be announced as it starts. `current_node_key` names the node that
+  most recently COMPLETED; a successor of it with no row yet is shown as running,
+  and `NodeRun.inferred` carries that caveat rather than hiding it.
+- **"which branch was taken" is inferred too** — nothing records the routing
+  decision. An edge is marked taken when both ends have executed. On a converging
+  graph that can credit two incoming edges when one fired; it never invents a
+  path to a node that did not run.
+- **The overlay polls `GET /executions/{id}/status`**, which carries no
+  input/output blobs, on its own `["builder-run", runId]` key. Writing run state
+  into the builder's cache entry would corrupt the open canvas. The NDV fetches
+  the ONE open node's full row separately, and indexes
+  `output.node_outputs[nodeKey]` — that channel holds the accumulated map for the
+  whole run, so showing it raw would put every node's state on every node's panel.
+- **`nodeDurationMs` prefers `completed_at - started_at`** (the handler's own
+  wall clock) and falls back to `latency_ms`, which is a whole-superstep delta
+  shared by every node in the step.
+- **The node card hides cost where it does not exist.** `http_request`,
+  `erp_connector` and `notify` spend no LLM money and leave `cost_usd` NULL;
+  rendering "$0.00" would claim a measurement that was never taken.
+- **"Test run" and "Test step" both call the test-run endpoint on the version on
+  screen.** The old button called `triggerRun`, which is pinned to
+  `current_version_id` — so on a draft it ran the PUBLISHED graph and reported
+  success. The toolbar tooltip no longer says "publish a version first", because
+  that is no longer true.
 
 ### Node config panel — the config shapes are a contract
 
@@ -561,7 +626,8 @@ harness, only node-environment tests over pure `lib/` modules.
 `npm test` (vitest) covers the pure `lib/` modules only —
 `graph-validation`, `graph-mapping`, `output-schema`, and as of 2026-08-28
 `graph-layout` (23), `node-catalog` (24, over `searchNodeCatalog`'s filtering and
-ranking), `data-preview` (25) and `node-output-shape` (30). Canvas drag/drop,
+ranking), `data-preview` (25), `node-output-shape` (30), `condition-rules` (19),
+`field-drag` (17), `state-path` (17) and `run-overlay` (25). Canvas drag/drop,
 panel rendering and React Flow theming are deliberately uncovered; they are
 verified manually in the browser.
 

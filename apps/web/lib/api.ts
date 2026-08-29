@@ -169,21 +169,50 @@ export type WorkflowRunStatus = "pending" | "running" | "waiting_approval" | "co
 export type NodeExecutionStatus = "succeeded" | "failed" | "skipped";
 
 // Append-only: every retry writes a NEW row, so one node_key can appear
-// several times with a rising `attempt`. There is no started_at/completed_at —
-// only latency_ms and created_at. And no node_type: resolving a node's type
+// several times with a rising `attempt`. No node_type: resolving a node's type
 // (for its icon) means joining against the version's nodes by node_key.
-export type NodeExecution = {
+//
+// `started_at`/`completed_at` arrived 2026-08-30 and are measured around the
+// HANDLER, so unlike `latency_ms` — a whole-superstep delta — they are the
+// node's own wall clock. They are null on rows written before that.
+export type NodeExecutionSummary = {
   id: string;
   node_key: string;
   status: NodeExecutionStatus;
-  input: Record<string, unknown> | null;
-  output: Record<string, unknown> | null;
   tokens_prompt: number | null;
   tokens_completion: number | null;
   cost_usd: number | null;
   latency_ms: number;
   attempt: number;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
+};
+
+export type NodeExecution = NodeExecutionSummary & {
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
+};
+
+/**
+ * The polling shape: the run row plus node SUMMARIES, no input/output blobs.
+ *
+ * The full run response re-sends every node's accumulated state snapshot on
+ * every tick, and the builder's live overlay polls faster than the Execution
+ * Viewer. Open one node and the detail view fetches that node's full row.
+ */
+export type RunStatus = {
+  id: string;
+  status: WorkflowRunStatus;
+  current_node_key: string | null;
+  interrupt_payload: Record<string, unknown> | null;
+  started_at: string | null;
+  completed_at: string | null;
+  total_cost_usd: number | null;
+  error: Record<string, unknown> | null;
+  is_test: boolean;
+  test_until_node_key: string | null;
+  node_executions: NodeExecutionSummary[];
 };
 
 export type WorkflowRun = {
@@ -336,6 +365,38 @@ export const executionsApi = {
   },
   async get(runId: string) {
     const { data } = await apiClient.get<WorkflowRun>(`/executions/${runId}`);
+    return data;
+  },
+  /** Lightweight poll — no per-node input/output. See `RunStatus`. */
+  async status(runId: string) {
+    const { data } = await apiClient.get<RunStatus>(`/executions/${runId}/status`);
+    return data;
+  },
+  /**
+   * The builder's Test step. Runs the NAMED version — a draft included, which
+   * `triggerRun` cannot do: that endpoint is always pinned to the workflow's
+   * `current_version_id`, so it never tested the graph on screen.
+   *
+   * 422s when the executed prefix contains a step that writes to an external
+   * system, unless `allow_mutating` is set.
+   */
+  async testRun(
+    workflowId: string,
+    versionId: string,
+    payload: {
+      trigger_payload?: Record<string, unknown> | null;
+      until_node_key?: string | null;
+      allow_mutating?: boolean;
+    } = {},
+  ) {
+    const { data } = await apiClient.post<WorkflowRun>(
+      `/workflows/${workflowId}/versions/${versionId}/test-run`,
+      {
+        trigger_payload: payload.trigger_payload ?? null,
+        until_node_key: payload.until_node_key ?? null,
+        allow_mutating: payload.allow_mutating ?? false,
+      },
+    );
     return data;
   },
   // 409s when the run is no longer waiting_approval (e.g. another tab decided first).

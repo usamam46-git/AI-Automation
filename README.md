@@ -14,18 +14,25 @@ and every cent they spent.
 
 ## See it run
 
-An expense claim that breaches the policy three ways, triggered from the UI. The
-agent reads it, retrieves the company's own expense policy, and the run **stops
-at the approval gate** — quoting the clause it stopped on. A human approves, and
-only then does the ERP write happen.
+A supplier invoice, tested straight from the builder. The agent extracts it,
+retrieval grounds the check in the company's own AP policy and the signed
+supplier contract, and the run **stops at the approval gate** — on the canvas,
+where you built it. A human approves and the run continues.
+
+Every step reports what it cost as it finishes. Nothing is staged: the figures on
+screen are what this run actually spent and took.
 
 <p align="center">
-  <img src="Docs/media/approval-gate.gif" alt="A workflow run pausing at a human approval gate, then completing after approval" width="100%">
+  <img src="Docs/media/approval-gate.gif" alt="A workflow run executing on the builder canvas, pausing at a human approval gate, then completing after approval" width="100%">
 </p>
 
-Nothing above is staged: it is one real run against the local stack, and the
-figures on screen — `$0.0011`, `4179 in / 320 out`, `1m 10s` — are what it
-actually cost and took.
+That is one real run against the local stack: `$0.0028` total, `38.4s`
+wall-clock, held at `approval_1` until someone cleared it.
+
+It is a **Test step**, which is why the ERP write at the end never fires — the
+test was asked to stop at the gate, and a test that posts a real journal entry is
+not a test. Asking it to run past a step that writes to an external system is
+refused by name until you say `allow_mutating`.
 
 ---
 
@@ -170,13 +177,20 @@ anything in it.
 
 ### The canvas
 
-Workflows are built as a graph and stored as one. Each node type gets its own
-config form — an agent node carries its system prompt, its input field paths and
-a typed output schema; a `human_approval` node has nothing to configure, which
-is the point.
+Workflows are built as a graph and stored as one, left to right. Opening a step
+gives you the three things you need at once — **the data coming in, the
+parameters, and what goes out** — so a field path is something you pick from what
+is actually available rather than type from memory.
+
+The Input and Output panels are useful before anything has ever run: they fall
+back to the shape each step *declares*, derived from the agent's own output
+schema or from what that tool type returns. Once a run exists they show its real
+values instead. Dragging a field into a parameter writes a dotted state path, not
+a template expression — there is no expression language here and no `eval`
+anywhere near a workflow.
 
 <p align="center">
-  <img src="Docs/media/builder-canvas.gif" alt="The workflow builder canvas, showing node configuration for an agent and a human approval node" width="100%">
+  <img src="Docs/media/builder-canvas.gif" alt="Opening a step in the workflow builder: input data, parameters and output side by side, with a field picker listing every upstream path" width="100%">
 </p>
 
 ### Retrieval, concretely

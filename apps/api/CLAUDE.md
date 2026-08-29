@@ -1131,6 +1131,93 @@ registry tool and `SAMPLE_LEAVE_REQUEST_PAYLOAD`.
   6-day balance, 9 days' notice against the handbook's 28). Raise the balance and
   push the dates out for the clean path.
 
+## Run instrumentation + the builder's Test step (landed 2026-08-30)
+
+Migration `20260830_run_instrumentation`. Four columns, all additive. Six
+behaviours landed together, and **each replaced something that was silently
+absent rather than merely imperfect** — which is why they are worth reading
+before touching `_stream_graph` or the compiler.
+
+- **`node_executions.input` was written as an unconditional `None`**, with an
+  honest comment that `stream_mode="updates"` cannot see prior state. It still
+  cannot. The fix is that handlers report their own resolved inputs on a
+  `node_inputs` channel, exactly as they already report `node_usage` — an
+  agent's `_build_agent_input` result, a tool's resolved `*_fields` maps. It is
+  the VALUES, not the configured paths: the paths are already in
+  `tool_executions.input`, and knowing a node was told to read
+  `node_outputs.extract.total` is no help when the question is why the request
+  carried a null. A `null` here is a mis-typed path made visible, and nothing
+  else in the product reports one. **A tool with no field maps writes no
+  `node_inputs` entry at all** — an empty dict on screen reads as a finding.
+- **`node_executions.status` was written as an unconditional `"succeeded"`.** A
+  raising node produced NO row, so `node_executions` had never contained a single
+  `failed` row and nothing knew which node broke. The compiler's `_instrument`
+  wrapper now **TAGS** the exception with `NODE_KEY_ATTR` and `_stream_graph`
+  writes the row.
+  **Tagging, not wrapping, and that distinction is load-bearing**: `_NON_RETRYABLE`
+  classifies by exception TYPE, so a wrapper exception would make every config
+  error look retryable and re-drive a mutating tool three more times. The
+  exception is re-raised unchanged, so every existing `except` clause is
+  unaffected.
+  **LangGraph's own exceptions are left completely alone.** `human_approval_handler`
+  suspends the graph by raising through `interrupt()`; tagging that would write a
+  `failed` row for every approval gate. The check is on the exception's PACKAGE,
+  not a class name, so a LangGraph upgrade that renames or re-parents
+  `GraphInterrupt` cannot quietly break approvals.
+- **`current_node_key` was written only at an interrupt, and then as the literal
+  string `"human_approval"`** — which no graph with two gates could tell apart.
+  The interrupt payload now carries `node_key`, and the column advances as each
+  node completes. It names the node that **most recently finished**: updates-mode
+  yields a chunk only after a node succeeds, so nothing can announce a node as it
+  starts. The frontend infers "running" from that and labels the inference.
+- **`latency_ms` was a whole-SUPERSTEP delta** measured in the stream loop, so
+  two nodes running in one step were reported with an identical duration counted
+  from the end of the previous step. `_instrument` measures the handler and
+  reports on a `node_timings` channel; `started_at`/`completed_at` are that
+  measurement. `latency_ms` is still written and is still the fallback for rows
+  from before this.
+- Both new channels are in `_BOOKKEEPING_CHANNELS`, so they are stripped from the
+  output snapshot for the same reason `node_usage` is.
+
+### The Test step — `POST /workflows/{id}/versions/{version_id}/test-run`
+
+- **It runs the version named in the PATH, draft included.** That is the entire
+  point: `POST /workflows/{id}/run` is always pinned to `current_version_id`, so
+  the builder's old "Test run" ran the PUBLISHED graph and reported success while
+  never testing the draft on screen.
+- **`_compile_state_graph` gained `allow_draft`**, threaded from
+  `workflow_runs.is_test`. The draft guard stays the default and is still what
+  stops a production run executing an unpublished graph; only a run already
+  flagged as a test can opt in. Forgetting this is not subtle — every test run
+  raised `DraftVersionCompileError` until it was added.
+- **It is a REAL run.** Same Celery task, same engine, same quota, same audit
+  row, same money. Building a parallel dry-run engine was the alternative and
+  would have meant a second implementation of the part most worth trusting.
+  `is_test` exists only so the Executions list is not filled with the probes an
+  author fires while wiring a node up — `include_test=true` brings them back.
+- **A mutating node in the executed prefix is a 422 naming it**, unless the
+  request carries `allow_mutating`. A test that posts a real journal entry is not
+  a test. "Reachable" is read generously — everything except what is strictly
+  downstream of the stop node — because the true executed set depends on
+  conditions that need the run that has not happened yet.
+  `_strictly_downstream` terminates on a cyclic draft, deliberately: a test run
+  is exactly what someone reaches for **before** a graph is publishable.
+- **`test_until_node_key` is read off the run row, not passed as a task
+  argument.** A Celery signature change would strand any job already queued under
+  the old one. It survives a resume, so approving a test cannot let it run past
+  where it was told to stop.
+- `human_approval` behaves exactly as in production — the run holds at the gate
+  and is resumed through the normal endpoint. Honest, and it demonstrates the
+  product's actual differentiator rather than skipping it.
+
+### `GET /executions/{run_id}/status`
+
+The polling shape: the run row plus node SUMMARIES, no `input`/`output`. The full
+response re-sends every node's accumulated state snapshot on every tick, and the
+builder's live overlay polls faster than the Execution Viewer does. It reuses
+`get_run`'s query rather than adding a second one — the saving is in the RESPONSE,
+which is where the cost was.
+
 ## Demo seed — `src/db/demo/` (landed 2026-08-17)
 
 Build-plan days 10–12. Four Markdown corpus documents, three registry tools, three

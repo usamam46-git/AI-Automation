@@ -32,7 +32,9 @@ from src.db.database import get_db_session
 from src.modules.audit_logs.schemas import AuditContext
 from src.modules.executions.schemas import (
     ResumeRequest,
+    RunStatusResponse,
     RunTriggerRequest,
+    TestRunRequest,
     WorkflowRunResponse,
     WorkflowRunSummary,
 )
@@ -114,6 +116,7 @@ async def list_runs(
     status: str | None = Query(None, description="Filter by run status (pending|running|waiting_approval|completed|failed|cancelled|rejected)"),
     cursor: str | None = Query(None, description="Cursor for pagination (ISO datetime string)"),
     limit: int = Query(50, ge=1, le=100),
+    include_test: bool = Query(False, description="Include builder Test-step runs, hidden by default"),
     org_id: uuid.UUID = Depends(get_current_org),
     svc: ExecutionService = Depends(_get_service),
 ) -> Sequence[WorkflowRunSummary]:
@@ -123,6 +126,7 @@ async def list_runs(
         status_filter=status,
         cursor=cursor,
         limit=limit,
+        include_test=include_test,
     )
 
 
@@ -138,6 +142,54 @@ async def get_run(
     svc: ExecutionService = Depends(_get_service),
 ) -> WorkflowRunResponse:
     return await svc.get_run(org_id, run_id)
+
+
+@router.get(
+    "/executions/{run_id}/status",
+    response_model=RunStatusResponse,
+    dependencies=[require_permission("execution:read")],
+    summary="Lightweight run status for live polling",
+)
+async def get_run_status(
+    run_id: uuid.UUID,
+    org_id: uuid.UUID = Depends(get_current_org),
+    svc: ExecutionService = Depends(_get_service),
+) -> RunStatusResponse:
+    """
+    The same run as `GET /executions/{run_id}`, minus every node's input/output.
+
+    It exists because the full response re-sends each node's accumulated state
+    snapshot on every poll, and the builder's live overlay polls faster than the
+    Execution Viewer. The overlay needs status, timing and cost per node; it
+    fetches one node's full row only when someone opens it.
+    """
+    return await svc.get_run_status(org_id, run_id)
+
+
+@router.post(
+    "/workflows/{workflow_id}/versions/{version_id}/test-run",
+    response_model=WorkflowRunResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission("workflow:execute")],
+    summary="Run one version — draft included — optionally stopping after a node",
+)
+async def trigger_test_run(
+    workflow_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: TestRunRequest,
+    org_id: uuid.UUID = Depends(get_current_org),
+    audit: AuditContext = Depends(get_audit_context),
+    svc: ExecutionService = Depends(_get_service),
+) -> WorkflowRunResponse:
+    """
+    The builder's Test step.
+
+    Unlike `POST /workflows/{id}/run`, which is always pinned to
+    `current_version_id`, this runs the version named in the path — so it can test
+    an unpublished draft, which is what makes it useful at all. It is a real run
+    in every other respect: real worker, real quota, real cost, real audit row.
+    """
+    return await svc.trigger_test_run(org_id, workflow_id, version_id, body, context=audit)
 
 
 @router.post(
