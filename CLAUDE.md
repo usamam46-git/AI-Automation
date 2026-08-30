@@ -1248,6 +1248,21 @@ verified via a full read-only orientation pass — see note below.)
   substitution, *then* the real host. **588 backend tests** (571 + 17 in
   `tests/test_hims_expense_graph.py`, which runs the graph through the real
   validators with no DB).
+- **Hybrid retrieval landed 2026-08-30** — `ix_document_chunks_content_gin` had
+  shipped unqueried since the initial schema and is now the second leg of every
+  search. No migration. It closes one measured failure that chunking cannot
+  touch: **negation** — "Can an employee approve their own expense claim?"
+  against "Employees must not approve their own expenses" did not reach the top
+  3, because a question and its prohibition sit apart in embedding space.
+  Dense and full-text run as two statements and are fused by Reciprocal Rank
+  Fusion in Python. On the Afaqhims policy this took **top-3 from 7/8 to 8/8**;
+  top-1 is unchanged at 7/8, so it is a recall fix rather than a ranking one.
+  The load-bearing decisions, all in apps/api/CLAUDE.md: the returned `score`
+  stays **cosine similarity** (an RRF score is ~0.016 and would make every stored
+  `score_floor: 0.3` filter everything), the floor applies to the **dense leg
+  only** because a literal match is different evidence from semantic similarity,
+  and the tsquery is **OR not AND** or a natural question matches nothing.
+  **598 backend tests** (588 + 10).
 - Next: **actually deploy** (the stack is written and locally verified but has
   never run on a VPS — see `infra/DEPLOY.md`), then **scheduled off-host
   database backups**, which is the largest gap the moment real data exists.
@@ -1255,9 +1270,7 @@ verified via a full read-only orientation pass — see note below.)
   scene's appearance is not, and cannot be here) (the one thing it has
   never been seen on — and now more important, since the plate is 1.51 aspect
   and a phone crops it hard — see apps/web/CLAUDE.md), **record the walkthrough**,
-  hybrid keyword search
-  (the GIN index has shipped unqueried since the initial schema; deliberately cut
-  first), OCR, `subgraph` handler, and agent function-calling/ReAct (see the
+  OCR, `subgraph` handler, and agent function-calling/ReAct (see the
   deferral note in apps/api/CLAUDE.md).
   Still an empty registry: the `worker_notifications` container (nothing routes to
   its queue yet). `worker_documents` runs `ingest_document` as of 2026-08-15.

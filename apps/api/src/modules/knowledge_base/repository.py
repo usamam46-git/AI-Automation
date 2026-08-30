@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, delete, desc, func, select
+from sqlalchemy import Select, delete, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.knowledge_base.models import Document, DocumentChunk, KnowledgeBase
@@ -36,6 +36,49 @@ from src.modules.workflows.models import Workflow, WorkflowNode, WorkflowVersion
 DEFAULT_TOP_K = 5
 DEFAULT_SCORE_FLOOR = 0.3
 MAX_TOP_K = 20
+
+#: How many candidates each retrieval leg contributes to the fusion, before the
+#: fused list is trimmed to `top_k`.
+#:
+#: Fusing only the top_k of each leg would defeat the point: the chunk hybrid
+#: search exists to rescue is one the dense leg ranks *poorly*, so it has to be
+#: inside the candidate window to be rescued at all. 4x with a floor of 20 keeps
+#: both legs cheap — the dense leg is an HNSW lookup and the lexical leg is a GIN
+#: lookup, and neither cares about a window this size.
+CANDIDATE_DEPTH_MULTIPLIER = 4
+MIN_CANDIDATE_DEPTH = 20
+
+
+def candidate_depth(top_k: int) -> int:
+    """Per-leg candidate count for a requested `top_k`."""
+    return max(MIN_CANDIDATE_DEPTH, top_k * CANDIDATE_DEPTH_MULTIPLIER)
+
+
+#: The tsvector expression, which MUST match `ix_document_chunks_content_gin`
+#: character for character or Postgres will not use the index.
+#:
+#: The index has shipped since the initial schema and went unqueried until
+#: 2026-08-30. It is declared as `to_tsvector('english'::regconfig, content)`,
+#: so the explicit regconfig cast below is not decoration — dropping it, or
+#: passing a plain `'english'` string that renders as `text`, produces a
+#: different expression and a sequential scan over every chunk in the org.
+_CONTENT_TSVECTOR = func.to_tsvector(text("'english'::regconfig"), DocumentChunk.content)
+
+#: An OR tsquery built from the caller's text.
+#:
+#: **OR, not AND, and this is the whole reason the lexical leg works.**
+#: `plainto_tsquery` and `websearch_to_tsquery` both AND their terms, so a
+#: natural question — "Can an employee approve their own expense claim?" — asks
+#: for a chunk containing every one of `employe & approv & expens & claim` and
+#: routinely matches nothing at all. Lexemes are taken from `to_tsvector` (so
+#: they are stemmed and stopword-filtered exactly like the indexed side) and
+#: OR-ed, which lets `ts_rank_cd` do the discriminating instead of the matcher.
+#:
+#: `quote_literal` wraps each lexeme, because a lexeme containing an apostrophe
+#: is valid in a tsvector and a syntax error in a bare tsquery. A query whose
+#: lexemes are all stopwords aggregates to NULL, `@@ NULL` is NULL, and the leg
+#: returns nothing — the correct degradation, not an error.
+_OR_TSQUERY_SQL = "(SELECT string_agg(quote_literal(lexeme), ' | ') " "FROM unnest(to_tsvector('english'::regconfig, :lexical_query)))::tsquery"
 
 
 def build_chunk_search_stmt(
@@ -86,6 +129,65 @@ def build_chunk_search_stmt(
             Document.knowledge_base_id == knowledge_base_id,
         )
         .order_by(distance)
+        .limit(top_k)
+    )
+
+
+def build_chunk_lexical_search_stmt(
+    *,
+    organization_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    query_vector: Sequence[float],
+    query_text: str,
+    top_k: int,
+) -> Select:
+    """
+    The full-text leg of hybrid retrieval. Same columns as the dense statement.
+
+    Added 2026-08-30. It exists because dense retrieval has one failure mode no
+    amount of chunking fixes: **negation**. Asked "Can an employee approve their
+    own expense claim?" against a policy saying "Employees must not approve their
+    own expenses", the correct chunk did not reach the top 3 — a question and its
+    prohibition sit apart in embedding space. That phrase is a near-literal
+    lexical match, which is exactly what this leg is good at. Measured on the
+    Afaqhims corpus before writing it; do not attribute that miss to chunk size.
+
+    It is a SEPARATE statement rather than one clever query, deliberately:
+    `build_chunk_search_stmt` must keep `ORDER BY <cosine distance>` with nothing
+    else in the way or it stops using the HNSW index, and folding a second
+    ranking into it is the most likely way for that to happen by accident.
+    Fusing two ranked lists in Python is cheaper to read and cheaper to test.
+
+    **It also computes the cosine score**, even though it orders by text rank.
+    Every hit the service returns therefore carries a real, comparable `score`
+    whichever leg found it, so nothing downstream has to understand fusion. The
+    cost is a vector comparison over at most `candidate_depth` rows, which is
+    not an index question at that size.
+
+    The tenant join is identical to the dense leg's, and for the identical
+    reason — `document_chunks` has no tenant column and this join is the only
+    defence it has.
+    """
+    distance = DocumentChunk.embedding.cosine_distance(query_vector)
+    tsquery = text(_OR_TSQUERY_SQL).bindparams(lexical_query=query_text)
+    rank = func.ts_rank_cd(_CONTENT_TSVECTOR, tsquery)
+    return (
+        select(
+            DocumentChunk.id,
+            DocumentChunk.content,
+            DocumentChunk.chunk_index,
+            DocumentChunk.token_count,
+            Document.id.label("document_id"),
+            Document.file_name,
+            (1 - distance).label("score"),
+        )
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .where(
+            Document.organization_id == organization_id,
+            Document.knowledge_base_id == knowledge_base_id,
+            _CONTENT_TSVECTOR.op("@@")(tsquery),
+        )
+        .order_by(desc(rank))
         .limit(top_k)
     )
 
@@ -276,6 +378,24 @@ class KnowledgeBaseRepository:
             .limit(limit)
         )
         return (await self.db.execute(stmt)).scalars().all()
+
+    async def search_chunks_lexical(
+        self,
+        organization_id: uuid.UUID,
+        knowledge_base_id: uuid.UUID,
+        query_vector: Sequence[float],
+        query_text: str,
+        top_k: int,
+    ) -> Sequence[Any]:
+        """Execute `build_chunk_lexical_search_stmt` on this async session."""
+        stmt = build_chunk_lexical_search_stmt(
+            organization_id=organization_id,
+            knowledge_base_id=knowledge_base_id,
+            query_vector=query_vector,
+            query_text=query_text,
+            top_k=top_k,
+        )
+        return (await self.db.execute(stmt)).all()
 
     async def search_chunks(
         self,

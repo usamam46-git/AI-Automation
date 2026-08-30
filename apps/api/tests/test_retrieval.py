@@ -26,7 +26,7 @@ from sqlalchemy import select
 from src.core.llm_client import EmbeddingResult
 from src.graphs.node_handlers import ToolNodeConfigError, tool_handler
 from src.modules.knowledge_base.models import Document, DocumentChunk
-from src.modules.knowledge_base.service import RetrievalHit, RetrievalResult
+from src.modules.knowledge_base.service import RRF_K, RetrievalHit, RetrievalResult, fuse_hybrid
 
 DIMENSIONS = 1536
 
@@ -502,3 +502,108 @@ def test_a_node_cannot_repoint_a_registry_retrieval_tool_at_another_corpus():
     assert "knowledge_base_id" not in ToolService.NODE_OVERRIDABLE_KEYS
     assert "top_k" not in ToolService.NODE_OVERRIDABLE_KEYS
     assert "score_floor" not in ToolService.NODE_OVERRIDABLE_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Hybrid fusion (2026-08-30) — pure, no DB
+# ---------------------------------------------------------------------------
+
+
+class _Row:
+    """The shape both retrieval legs return: a row with these attributes."""
+
+    def __init__(self, chunk_id: int, score: float, chunk_index: int = 0, content: str = "text"):
+        self.id = chunk_id
+        self.score = score
+        self.chunk_index = chunk_index
+        self.content = content
+        self.document_id = uuid.uuid4()
+        self.file_name = "policy.pdf"
+        self.token_count = 10
+
+
+def test_a_chunk_both_legs_rank_beats_one_either_leg_adores():
+    """
+    The property RRF exists for: agreement between two independent rankers is
+    stronger evidence than a single ranker's confidence.
+    """
+    both = _Row(1, 0.50)
+    dense_only = _Row(2, 0.90)
+    lexical_only = _Row(3, 0.55)
+
+    hits = fuse_hybrid([dense_only, both], [both, lexical_only], score_floor=0.3, top_k=3)
+    assert [h.score for h in hits][0] == 0.50, "the chunk found by both legs must rank first"
+
+
+def test_a_lexical_only_hit_is_admitted_below_the_score_floor():
+    """
+    The whole reason the lexical leg was added.
+
+    "Can an employee approve their own expense claim?" against "Employees must
+    not approve their own expenses" is a NEGATION: the answering chunk scores
+    poorly on cosine however the document is chunked. Filtering lexical hits by
+    the cosine floor would reintroduce exactly the miss this leg fixes.
+    """
+    weak_but_literal = _Row(1, 0.11)
+    hits = fuse_hybrid([], [weak_but_literal], score_floor=0.3, top_k=3)
+    assert len(hits) == 1
+    assert hits[0].score == 0.11
+
+
+def test_a_dense_hit_below_the_floor_is_still_dropped():
+    """The floor keeps meaning what it meant for the leg it was measured on."""
+    assert fuse_hybrid([_Row(1, 0.11)], [], score_floor=0.3, top_k=3) == []
+
+
+def test_a_weak_dense_hit_is_rescued_when_the_lexical_leg_also_finds_it():
+    """Appearing in the lexical leg is itself the admission, whichever leg ranked it."""
+    row = _Row(1, 0.11)
+    assert len(fuse_hybrid([row], [row], score_floor=0.3, top_k=3)) == 1
+
+
+def test_the_returned_score_is_always_cosine_similarity():
+    """
+    Fusion governs ORDER only. `score` stays cosine so the retrieval playground's
+    cutoff line, every stored `score_floor` and every caller keep working — an
+    RRF score is ~0.016 at rank 1 and would make `score_floor: 0.3` filter
+    everything.
+    """
+    hits = fuse_hybrid([_Row(1, 0.80)], [_Row(2, 0.42)], score_floor=0.3, top_k=5)
+    assert sorted(h.score for h in hits) == [0.42, 0.80]
+    assert all(h.score <= 1.0 for h in hits)
+
+
+def test_a_genuine_tie_breaks_deterministically():
+    """
+    An unstable retrieval order makes an agent's answer irreproducible for
+    reasons nobody can see.
+
+    A real tie needs equal RRF contributions — rank 1 in one leg each, not ranks
+    1 and 2 of the same leg. With cosine equal too, the chunk index decides, and
+    which leg found which must not change the answer.
+    """
+    a = _Row(1, 0.50, chunk_index=7)
+    b = _Row(2, 0.50, chunk_index=2)
+    assert [h.chunk_index for h in fuse_hybrid([a], [b], score_floor=0.3, top_k=5)] == [2, 7]
+    assert [h.chunk_index for h in fuse_hybrid([b], [a], score_floor=0.3, top_k=5)] == [2, 7]
+
+
+def test_an_equal_rank_tie_breaks_on_cosine_before_index():
+    """Both at rank 1 of a leg each, so only the cosine score separates them."""
+    strong = _Row(1, 0.80, chunk_index=9)
+    weak = _Row(2, 0.40, chunk_index=0)
+    assert [h.score for h in fuse_hybrid([strong], [weak], score_floor=0.3, top_k=5)] == [0.80, 0.40]
+
+
+def test_the_fused_list_is_trimmed_to_top_k():
+    rows = [_Row(i, 0.9, chunk_index=i) for i in range(10)]
+    assert len(fuse_hybrid(rows, [], score_floor=0.3, top_k=3)) == 3
+
+
+def test_rank_contribution_falls_off_with_position():
+    """Guards the RRF constant against being set to something that inverts it."""
+    assert 1 / (RRF_K + 1) > 1 / (RRF_K + 2) > 0
+
+
+def test_both_legs_empty_is_a_result_not_a_failure():
+    assert fuse_hybrid([], [], score_floor=0.3, top_k=5) == []

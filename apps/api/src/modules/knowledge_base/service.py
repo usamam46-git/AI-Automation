@@ -40,7 +40,9 @@ from src.modules.knowledge_base.repository import (
     DEFAULT_TOP_K,
     MAX_TOP_K,
     KnowledgeBaseRepository,
+    build_chunk_lexical_search_stmt,
     build_chunk_search_stmt,
+    candidate_depth,
 )
 from src.modules.knowledge_base.schemas import KnowledgeBaseCreate, KnowledgeBaseUpdate
 from src.modules.workspaces.models import Workspace
@@ -82,25 +84,85 @@ class RetrievalResult:
     cost_usd: float
 
 
-def _shape_hits(rows: Sequence[Any], score_floor: float) -> list[RetrievalHit]:
-    """
-    Trim the ranked rows to those clearing the floor.
+def _to_hit(row: Any) -> RetrievalHit:
+    return RetrievalHit(
+        document_id=row.document_id,
+        document_name=row.file_name,
+        chunk_index=row.chunk_index,
+        content=row.content,
+        score=float(row.score),
+    )
 
-    Applied here rather than in SQL so the ORDER BY can stay on raw cosine
-    distance and keep using the HNSW index — see `build_chunk_search_stmt`.
-    Rows arrive already sorted best-first, so this preserves rank.
+
+#: Reciprocal-rank-fusion constant. 60 is the value from the original RRF paper
+#: and the one every implementation uses; it flattens the difference between
+#: adjacent top ranks so a chunk that both legs like beats one that either leg
+#: adores. Raising it flattens further, lowering it makes rank 1 dominate.
+RRF_K = 60
+
+
+def fuse_hybrid(
+    dense_rows: Sequence[Any],
+    lexical_rows: Sequence[Any],
+    *,
+    score_floor: float,
+    top_k: int,
+) -> list[RetrievalHit]:
     """
-    return [
-        RetrievalHit(
-            document_id=row.document_id,
-            document_name=row.file_name,
-            chunk_index=row.chunk_index,
-            content=row.content,
-            score=float(row.score),
-        )
-        for row in rows
-        if float(row.score) >= score_floor
-    ]
+    Merge the two ranked legs into one list, best first.
+
+    ## Why rank fusion and not score blending
+
+    The two legs produce incomparable numbers: cosine similarity is bounded in
+    [-1, 1] and calibrated, `ts_rank_cd` is unbounded and depends on document
+    length and term density. Any weighted sum of them needs a normalisation that
+    is a guess, and the guess silently decides retrieval quality. **RRF uses only
+    the positions**, so nothing has to be normalised and the fusion cannot be
+    wrong about a scale it never reads.
+
+    ## The floor applies to the dense leg only
+
+    This is the decision most worth understanding before changing anything here.
+    `score_floor` is a statement about SEMANTIC similarity — the day-1 probe put
+    an answering clause at 0.51 and an unrelated one at 0.10, and 0.3 sits in
+    that gap. A literal phrase match is a different kind of evidence and does not
+    have to clear that bar to be relevant; the negation case this whole leg
+    exists for is precisely a chunk whose cosine score is mediocre. Filtering
+    lexical hits by cosine would reintroduce the miss the leg was added to fix.
+
+    So: a dense hit must clear the floor, a lexical hit is admitted on its text
+    match, and a chunk found by both is admitted regardless. The returned `score`
+    stays cosine similarity in every case, so callers, the retrieval playground's
+    cutoff line and every stored `score_floor` keep meaning what they meant.
+
+    ## Ordering
+
+    Rank is 1-based per leg. A chunk in both legs sums both contributions, which
+    is what makes agreement between the legs the strongest signal available. Ties
+    break on cosine score, then on chunk index, so the output is deterministic —
+    an unstable retrieval order makes an agent's answer irreproducible for
+    reasons no one can see.
+    """
+    contributions: dict[Any, float] = {}
+    rows_by_id: dict[Any, Any] = {}
+    admitted: set[Any] = set()
+
+    for rank, row in enumerate(dense_rows, start=1):
+        rows_by_id[row.id] = row
+        contributions[row.id] = contributions.get(row.id, 0.0) + 1.0 / (RRF_K + rank)
+        if float(row.score) >= score_floor:
+            admitted.add(row.id)
+
+    for rank, row in enumerate(lexical_rows, start=1):
+        rows_by_id.setdefault(row.id, row)
+        contributions[row.id] = contributions.get(row.id, 0.0) + 1.0 / (RRF_K + rank)
+        admitted.add(row.id)
+
+    ordered = sorted(
+        (rows_by_id[chunk_id] for chunk_id in admitted),
+        key=lambda row: (-contributions[row.id], -float(row.score), row.chunk_index),
+    )
+    return [_to_hit(row) for row in ordered[:top_k]]
 
 
 def _clamp_top_k(top_k: int | None) -> int:
@@ -189,18 +251,29 @@ def search_knowledge_base_sync(
             raise LookupError(f"Knowledge base {knowledge_base_id} not found.")
 
         embedded = _embed_query(query=query, model=kb.embedding_model, client_factory=client_factory)
-        rows = session.execute(
+        limit = _clamp_top_k(top_k)
+        depth = candidate_depth(limit)
+        dense_rows = session.execute(
             build_chunk_search_stmt(
                 organization_id=organization_id,
                 knowledge_base_id=knowledge_base_id,
                 query_vector=embedded.vector,
-                top_k=_clamp_top_k(top_k),
+                top_k=depth,
+            )
+        ).all()
+        lexical_rows = session.execute(
+            build_chunk_lexical_search_stmt(
+                organization_id=organization_id,
+                knowledge_base_id=knowledge_base_id,
+                query_vector=embedded.vector,
+                query_text=query,
+                top_k=depth,
             )
         ).all()
 
     floor = DEFAULT_SCORE_FLOOR if score_floor is None else score_floor
     return RetrievalResult(
-        hits=_shape_hits(rows, floor),
+        hits=fuse_hybrid(dense_rows, lexical_rows, score_floor=floor, top_k=limit),
         model=embedded.model,
         tokens=embedded.tokens,
         cost_usd=embedded.cost_usd,
@@ -454,10 +527,13 @@ class KnowledgeBaseService:
             model=kb.embedding_model,
             client_factory=factory,
         )
-        rows = await self.repo.search_chunks(organization_id, kb_id, result.vector, _clamp_top_k(top_k))
+        limit = _clamp_top_k(top_k)
+        depth = candidate_depth(limit)
+        dense_rows = await self.repo.search_chunks(organization_id, kb_id, result.vector, depth)
+        lexical_rows = await self.repo.search_chunks_lexical(organization_id, kb_id, result.vector, query, depth)
         floor = DEFAULT_SCORE_FLOOR if score_floor is None else score_floor
         return RetrievalResult(
-            hits=_shape_hits(rows, floor),
+            hits=fuse_hybrid(dense_rows, lexical_rows, score_floor=floor, top_k=limit),
             model=result.model,
             tokens=result.tokens,
             cost_usd=result.cost_usd,

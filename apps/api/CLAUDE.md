@@ -1092,6 +1092,74 @@ as a signature default binds the function object once at import, which defeats
 monkeypatching and any later re-binding — it cost five failing tests during the
 build. Both search paths take `None` and resolve inside the body instead.
 
+## Hybrid retrieval — dense + full text (landed 2026-08-30)
+
+`build_chunk_lexical_search_stmt` in `knowledge_base/repository.py`, `fuse_hybrid`
+in its service. **No migration** — `ix_document_chunks_content_gin` shipped in the
+initial schema and had never been queried once.
+
+**It exists for one measured failure that chunking cannot fix: negation.** Asked
+*"Can an employee approve their own expense claim?"* against a policy stating
+*"Employees must not approve their own expenses"*, the answering chunk did not
+reach the top 3. A question and its prohibition sit apart in embedding space
+however the document is cut — re-chunking was tried first and moved that query
+not at all. That phrase is a near-literal lexical match, which is what full text
+is good at. On the Afaqhims corpus this took **top-3 from 7/8 to 8/8**; top-1 is
+unchanged at 7/8, so this is a recall fix, not a ranking fix.
+
+- **Two statements, fused in Python — not one clever query.**
+  `build_chunk_search_stmt` must keep `ORDER BY <cosine distance>` with nothing
+  else in the way or it stops matching the HNSW index, and folding a second
+  ranking into it is the likeliest way for that to happen by accident.
+- **The lexical leg also computes the cosine score**, though it orders by
+  `ts_rank_cd`. So every hit carries a real, comparable `score` whichever leg
+  found it and nothing downstream has to understand fusion. Costs a vector
+  comparison over `candidate_depth` rows, which is not an index question.
+- **RRF, not score blending.** Cosine is bounded and calibrated; `ts_rank_cd` is
+  unbounded and depends on length and term density. Any weighted sum needs a
+  normalisation that is a guess, and the guess silently decides retrieval
+  quality. RRF reads only positions, so nothing needs normalising.
+- **The returned `score` stays cosine similarity. Fusion governs ORDER only.**
+  An RRF score is ~0.016 at rank 1, so returning it would make every stored
+  `score_floor: 0.3` filter everything and would break the playground's cutoff
+  line. This is the constraint to remember before "improving" the response.
+- **The floor applies to the DENSE leg only; a lexical hit is admitted on its
+  text match.** The floor is a statement about *semantic* similarity — the day-1
+  probe put an answering clause at 0.51 and an unrelated one at 0.10. A literal
+  phrase match is different evidence, and the negation case this leg exists for
+  is precisely a chunk whose cosine is mediocre. Filtering lexical hits by cosine
+  reintroduces the miss. Pinned by
+  `test_a_lexical_only_hit_is_admitted_below_the_score_floor`.
+- **The tsquery is OR, not AND, and that is the whole reason the leg works.**
+  `plainto_tsquery` and `websearch_to_tsquery` both AND their terms, so a natural
+  question asks for a chunk containing every one of `employe & approv & expens &
+  claim` and routinely matches nothing. Lexemes come from `to_tsvector` (stemmed
+  and stopword-filtered exactly like the indexed side), are `quote_literal`-wrapped
+  because a lexeme may contain an apostrophe, and are OR-ed — letting `ts_rank_cd`
+  discriminate instead of the matcher. An all-stopword query aggregates to NULL,
+  `@@ NULL` is NULL, and the leg returns nothing: correct degradation, not an error.
+- **`_CONTENT_TSVECTOR` must match the index expression character for
+  character**, including the `'english'::regconfig` cast. Verified with EXPLAIN:
+  `Bitmap Index Scan on ix_document_chunks_content_gin`. Drop the cast and you
+  get a different expression and a sequential scan.
+- **`candidate_depth` (4x top_k, min 20) is load-bearing.** Fusing only the top_k
+  of each leg defeats the point — the chunk this rescues is one the dense leg
+  ranks *poorly*, so it has to be inside the candidate window to be rescued.
+- **Ties break on cosine, then chunk index**, so output is deterministic. An
+  unstable retrieval order makes an agent's answer irreproducible for reasons
+  nobody can see.
+
+**Note on EXPLAIN at small scale:** with a 54-row `document_chunks`, Postgres
+joins from `documents` first and uses neither the HNSW nor the GIN index — that
+is the planner being right, and it was equally true of the dense leg before this
+change. Both statements are written in the index-compatible form, so the plans
+flip when the corpus justifies it. Do not "fix" a plan that says seq scan on a
+toy corpus.
+
+**No config knob, deliberately.** Hybrid is always on. A retrieval switch nobody
+understands is worse than a decision, and `knowledge_search`'s node/registry
+split already has enough surface.
+
 ## Notifications + the `notify` tool type (landed 2026-08-23)
 
 `notifications` shipped in the initial schema and **nothing had ever written a
