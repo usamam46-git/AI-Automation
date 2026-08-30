@@ -16,8 +16,10 @@ from src.core.document_text import (
     MIME_MARKDOWN,
     MIME_PDF,
     MIME_PLAIN,
+    MIN_SECTION_TOKENS,
     UnextractableDocumentError,
     UnsupportedDocumentError,
+    _strip_running_lines,
     chunk_text,
     content_hash,
     count_tokens,
@@ -258,3 +260,148 @@ def test_default_window_is_sane_for_a_real_policy():
     chunks = chunk_text(POLICY)
     assert len(chunks) >= 1
     assert all(c.token_count <= DEFAULT_MAX_TOKENS for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# Running headers/footers, and section-aware chunking (2026-08-30)
+# ---------------------------------------------------------------------------
+
+
+def _section(number: int, title: str, words: int = 90) -> str:
+    """A heading plus enough body to clear MIN_SECTION_TOKENS on its own."""
+    return f"{number}. {title}\n" + ("policy sentence body text " * words)
+
+
+WORDS = ["alpha", "bravo", "charlie", "delta", "echo"]
+
+
+def _page(n: int, *, extra: list[str] | None = None) -> str:
+    """A realistic page: furniture at both edges, genuinely distinct prose between."""
+    body = [
+        f"The {WORDS[n]} clause requires original receipts.",
+        f"Finance reviews the {WORDS[n]} threshold each year.",
+        f"Travel under the {WORDS[n]} rule uses the lowest fare.",
+        f"Hospitality billed to {WORDS[n]} needs a documented purpose.",
+        f"Advances against {WORDS[n]} reconcile within ten days.",
+        f"Records for {WORDS[n]} are retained per the schedule.",
+    ]
+    return "\n".join(["ACME Policy - Internal Use", *(extra or []), *body, f"Page {n + 1}"])
+
+
+def test_running_header_and_footer_are_dropped():
+    cleaned = _strip_running_lines([_page(n) for n in range(5)])
+    assert all("Internal Use" not in page for page in cleaned)
+    # `Page 1` and `Page 5` differ only in digits and must be recognised as one
+    # recurring line, not five distinct ones.
+    assert all("Page" not in page for page in cleaned)
+    # The prose between the edges is untouched.
+    assert all(f"The {WORDS[n]} clause requires original receipts." in cleaned[n] for n in range(5))
+
+
+def test_a_heading_is_never_stripped_as_furniture():
+    """
+    A heading repeated at a page edge would otherwise meet the majority rule,
+    and headings are what `_mark_headings` chunks on — the worst line to lose.
+    """
+    cleaned = _strip_running_lines([_page(n, extra=["1. Overview"]) for n in range(5)])
+    assert all("Internal Use" not in page for page in cleaned)
+    assert all("1. Overview" in page for page in cleaned)
+
+
+def test_a_line_on_a_minority_of_pages_is_content_and_survives():
+    pages = [_page(n) for n in range(5)]
+    pages[0] = "Shared note.\n" + pages[0]
+    pages[1] = "Shared note.\n" + pages[1]
+    cleaned = _strip_running_lines(pages)
+    assert all("Shared note." in page for page in cleaned[:2])
+
+
+def test_a_single_page_document_is_never_stripped():
+    # Nothing to compare against, so every line is content by definition.
+    pages = [_page(0)]
+    assert _strip_running_lines(pages) == pages
+
+
+def test_indentation_cannot_smuggle_a_header_through():
+    cleaned = _strip_running_lines([_page(n).replace("ACME", "   ACME") for n in range(5)])
+    assert all("ACME" not in page for page in cleaned)
+
+
+def test_stripping_is_abandoned_rather_than_gutting_a_page():
+    """
+    Furniture is a couple of lines. A rule that would remove half a page has
+    stopped detecting headers and started deleting the document, so it bails
+    entirely — noise is recoverable, missing content is not. Reachable on short
+    pages, where the two edge windows overlap and every line is a candidate.
+    """
+    pages = [f"ACME - Internal\nRepeated body line.\nAlso repeated.\nPage {n}" for n in (1, 2, 3, 4, 5)]
+    assert _strip_running_lines(pages) == pages
+
+
+def test_numbered_headings_start_new_chunks():
+    text = "\n".join(_section(n, f"Section {n}") for n in (1, 2, 3))
+    chunks = chunk_text(text)
+    assert len(chunks) == 3
+    for n, chunk in zip((1, 2, 3), chunks, strict=True):
+        assert chunk.content.startswith(f"{n}. Section {n}")
+
+
+def test_markdown_headings_start_new_chunks():
+    text = "\n".join(f"## Heading {n}\n" + ("body sentence here " * 90) for n in (1, 2, 3))
+    assert len(chunk_text(text)) == 3
+
+
+def test_a_section_below_the_floor_merges_forward_instead_of_standing_alone():
+    # A bare heading stub embeds to almost nothing useful, so it must not become
+    # a chunk of its own.
+    text = "1. Tiny\nOne line.\n" + _section(2, "Substantial")
+    chunks = chunk_text(text)
+    assert len(chunks) == 1
+    assert chunks[0].content.startswith("1. Tiny")
+    assert "2. Substantial" in chunks[0].content
+
+
+def test_no_chunk_falls_below_the_floor_except_the_last():
+    text = "\n".join(_section(n, f"Section {n}") for n in range(1, 6))
+    chunks = chunk_text(text)
+    assert len(chunks) > 1
+    for chunk in chunks[:-1]:
+        assert chunk.token_count >= MIN_SECTION_TOKENS
+
+
+def test_overlap_is_not_carried_across_a_section_boundary():
+    # Overlap exists for an arbitrary mid-topic cut. A heading is the author
+    # saying the topic ends, so repeating the previous section's tail would put
+    # foreign text into the very embedding the split exists to sharpen.
+    text = _section(1, "Alpha") + "\nUNIQUEALPHATAIL.\n" + _section(2, "Beta")
+    chunks = chunk_text(text)
+    assert len(chunks) == 2
+    assert "UNIQUEALPHATAIL" in chunks[0].content
+    assert "UNIQUEALPHATAIL" not in chunks[1].content
+
+
+def test_overlap_still_applies_when_a_chunk_is_split_by_size_alone():
+    # No headings here, so every boundary is a size boundary and the tail must
+    # still be carried — the section rule must not disable ordinary overlap.
+    text = "\n\n".join(f"Paragraph {i}. " + ("word " * 10) for i in range(30))
+    chunks = chunk_text(text, max_tokens=200, overlap_tokens=60)
+    assert len(chunks) > 1
+    # The carried tail is whole units, so the next chunk BEGINS inside the
+    # previous one — its last paragraph must reappear there.
+    tail = chunks[0].content.split("\n\n")[-1]
+    assert tail in chunks[1].content
+    assert chunks[1].content.split("\n\n")[0] in chunks[0].content
+
+
+def test_a_decimal_in_prose_is_not_mistaken_for_a_heading():
+    text = "Budget rose 1. 4 percent this year.\n" + ("filler sentence text " * 120)
+    assert len(chunk_text(text)) == 1
+
+
+def test_control_characters_from_pdf_glyph_gaps_are_flattened():
+    # pypdf hands back U+007F where a PDF has no glyph mapping — bullets and
+    # en-dashes in the Afaqhims policy both arrived this way.
+    chunks = chunk_text("Title \x7f Subtitle\n\x7f First bullet.\n\x7f Second bullet.")
+    assert len(chunks) == 1
+    assert "\x7f" not in chunks[0].content
+    assert "First bullet." in chunks[0].content

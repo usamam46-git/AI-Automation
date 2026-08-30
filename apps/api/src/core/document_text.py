@@ -130,6 +130,103 @@ def _decode_text(data: bytes) -> str:
         return data.decode("latin-1", errors="replace")
 
 
+# A line has to appear on this fraction of pages before it counts as furniture
+# rather than content. 0.6 clears a running header on a 5-page policy while
+# leaving a sentence that happens to recur on two pages of a long document alone.
+_RUNNING_LINE_PAGE_RATIO = 0.6
+_DIGIT_RUN = re.compile(r"\d+")
+
+# How many lines at each end of a page can be furniture. A running header or
+# footer is by definition at an edge; restricting the search there is what keeps
+# digit-normalisation from eating body text (see `_strip_running_lines`).
+_RUNNING_LINE_EDGE = 3
+
+
+def _strip_running_lines(pages: list[str], ratio: float = _RUNNING_LINE_PAGE_RATIO) -> list[str]:
+    """
+    Drop the running header/footer a paginated document repeats on every page.
+
+    Every real policy PDF carries them — a title bar, a confidentiality mark, a
+    page number — and they are pure noise three times over: they are the same on
+    every page, so they push every chunk's embedding toward every other chunk's;
+    they consume the token budget that should hold policy text; and they are the
+    one thing in the document guaranteed to answer no question anyone asks.
+
+    Measured on a real 5-page policy: removing two such lines and splitting on
+    headings lifted the gap between the right chunk and the best wrong one from
+    +0.031 to +0.085 cosine — the number that decides whether a score floor means
+    anything.
+
+    Digits are normalised before counting so `Page 1` and `Page 2` are recognised
+    as one recurring line rather than five distinct ones. Comparison is on the
+    stripped line, but the ORIGINAL is what gets dropped, so indentation cannot
+    make a header survive.
+
+    **A heading is never a candidate, and only the outermost
+    `_RUNNING_LINE_EDGE` lines of a page are**,
+    and that restriction is doing real work rather than saving time. Digit
+    normalisation alone is far too eager in the middle of a page: a document
+    whose sections are headed `Article 1`, `Article 2`, ... collapses to one key
+    `Article #` that appears on most pages, and stripping those would delete the
+    headings — which, since `_mark_headings` now chunks on them, is the worst
+    possible line to lose. A running header is at an edge by definition, so
+    looking only there costs nothing and removes the failure mode. Caught by
+    `test_repeated_body_text_that_differs_only_in_digits_is_not_treated_as_furniture`.
+
+    Deliberately conservative: a single-page document has nothing to compare
+    against and is returned untouched, and `ratio` requires a genuine majority.
+    Removing a line that turns out to be content is worse than keeping noise.
+    """
+    if len(pages) < 2:
+        return pages
+
+    def key(line: str) -> str:
+        return _DIGIT_RUN.sub("#", line.strip())
+
+    def edges(lines: list[str]) -> list[int]:
+        """Indices of the lines near the top and bottom of a page."""
+        if len(lines) <= 2 * _RUNNING_LINE_EDGE:
+            return list(range(len(lines)))
+        return [*range(_RUNNING_LINE_EDGE), *range(len(lines) - _RUNNING_LINE_EDGE, len(lines))]
+
+    per_page: list[tuple[list[str], set[int]]] = []
+    counts: dict[str, int] = {}
+    for page in pages:
+        lines = page.splitlines()
+        # A heading is never furniture, and it is the single most costly line to
+        # lose now that `_mark_headings` chunks on it. `Section 1` / `Section 2`
+        # at the top of consecutive pages normalises to one key and would
+        # otherwise be stripped by the majority rule even at the page edge.
+        candidates = {i for i in edges(lines) if lines[i].strip() and not _HEADING_LINE.match(lines[i].strip())}
+        per_page.append((lines, candidates))
+        # Per page, not per occurrence: a line repeated twice on one page is not
+        # thereby a header.
+        for unique in {key(lines[i]) for i in candidates}:
+            counts[unique] = counts.get(unique, 0) + 1
+
+    threshold = max(2, int(len(pages) * ratio))
+    running = {line for line, count in counts.items() if count >= threshold}
+    if not running:
+        return pages
+
+    kept = [[line for i, line in enumerate(lines) if i not in candidates or key(line) not in running] for lines, candidates in per_page]
+
+    # Safety valve: furniture is a couple of lines, so a rule that would remove
+    # half a page has stopped detecting headers and started deleting the
+    # document. Reachable on a short page, where the edge windows overlap and
+    # every line is a candidate — a five-line page of prose that varies only by
+    # digits was emptied outright before this. Bail entirely rather than
+    # partially: the whole point is that a document is better with noise in it
+    # than with content missing.
+    for original, remaining in zip(pages, kept, strict=True):
+        before = sum(1 for line in original.splitlines() if line.strip())
+        after = sum(1 for line in remaining if line.strip())
+        if before and after * 2 < before:
+            return pages
+
+    return ["\n".join(lines) for lines in kept]
+
+
 def _extract_pdf(data: bytes) -> ExtractedDocument:
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
@@ -143,7 +240,7 @@ def _extract_pdf(data: bytes) -> ExtractedDocument:
     # Page breaks are paragraph breaks for chunking purposes: joining with a
     # single newline would weld the last line of one page to the first of the
     # next and hide a real boundary from the paragraph packer.
-    return ExtractedDocument(text="\n\n".join(pages), page_count=len(pages))
+    return ExtractedDocument(text="\n\n".join(_strip_running_lines(pages)), page_count=len(pages))
 
 
 def _extract_docx(data: bytes) -> ExtractedDocument:
@@ -210,6 +307,17 @@ DEFAULT_OVERLAP_TOKENS = 60
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
 _WHITESPACE_RUN = re.compile(r"[ \t]+")
 
+# C0 and C1 controls plus DEL, excluding \n and \t which carry structure.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+# `4. Expense Approval & Authorization` or `## Approval`. See `_mark_headings`.
+_HEADING_LINE = re.compile(r"(?:#{1,6}\s+\S|\d{1,2}\.\s+[A-Z])")
+
+# A section shorter than this is merged forward instead of becoming its own
+# chunk. A 20-token heading stub embeds to almost nothing useful and would
+# outrank real content on a keyword-ish query purely by being short.
+MIN_SECTION_TOKENS = 110
+
 
 @lru_cache(maxsize=1)
 def _encoding() -> tiktoken.Encoding:
@@ -229,9 +337,46 @@ class TextChunk:
 
 
 def _normalise(text: str) -> str:
-    """Collapse horizontal whitespace and trim lines; keep blank-line structure."""
-    lines = [_WHITESPACE_RUN.sub(" ", line).strip() for line in text.replace("\r\n", "\n").split("\n")]
+    """
+    Collapse horizontal whitespace and trim lines; keep blank-line structure.
+
+    Control characters are flattened to a space first. PDF glyph tables routinely
+    map bullets and en-dashes onto unmapped code points, and pypdf hands those
+    back verbatim — the Afaqhims policy extracts its bullets and its title-bar
+    dashes as U+007F. They are replaced with a SPACE rather than a guessed `-`
+    or `•`: the byte says only "no glyph mapping", and inventing punctuation from
+    it would put characters in the corpus that are not in the document. Collapsing
+    to whitespace loses nothing an embedding uses, and the run collapse below
+    tidies up after it.
+    """
+    cleaned = _CONTROL_CHARS.sub(" ", text.replace("\r\n", "\n"))
+    lines = [_WHITESPACE_RUN.sub(" ", line).strip() for line in cleaned.split("\n")]
     return "\n".join(lines)
+
+
+def _mark_headings(text: str) -> str:
+    """
+    Put a blank line before every heading, so the paragraph packer sees sections.
+
+    Necessary because `pypdf` emits line breaks but almost never blank ones: a
+    whole page arrives as a single paragraph, so `_PARAGRAPH_SPLIT` saw five
+    units for a five-page policy and the packer welded them into four ~455-token
+    chunks covering three or four unrelated sections each. An embedding of that
+    is an average of everything in it, which is why the scores compressed into a
+    0.28-0.57 band with almost nothing separating a right answer from a wrong one.
+
+    Recognises a numbered heading (`4. Expense Approval`) and a Markdown one
+    (`## Approval`). The numbered form requires a capitalised word after the dot,
+    which keeps `1. 250,000` and a decimal in prose from being read as headings;
+    it is a heuristic, and a false positive costs one extra chunk boundary rather
+    than any loss of text.
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        if out and _HEADING_LINE.match(line.strip()):
+            out.append("")
+        out.append(line)
+    return "\n".join(out)
 
 
 def _split_oversized(unit: str, max_tokens: int) -> list[str]:
@@ -274,22 +419,26 @@ def chunk_text(
     if not 0 <= overlap_tokens < max_tokens:
         raise ValueError(f"overlap_tokens must be in [0, max_tokens), got {overlap_tokens} with max_tokens={max_tokens}")
 
-    normalised = _normalise(text)
-    units: list[str] = []
+    normalised = _mark_headings(_normalise(text))
+    # (text, starts_a_section). Only the FIRST fragment of an oversized block
+    # inherits the flag: the token-split remainder continues the same section.
+    units: list[tuple[str, bool]] = []
     for block in _PARAGRAPH_SPLIT.split(normalised):
         stripped = block.strip()
         if not stripped:
             continue
+        heads = bool(_HEADING_LINE.match(stripped.split("\n", 1)[0]))
         if count_tokens(stripped) > max_tokens:
-            units.extend(part for part in _split_oversized(stripped, max_tokens) if part.strip())
+            parts = [part for part in _split_oversized(stripped, max_tokens) if part.strip()]
+            units.extend((part, heads and position == 0) for position, part in enumerate(parts))
         else:
-            units.append(stripped)
+            units.append((stripped, heads))
 
     chunks: list[TextChunk] = []
     current: list[str] = []
     current_tokens = 0
 
-    def flush() -> None:
+    def flush(*, carry_overlap: bool = True) -> None:
         nonlocal current, current_tokens
         if not current:
             return
@@ -298,20 +447,34 @@ def chunk_text(
             chunks.append(TextChunk(index=len(chunks), content=content, token_count=count_tokens(content)))
         # Carry the tail forward as overlap. Whole units only — slicing a unit
         # here would reintroduce the mid-sentence cut the packer just avoided.
+        #
+        # NOT carried across a section boundary. Overlap exists so a fact
+        # spanning a boundary stays retrievable from both sides, which is a
+        # statement about an arbitrary cut mid-topic. A heading is the opposite:
+        # the author declared the topic ends there, and prepending the previous
+        # section's tail to a 130-token chunk would put ~45% foreign text into
+        # the very embedding this split exists to sharpen.
         carried: list[str] = []
         carried_tokens = 0
-        for unit in reversed(current):
-            unit_tokens = count_tokens(unit)
-            if carried_tokens + unit_tokens > overlap_tokens:
-                break
-            carried.insert(0, unit)
-            carried_tokens += unit_tokens
+        if carry_overlap:
+            for unit in reversed(current):
+                unit_tokens = count_tokens(unit)
+                if carried_tokens + unit_tokens > overlap_tokens:
+                    break
+                carried.insert(0, unit)
+                carried_tokens += unit_tokens
         current = carried
         current_tokens = carried_tokens
 
-    for unit in units:
+    for unit, starts_section in units:
         unit_tokens = count_tokens(unit)
-        if current and current_tokens + unit_tokens > max_tokens:
+        # A heading ends the previous chunk — but only once that chunk carries
+        # enough to stand on its own. Below the floor the section is merged
+        # forward, which is what stops a title page or a two-line clause from
+        # becoming a chunk that retrieves badly for everything.
+        if current and starts_section and current_tokens >= MIN_SECTION_TOKENS:
+            flush(carry_overlap=False)
+        elif current and current_tokens + unit_tokens > max_tokens:
             flush()
             # A single unit can exceed the window even after a flush when the
             # overlap tail is large; drop the tail rather than overflow.

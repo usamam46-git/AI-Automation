@@ -961,6 +961,75 @@ worker extracts, chunks, embeds → `indexed` with `page_count`, chunks carrying
   while wiring this up. `docker compose build worker_documents` after any change
   under `src/workers/`.
 
+### Chunking quality: running headers and section boundaries (2026-08-30)
+
+Two changes in `core/document_text.py`, no migration, no schema change. Driven by
+measurement on a real 5-page hospital expense policy, not by intuition — the same
+8 questions were embedded and scored before and after.
+
+**The problem.** `pypdf` emits line breaks but almost never blank ones, so
+`_PARAGRAPH_SPLIT` saw **one unit per page** and the packer welded a 16-section
+policy into **4 chunks of ~455 tokens**, each covering three or four unrelated
+sections. An embedding of that is an average of everything in it. Scores
+compressed into a 0.28-0.57 band with a mean gap of **+0.031** between the right
+chunk and the best wrong one — which makes any score floor arbitrary.
+
+**The fix, and what it bought.** Strip running headers/footers, then split on
+headings before packing: **11 chunks of ~130 tokens**, gap **+0.085**, and every
+query improved. Live figures on that policy: "approval for PKR 35,000"
+0.546 -> **0.692**, "above PKR 50,000" 0.570 -> **0.732**, and the top hit now
+clears second place by ~0.20 instead of ~0.06. Smaller chunks also mean an agent
+receiving `top_k=3` gets ~400 tokens of relevant policy instead of ~1,400 tokens
+of mostly-unrelated text.
+
+- **`_strip_running_lines` has three guards, and each closed a real failure found
+  while building it.** (1) **Only the outermost `_RUNNING_LINE_EDGE` lines of a
+  page are candidates** — digits are normalised so `Page 1`/`Page 2` collapse to
+  one key, and without the positional limit that same normalisation eats body
+  prose in the middle of a page. (2) **A line matching `_HEADING_LINE` is never
+  furniture**, because headings are what the chunker now splits on and therefore
+  the worst line in the document to lose. (3) **If the rule would remove more
+  than half of any page's non-blank lines it bails entirely** — furniture is a
+  couple of lines, so gutting a page means detection has failed, and noise is
+  recoverable where missing content is not. Reachable on short pages, where the
+  two edge windows overlap and every line is a candidate.
+- **`_mark_headings` inserts a blank line before each heading** so the existing
+  paragraph packer does the work; the packer itself only gained a section flag.
+  Recognises `4. Expense Approval` and `## Approval`. The numbered form requires
+  a capitalised word after the dot, so `1. 250,000` in prose is not a heading.
+- **`MIN_SECTION_TOKENS` (110) merges a runt section forward** rather than
+  letting a title page or a two-line clause become its own chunk — a very short
+  chunk embeds to little and retrieves badly for everything.
+- **Overlap is NOT carried across a section boundary** (`flush(carry_overlap=False)`).
+  Overlap exists so a fact spanning an *arbitrary* cut stays retrievable from
+  both sides. A heading is the author saying the topic ends there, and
+  prepending the previous section's tail to a 130-token chunk would put ~45%
+  foreign text into the very embedding the split exists to sharpen. Size-driven
+  flushes keep overlap exactly as before.
+- **Control characters are flattened to a SPACE, not to a guessed glyph.** PDF
+  glyph tables map bullets and en-dashes onto unmapped code points and pypdf
+  returns them verbatim — this policy's bullets and title dashes both arrive as
+  U+007F. The byte says only "no glyph mapping"; inventing `-` or `•` would put
+  characters in the corpus that are not in the document.
+
+**What this does NOT fix, and the measurement says so.** One of the eight
+queries still misses, before and after: *"Can an employee approve their own
+expense claim?"* against *"Employees must not approve their own expenses."* That
+is **negation**, not chunking — a question and its prohibition sit apart in
+embedding space however the text is cut. The fix for that class is hybrid
+retrieval; `ix_document_chunks_content_gin` (a GIN index on
+`to_tsvector('english', content)`) has shipped **unqueried since the initial
+schema** and is exactly what a lexical match on "approve their own" would use.
+Do not attribute this miss to chunk size — that was tried and measured.
+
+**Existing documents are NOT re-chunked, and re-uploading will not do it.**
+Upload dedup is by `content_hash`, so the same file returns 200 and stores
+nothing. **Delete the document from the KB, then upload it again.** (The
+ingestion task's own skip needs *both* a matching hash and existing chunks, so
+deleting just the chunk rows also forces a re-ingest — that is the cheap path
+when re-measuring.) And remember `worker_documents` does not bind-mount `src/`:
+**rebuild that image or ingestion silently keeps running the old chunker.**
+
 ## Retrieval / `knowledge_search` (landed 2026-08-16)
 
 Days 6–7. Cosine search over the HNSW index that shipped in the initial schema
@@ -1217,6 +1286,82 @@ response re-sends every node's accumulated state snapshot on every tick, and the
 builder's live overlay polls faster than the Execution Viewer does. It reuses
 `get_run`'s query rather than adding a second one — the saving is in the RESPONSE,
 which is where the cost was.
+
+## HIMS — the first real external system (2026-08-30)
+
+`src/db/hims_expense_seed.py`, `tests/test_hims_expense_graph.py`. Posts an
+expense into **Afaqhims**, a live production hospital system. Read this before
+editing either file; the failure modes here have a patient-facing organisation on
+the other end of them.
+
+```
+docker exec -w /app aap_api python -m src.db.hims_expense_seed --email you@example.com
+```
+
+Idempotent. It creates `expense_policy_search` and `hims_notify_finance` but
+**deliberately does not create `hims_create_expense`** — that row holds a live
+credential, `secrets` is write-only with no read-back, and a seed script that
+created it would either ship a production token in the repo or register a tool
+that 401s. It verifies the existing row instead and refuses to build on one that
+is not mutating, holds a literal credential in a header, or declares idempotency.
+
+- **The credential was found in plaintext once, and the check exists because of
+  it.** `tools.config` is plaintext JSONB returned by every read endpoint. The
+  row had the JWT correctly in `secrets` AND copied verbatim into the
+  `Authorization` header. Only `Bearer {{secrets.hims_token}}` is encrypted at
+  rest; `_verify_create_expense_tool` now fails the seed on any header matching
+  authorization/api-key/token that carries no `{{secrets.` reference.
+- **There is NO idempotency block, and adding one would be a lie.** Afaqhims does
+  not dedupe (confirmed with its owner). `_may_retry` therefore replays a failed
+  POST only when the request provably never arrived — so an unacknowledged write
+  is neither retried nor confirmed, and the recovery is to check HIMS by hand.
+- **Money routes deterministically and the model never touches it.**
+  `check_amount` compares `node_outputs.extract.amount_pkr` — a real number —
+  against PKR 10,000. Only ONE predicate plus one catch-all leaves that node,
+  because the condition DSL has no AND and an ordered ladder is unsafe here
+  (`save_draft` re-inserts every edge in one transaction, so `created_at` ties and
+  the tiebreak is a random UUID). The 10,001–50,000 versus above-50,000 split is
+  carried to the reviewer in `required_approval_level`, not by routing.
+- **The amount exists twice on purpose.** `amount_pkr` is a number for the
+  condition; `expense_amount` is a string because the API takes `"200"`. Both come
+  from one extraction and a test pins that neither drifts.
+- **A missing date is a POLICY violation, not an engine special case.**
+  `body_fields` resolves an unreachable path to `None` and **sends it** (unlike
+  `params_fields`, which drops the key), so a dateless payload would put
+  `"expense_date": null` into a hospital ledger. `extract` still refuses to invent
+  a date — a fabricated one is worse than a missing one, and "default to today" is
+  wrong whenever the expense was incurred on another day. Instead `assess` is told
+  that a missing date or amount is a breach, which the policy itself says it is,
+  so it surfaces as a named violation at the gate. **There is no clock in graph
+  state at all** (`initial_state_from_trigger` seeds no timestamp), so "use now"
+  is not buildable without a backend change plus a timezone decision.
+- **`shift_id` is hard-coded to 6 / "Evening".** The only pair evidenced by a real
+  request. Every expense this files is stamped Evening shift regardless of when it
+  happened — wrong data, not a failure, so nothing errors. Pinned by a test so
+  replacing it is deliberate.
+- **`expense_id` is NOT unique in HIMS.** Two expenses returned `srl_no` 6164 and
+  6165 carrying the same `expense_id` "EXP2028". `notify` reports both, `srl_no`
+  first, because it is the only value that identifies a row.
+- **Both branches are gated, which is stricter than the validator requires.**
+  `validate_mutating_approval` is ∃-semantics, so deleting ONE gate still
+  publishes while that branch posts unattended — pinned as an explicit caveat in
+  `test_removing_ONE_gate_still_publishes_and_that_is_a_known_limit`, alongside a
+  test asserting every path into the write passes a gate.
+
+### The bring-up route — reuse it for the next real system
+
+Never point a new mutating tool at a live host first. What worked:
+
+1. Run a local echo container on the compose network (`--network infra_default`)
+   and PATCH the tool's `url` at it. Nothing leaves the machine.
+2. Run past the gate with `allow_mutating`, then read the captured request. The
+   check that matters is that `Authorization` carries the **decrypted** token and
+   not the literal `{{secrets.…}}` — that substitution had never executed, and its
+   failure mode against a live API is a 401 that reads as a revoked credential.
+3. Only then restore the real URL and run once with a small amount.
+
+Note the harness blocks an agent from approving a run at a gate, which is correct
+— that decision is the product's whole point. A human runs the approve step.
 
 ## Demo seed — `src/db/demo/` (landed 2026-08-17)
 

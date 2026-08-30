@@ -97,19 +97,32 @@ inventing an approach that isn't documented anywhere.
 
 ## External systems — the honest line
 
-**No real external system has ever been called by this platform.** Everything
-below was proven against systems we control: a mock `erp_connector` returning
-`MOCK-<uuid>`, our own signed webhook, our own MinIO, our own corpus. All of that
-passes end to end, in a browser, through real Celery workers, without exercising
-one third-party API — which is exactly why the gaps went unnoticed until someone
-asked what pointing at a real ERP would take (2026-08-23).
+**A real, live external system HAS now been written to — once, on 2026-08-30.**
+This line said the opposite for the platform's whole history and the change is
+worth reading rather than skimming.
 
-Connecting to a real system today means an **`http_request` registry tool**.
-`erp_connector` is a mock and is not that path. The full real/mock/missing table
-lives in apps/api/CLAUDE.md; the one that bites hardest is that
-`worker_notifications` still has an empty task registry and there is no `notify`
-NodeType, so **every Vol. 5 HR workflow's terminal Notify step has no
-implementation**.
+Everything before that date was proven against systems we control: a mock
+`erp_connector` returning `MOCK-<uuid>`, our own signed webhook, our own MinIO,
+our own corpus. All of it passed end to end, in a browser, through real Celery
+workers, without exercising one third-party API — which is exactly why the gaps
+went unnoticed until someone asked what pointing at a real ERP would take
+(2026-08-23).
+
+What changed: an `http_request` registry tool now posts an expense into
+**Afaqhims**, a production hospital information system, through
+`POST https://api.afaqhims.com/api/expenses`. A PKR 200 expense was created for
+real (HTTP 201, `srl_no` 6165) after a human approved it at a gate. See the HIMS
+section below and `apps/api/src/db/hims_expense_seed.py`.
+
+**`erp_connector` is still a mock and still is not the path.** Connecting to a
+real system means an `http_request` registry tool marked `is_mutating` with a
+`human_approval` node upstream. The full real/mock/missing table lives in
+apps/api/CLAUDE.md.
+
+Notifications are no longer in that gap list — `worker_notifications` gained a
+task registry and a `notify` tool type on 2026-08-23, so Vol. 5's terminal
+Notify step has an implementation. Purpose-built ERP/HR adapters still do not
+exist and are not planned.
 
 Keep this section current. A feature list that reads as a victory lap while
 "ERP" appears throughout is how three weeks of work leaves someone believing the
@@ -1215,6 +1228,26 @@ verified via a full read-only orientation pass — see note below.)
   per second, making a dead loop indistinguishable from the known frozen-ticker
   artifact. Fixed by moving the wiring into a child using `useLenis()`. Contracts
   and the tick-harness recipe are in apps/web/CLAUDE.md's smooth-scroll section.
+- **First real external system integration landed 2026-08-30 — Afaqhims (HIMS).**
+  `apps/api/src/db/hims_expense_seed.py` publishes a manual-trigger workflow into
+  the `HIMS` workspace: `start → extract → policy_lookup → assess → check_amount
+  → approval_finance | approval_manager → post_expense → notify → end`. It reads
+  an expense request, grounds the check in the hospital's own expense-policy PDF,
+  routes deterministically on the policy's PKR 10,000 boundary, holds at a human
+  gate on **both** branches, and then POSTs to a live production API.
+  **Proven end to end: HTTP 201, a real expense row (`srl_no` 6165), $0.000939.**
+  Read `apps/api/CLAUDE.md`'s HIMS section before touching it. The load-bearing
+  points: the credential lives in `tools.secrets_encrypted` and is referenced as
+  `{{secrets.hims_token}}` — it was found copied verbatim into a plaintext
+  `headers` entry and that must not recur; there is **no idempotency** because
+  the endpoint does not dedupe, so an unacknowledged write is neither retried nor
+  confirmed; `shift_id` is hard-coded to 6/"Evening"; and `expense_id` is NOT
+  unique in HIMS (`srl_no` is), which is why notify reports both.
+  The bring-up route that made this safe is worth reusing: a local echo container
+  on the compose network first, to read the exact body and confirm secret
+  substitution, *then* the real host. **588 backend tests** (571 + 17 in
+  `tests/test_hims_expense_graph.py`, which runs the graph through the real
+  validators with no DB).
 - Next: **actually deploy** (the stack is written and locally verified but has
   never run on a VPS — see `infra/DEPLOY.md`), then **scheduled off-host
   database backups**, which is the largest gap the moment real data exists.
