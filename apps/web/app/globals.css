@@ -1,6 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Lenis owns the document scroll on `app/(marketing)/` only — its rules are all
+   scoped to the `.lenis` class it puts on <html> while an instance is live, so
+   the app routes are untouched. Note `html.lenis { height: auto }` is (0,1,1)
+   and therefore beats the `h-full` on <html> in `app/layout.tsx` at (0,1,0);
+   that is Lenis's intent, not a collision. */
+@import "lenis/dist/lenis.css";
 
 @custom-variant dark (&:is(.dark *));
 

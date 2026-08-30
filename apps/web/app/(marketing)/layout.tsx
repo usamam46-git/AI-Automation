@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { MkNav } from "@/components/marketing/mk-nav";
 import { MkFooter } from "@/components/marketing/mk-footer";
+import { SmoothScroll } from "@/components/marketing/smooth-scroll";
 
 export const metadata: Metadata = {
   title: "Orkest AI — Automation that knows when to ask",
@@ -21,19 +22,27 @@ export const metadata: Metadata = {
  * come out light too without a per-component override.
  *
  * The app routes are unaffected and keep both themes.
+ *
+ * `SmoothScroll` scopes Lenis to this subtree for the same reason. The product
+ * behind the login has inner scrollers of its own — the shell's `main`, the
+ * ScrollArea primitive, the React Flow builder canvas — and taking over the
+ * document scroll there is all risk and no benefit. The landing page is the
+ * only surface here whose centrepiece is a scroll scrub.
  */
 export default function MarketingLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="mk-root min-h-screen bg-mk-paper text-mk-ink">
-      <a
-        href="#main"
-        className="sr-only rounded-full bg-mk-ink px-4 py-2 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[60]"
-      >
-        Skip to content
-      </a>
-      <MkNav />
-      <main id="main">{children}</main>
-      <MkFooter />
+      <SmoothScroll>
+        <a
+          href="#main"
+          className="sr-only rounded-full bg-mk-ink px-4 py-2 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[60]"
+        >
+          Skip to content
+        </a>
+        <MkNav />
+        <main id="main">{children}</main>
+        <MkFooter />
+      </SmoothScroll>
     </div>
   );
 }

@@ -876,6 +876,131 @@ hooks: `use-media-query.ts`, `use-gsap-reveal.ts`.
   across every section. The responsive classes and the `lg`-gated pin are
   reasoned, not observed — check them on a real device before launch.
 
+## Smooth scroll — Lenis owns the marketing scroll (2026-08-30)
+
+`lib/smooth-scroll.ts` (pure, vitest-covered), `components/marketing/smooth-scroll.tsx`,
+wrapped around the subtree in `app/(marketing)/layout.tsx`. One new dependency,
+`lenis`, plus `@import "lenis/dist/lenis.css"` in `globals.css`.
+
+The scene's choreography was fine; the **driver** was raw. One
+`ScrollTrigger.create({ scrub: true })` mapped native scroll straight onto scene
+progress, and native scroll is not continuous — a wheel notch is a ~100px jump.
+So the camera (damped by `CameraRig`) glided while the plate transform, the
+backdrop gradient, hero opacity and every document position snapped. Lenis
+interpolates the input instead: GSAP's ticker drives `lenis.raf`, ScrollTrigger
+reads the smoothed position, and **nothing in `lib/scene-script.ts` changed** —
+progress still arrives as a 0-1 float, so every composition rule, projection
+test and contrast measurement holds.
+
+Five rules, in the order they will bite someone:
+
+- **`ScrollTrigger.normalizeScroll()` must never be enabled.** It and Lenis both
+  take ownership of the scroll position. `lib/gsap.ts` has never called it and
+  now says so; `ScrollTrigger.config({ ignoreMobileResize: true })` is a
+  different thing and stays.
+- **`scrub` stays boolean.** Lenis is the smoothing layer now, so a numeric
+  `scrub` would smooth an already-smoothed signal and read as lag, not weight.
+- **Any new in-page jump goes through `lenis.scrollTo`**, never
+  `scrollIntoView({ behavior: "smooth" })` and never `scroll-behavior: smooth` —
+  the browser's animation and Lenis's fight over the same position. Ordinary
+  `<a href="#…">` links need no change: `anchors: true` intercepts them, which
+  covers `mk-nav.tsx`, `faq.tsx`, `mk-footer.tsx` and the layout's skip link.
+  The hero's "Watch a run" is the one non-anchor jump and calls `scrollTo`
+  directly, with `offset: 0` mirroring the marker's explicit `scrollMarginTop: 0`.
+- **The GSAP wiring lives in a CHILD component using `useLenis()`, never in a
+  `ref` on `<ReactLenis>`.** This shipped wrong once and the symptom is worth
+  recognising: **the mouse wheel did nothing at all while the scrollbar and the
+  arrow keys worked fine.** `ReactLenis` holds its instance in `useState` and
+  creates it in its own effect, exposing it via `useImperativeHandle(..., [lenis])`
+  — so on the first commit the ref's `lenis` is `undefined`, and the `setLenis`
+  that follows re-renders `ReactLenis`, **not its parent**. A parent effect reads
+  `undefined`, bails, and never runs again. Lenis's own wheel listener attaches
+  regardless and calls `preventDefault`, so the wheel is swallowed while `raf` is
+  never driven; the scrollbar and keyboard set the native scroll position
+  directly, bypass the virtual scroll, and keep working. That asymmetry makes a
+  dead animation loop read as a wheel-specific bug.
+- **`SmoothScroll` is always mounted, never conditionally rendered.**
+  `usePrefersReducedMotion()` returns `false` on the first client render and then
+  settles, so gating the component on it would unmount and remount the whole
+  marketing subtree — WebGL canvas included — on that settle. Reduced motion is
+  expressed through the *options* (`smoothWheel: false`, `anchors: { immediate: true }`).
+- **`autoRaf: false` and `syncTouch: false` are pinned by tests, not by taste.**
+  A second raf loop desynchronises Lenis from `ScrollTrigger.update`, which runs
+  on the same ticker; `syncTouch` fights iOS momentum and is the usual source of
+  "laggy on mobile" with this library. `lerp: 0.1` is the feel knob and is
+  Lenis's own default.
+
+Window mode, no `wrapper`, so it animates the **real** scroll position — the
+sticky stage, the 420vh container and `sceneAnchorTopVh`'s absolute `vh` offset
+are all untouched. Do not reach for a transform-based wrapper.
+
+`html.lenis { height: auto }` (specificity 0,1,1) overrides the `h-full` on
+`<html>` from `app/layout.tsx` (0,1,0) while an instance is live. That is Lenis's
+intent, verified benign: at the page bottom the footer sits flush and html/body
+resolve to the content height.
+
+### Verifying this — and why the first check missed a dead page
+
+**`window.__orkestScroll` is the handle** (dev only, the `__orkestApplyProgress`
+precedent): `{ lenis, tick }`, where `tick()` forces one GSAP ticker frame.
+
+This is not convenience, it is the only way to see anything. Browser automation
+runs this page with `document.visibilityState === "hidden"` permanently, where
+`requestAnimationFrame` fires **zero** times per second — measured directly, not
+assumed. GSAP's ticker is therefore frozen, `lenis.raf` never runs, and **no**
+animated scroll of any kind is observable: not Lenis's, not
+`scrollIntoView({ behavior: "smooth" })`, not a GSAP tween.
+
+**That is exactly how the ref bug above survived a browser check.** A queued
+`scrollTo` that never moves looks identical to a broken one, and every symptom of
+the dead loop — wheel swallowed, page motionless — was written off as the known
+frozen-rAF artifact. The page shipped unscrollable by wheel. Anchor clicks
+appeared to work only because the **browser's own hash jump** did them.
+
+So: never conclude the smoothing works from a page that merely renders. Drive the
+ticker and read positions.
+
+```js
+const h = window.__orkestScroll;
+h.lenis.scrollTo(0, { immediate: true });
+dispatchEvent(new WheelEvent('wheel', { deltaY: 600, cancelable: true }));
+for (let i = 0; i < 26; i++) {
+  await new Promise(r => setTimeout(r, 16));   // real elapsed time per tick
+  h.tick();
+  console.log(Math.round(scrollY));
+}
+```
+
+**The `setTimeout(16)` is load-bearing.** Lenis damps against real elapsed time,
+so back-to-back `tick()` calls pass a ~0ms delta and the page crawls a few pixels
+— which looks like the same failure again. With real time between ticks the
+output is the lerp curve: 26 distinct positions easing 68 → 588 toward a 600
+target. Anything that lands in one step, or does not move, is a broken chain.
+For the same reason the **first** tick after a pause over-integrates and jumps;
+ignore it. Keep loops under ~30 iterations or the CDP call times out at 45s.
+
+Confirmed this way after the fix: bridge mounted, `wheelPrevented: true`,
+`targetScroll` set, scrollY easing across 26 distinct positions, scene progress
+tracking it, and a real 3-tick wheel gesture landing mid-transition. Also
+verified: Lenis intercepts the wheel on `/` and **not** on `/login` (no `lenis`
+classes there, `<html>` back to 936px) — that pair is the proof the scoping
+works; `position: sticky` still resolves; `#how-it-works` lands at progress
+**0.5202** against the run scene's 0.52, matching the figure recorded on
+2026-08-18, from both the nav anchor and the hero button's `lenis.scrollTo`; no
+horizontal overflow; footer flush at the bottom.
+
+**Still unverified:** the *feel* at 60fps under a real hand on a real wheel
+(nobody has scrolled this outside the tick harness), the reduced-motion path in a
+browser (the pure function is tested, the media query was never toggled), and
+**any real phone** — touch is deliberately left on the browser's own momentum so
+this change cannot regress mobile.
+
+One consequence to keep in mind: because Lenis preventDefaults the wheel, wheel
+scrolling now **depends on the ticker**. GSAP wakes it on `visibilitychange` so a
+backgrounded tab recovers, and the scrollbar and keyboard bypass Lenis entirely
+so the page is never fully stuck — but anything that kills the ticker for good
+now costs the wheel, not just the animation.
+
 ## 3D scene — "The Company Comes Alive" (all 5 phases done, 2026-08-13)
 
 A scroll-scrubbed WebGL narrative that is now **the landing page's opening**, and

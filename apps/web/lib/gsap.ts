@@ -14,9 +14,14 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 
-  // The page is long and pins two sections. Normalising means ScrollTrigger
-  // takes over scroll position itself, which removes the iOS address-bar
-  // resize jitter that otherwise re-triggers every pin on the first flick.
+  // The page is long and pins two sections, and on iOS the address bar
+  // collapsing on the first flick fires a resize that re-triggers every one of
+  // them. Ignoring that class of resize is the fix.
+  //
+  // This is NOT `ScrollTrigger.normalizeScroll()`, which this file has never
+  // called and now must never call: `components/marketing/smooth-scroll.tsx`
+  // gives the scroll position to Lenis, and normalizeScroll takes it over too.
+  // Two owners of one scroll position is a fight neither wins.
   ScrollTrigger.config({ ignoreMobileResize: true });
 }
 

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useLenis } from "lenis/react";
 import { KeyRound, Lock, ScrollText } from "lucide-react";
 
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
@@ -90,6 +91,30 @@ const PROOF = [
 
 export function HeroCopy() {
   const router = useRouter();
+  const lenis = useLenis();
+
+  /**
+   * "Watch a run" jumps to the run scene.
+   *
+   * `#how-it-works` is a zero-height marker inside the scene's 420vh scroll
+   * container, positioned by `sceneAnchorTopVh` — it is a scroll POSITION, not
+   * a section. Lenis owns the document scroll on this page
+   * (`components/marketing/smooth-scroll.tsx`), and a native
+   * `scrollIntoView({ behavior: "smooth" })` runs the browser's own animation
+   * against it, so the two fight over the same position.
+   *
+   * `offset: 0` mirrors the explicit `scrollMarginTop: 0` on that marker: the
+   * sticky stage fills the viewport, so aligning to the very top is exactly
+   * right here. The fallback keeps the button working if the Lenis context is
+   * ever absent — nothing on the page should depend on the smoothing existing.
+   */
+  const scrollToRun = () => {
+    if (lenis) {
+      lenis.scrollTo("#how-it-works", { offset: 0 });
+      return;
+    }
+    document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
+  };
 
   return (
     <div className="mx-auto max-w-3xl px-5 text-center">
@@ -126,9 +151,7 @@ export function HeroCopy() {
         <InteractiveHoverButton
           text="Watch a run"
           tone="quiet"
-          onClick={() =>
-            document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })
-          }
+          onClick={() => scrollToRun()}
         />
       </div>
     </div>

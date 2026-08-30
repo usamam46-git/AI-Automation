@@ -1189,6 +1189,32 @@ verified via a full read-only orientation pass — see note below.)
   mount, so a stale copy reported five `ruff` E702 errors that no longer exist in
   the repo. `docker cp` the current `tests/` in before believing a backend
   result.
+- **Lenis smooth scroll on the landing page, 2026-08-30** (frontend only, no
+  backend change). The 3D scene's choreography was good but its *driver* was
+  raw: one `ScrollTrigger` mapped native scroll straight onto scene progress, so
+  a wheel notch advanced the scrub in a ~100px step while the damped camera
+  glided — the page "flew" on the first scroll. Lenis now interpolates the
+  input, GSAP's ticker drives it, and ScrollTrigger reads the smoothed position.
+  **`lib/scene-script.ts` is untouched** — progress still arrives as a 0-1
+  float, so every composition rule, projection test and contrast measurement
+  holds. New `lib/smooth-scroll.ts` (pure) + `components/marketing/smooth-scroll.tsx`,
+  scoped to `app/(marketing)/` only — the app behind the login has inner
+  scrollers (the shell's `main`, ScrollArea, the React Flow canvas) and taking
+  over the document scroll there is all risk and no benefit. One new dependency
+  (`lenis`). **586 frontend tests** (581 + 5); `tsc --noEmit`, `eslint` and
+  `npm run build` clean.
+  Verified by driving GSAP's ticker by hand (`window.__orkestScroll`, dev-only):
+  the wheel eases across 26 distinct positions toward its target, scene progress
+  tracks it, Lenis owns the wheel on `/` and **not** on `/login`, and
+  `#how-it-works` lands at progress 0.5202 against the run scene's 0.52.
+  **The first attempt at this shipped a page whose mouse wheel did nothing** —
+  the GSAP wiring was a `ref` on `<ReactLenis>`, which is `undefined` on the
+  first commit and never re-runs the parent effect, so Lenis swallowed the wheel
+  while its raf loop was never driven. It survived a browser check because this
+  automation context reports `visibilityState: "hidden"` and rAF fires zero times
+  per second, making a dead loop indistinguishable from the known frozen-ticker
+  artifact. Fixed by moving the wiring into a child using `useLenis()`. Contracts
+  and the tick-harness recipe are in apps/web/CLAUDE.md's smooth-scroll section.
 - Next: **actually deploy** (the stack is written and locally verified but has
   never run on a VPS — see `infra/DEPLOY.md`), then **scheduled off-host
   database backups**, which is the largest gap the moment real data exists.
